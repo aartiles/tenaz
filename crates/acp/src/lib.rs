@@ -1,0 +1,134 @@
+//! The ACP harness adapter: runs an ACP agent (fx by default) as a
+//! subprocess and turns its session updates into the runner's session
+//! events. Token usage per request comes from the engine proxy when one is
+//! wired in, because ACP reports usage only once per turn.
+
+pub mod fx;
+mod session;
+mod translate;
+
+use std::sync::Arc;
+
+use agent_client_protocol::schema::v1::{HttpHeader, McpServer, McpServerHttp};
+use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, DynConnectTo};
+use async_trait::async_trait;
+use smr_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
+
+pub use session::{EngineObservation, ObservationFeed};
+pub use translate::Translator;
+
+/// Builds a fresh transport to the agent for every session.
+pub type Connector = Arc<dyn Fn() -> DynConnectTo<Client> + Send + Sync>;
+
+/// An MCP server the runner hosts and offers to every session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpEndpoint {
+    pub name: String,
+    pub url: String,
+}
+
+/// The harness.
+#[derive(Clone)]
+pub struct AcpHarness {
+    info: HarnessInfo,
+    connector: Connector,
+    mcp_servers: Vec<McpEndpoint>,
+    session_meta: Option<serde_json::Map<String, serde_json::Value>>,
+    observations: Option<ObservationFeed>,
+}
+
+impl std::fmt::Debug for AcpHarness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AcpHarness")
+            .field("info", &self.info)
+            .field("mcp_servers", &self.mcp_servers)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AcpHarness {
+    /// A harness over any ACP transport factory.
+    pub fn new(info: HarnessInfo, connector: Connector) -> Self {
+        Self {
+            info,
+            connector,
+            mcp_servers: Vec::new(),
+            session_meta: None,
+            observations: None,
+        }
+    }
+
+    /// A harness that spawns `command args...` with `env` for every session.
+    pub fn subprocess(
+        info: HarnessInfo,
+        command: impl Into<std::path::PathBuf>,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    ) -> Self {
+        let command = command.into();
+        let connector: Connector = Arc::new(move || {
+            let config = AcpAgentConfig::new(command.clone())
+                .args(args.clone())
+                .envs(env.clone());
+            DynConnectTo::new(AcpAgent::new(config))
+        });
+        Self::new(info, connector)
+    }
+
+    /// MCP servers passed in `session/new`.
+    #[must_use]
+    pub fn with_mcp_servers(mut self, servers: Vec<McpEndpoint>) -> Self {
+        self.mcp_servers = servers;
+        self
+    }
+
+    /// Extra `_meta` for `session/new` (for fx: `{"fx": {"profileMcpServers": true}}`).
+    #[must_use]
+    pub fn with_session_meta(mut self, meta: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.session_meta = Some(meta);
+        self
+    }
+
+    /// Per-request usage and engine errors observed by the proxy. With a
+    /// feed, every engine request becomes a turn of the session; without
+    /// it, a whole prompt is one turn with the agent's own usage figure.
+    #[must_use]
+    pub fn with_observations(mut self, feed: ObservationFeed) -> Self {
+        self.observations = Some(feed);
+        self
+    }
+
+    fn mcp_servers(&self) -> Vec<McpServer> {
+        self.mcp_servers
+            .iter()
+            .map(|s| {
+                McpServer::Http(
+                    McpServerHttp::new(s.name.clone(), s.url.clone())
+                        .headers(Vec::<HttpHeader>::new()),
+                )
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl Harness for AcpHarness {
+    fn info(&self) -> HarnessInfo {
+        self.info.clone()
+    }
+
+    async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
+        let transport = (self.connector)();
+        let session = session::AcpSession::open(
+            transport,
+            spec,
+            self.mcp_servers(),
+            self.session_meta.clone(),
+            self.observations
+                .as_ref()
+                .map(tokio::sync::broadcast::Sender::subscribe),
+        )
+        .await?;
+        Ok(Box::new(session))
+    }
+}

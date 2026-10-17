@@ -1,0 +1,63 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+repository = ""
+publish = false
+
+[workspace.dependencies]
+smr-core = { path = "crates/core" }
+smr-adapters = { path = "crates/adapters" }
+smr-proxy = { path = "crates/proxy" }
+smr-acp = { path = "crates/acp" }
+smr-mcp = { path = "crates/mcp" }
+
+agent-client-protocol = "3.4"
+rmcp = { version = "3.5", features = ["server", "transport-streamable-http-server", "macros"] }
+tokio = { version = "1.53", features = ["full"] }
+tokio-util = "0.7"
+axum = "0.8"
+hyper = { version = "1.12", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4.6", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+tempfile = "3"
+sha2 = "0.10"
+hex = "0.4"
+regex = "1"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+futures = "0.3"
+bytes = "1"
+schemars = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+similar_names = "allow"
+unreadable_literal = "allow"
+assert_is_empty = "allow"
+field_reassign_with_default = "allow"
+struct_excessive_bools = "allow"
+unnecessary_literal_bound = "allow"
+# `#[tool_handler]` (rmcp) expands to async trait methods without awaits.
+unused_async_trait_impl = "allow"

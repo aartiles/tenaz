@@ -1,0 +1,476 @@
+//! The lease: one resident engine. The LLM holds it by default; a media job
+//! borrows it (unload LLM, load media, run, unload media, reload LLM). The
+//! proxy's gate holds LLM requests while the LLM is away.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Instant;
+
+use thiserror::Error;
+use tokio::sync::{Mutex, watch};
+
+use crate::ports::{EngineAdapter, EngineError, MediaAdapter, MediaError, MediaJob, MediaOutput};
+
+/// Open or closed for LLM requests. The proxy awaits `wait_open` before
+/// forwarding a request, so the harness never sees a refused connection.
+#[derive(Clone, Debug)]
+pub struct Gate {
+    tx: watch::Sender<bool>,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Gate {
+    pub fn new() -> Self {
+        Self {
+            tx: watch::Sender::new(true),
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        *self.tx.borrow()
+    }
+
+    pub fn close(&self) {
+        self.tx.send_replace(false);
+    }
+
+    pub fn open(&self) {
+        self.tx.send_replace(true);
+    }
+
+    /// Resolves at once when open, otherwise when the gate opens.
+    pub async fn wait_open(&self) {
+        let mut rx = self.tx.subscribe();
+        while !*rx.borrow_and_update() {
+            if rx.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// Who holds the lease.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Holder {
+    Llm,
+    Media(String),
+}
+
+impl std::fmt::Display for Holder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Holder::Llm => f.write_str("llm"),
+            Holder::Media(name) => write!(f, "media:{name}"),
+        }
+    }
+}
+
+/// One step of a lease cycle, with its timing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaseTransition {
+    pub holder: Holder,
+    /// `unload`, `load`, `job`, `ready`, `failed`.
+    pub transition: String,
+    pub ms: u64,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Error)]
+pub enum LeaseError {
+    #[error("no media engine named {0}")]
+    UnknownMedia(String),
+    #[error(transparent)]
+    Engine(#[from] EngineError),
+    #[error(transparent)]
+    Media(#[from] MediaError),
+    /// The job ran, but the LLM could not be reloaded afterwards.
+    #[error("the LLM did not reload after the media job: {0}")]
+    ReloadFailed(EngineError),
+}
+
+/// Observes transitions (the orchestrator journals them).
+pub type Observer = Arc<dyn Fn(LeaseTransition) + Send + Sync>;
+
+/// The lease manager.
+pub struct LeaseManager {
+    llm: Arc<dyn EngineAdapter>,
+    llm_model: String,
+    media: BTreeMap<String, Arc<dyn MediaAdapter>>,
+    gate: Gate,
+    holder: Mutex<Holder>,
+    observer: Observer,
+}
+
+impl std::fmt::Debug for LeaseManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LeaseManager")
+            .field("llm", &self.llm.name())
+            .field("llm_model", &self.llm_model)
+            .field("media", &self.media.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
+}
+
+impl LeaseManager {
+    pub fn new(
+        llm: Arc<dyn EngineAdapter>,
+        llm_model: impl Into<String>,
+        gate: Gate,
+        observer: Observer,
+    ) -> Self {
+        Self {
+            llm,
+            llm_model: llm_model.into(),
+            media: BTreeMap::new(),
+            gate,
+            holder: Mutex::new(Holder::Llm),
+            observer,
+        }
+    }
+
+    #[must_use]
+    pub fn with_media(mut self, adapter: Arc<dyn MediaAdapter>) -> Self {
+        self.media.insert(adapter.name().to_owned(), adapter);
+        self
+    }
+
+    pub fn gate(&self) -> &Gate {
+        &self.gate
+    }
+
+    pub fn media_names(&self) -> Vec<String> {
+        self.media.keys().cloned().collect()
+    }
+
+    /// The current holder (waits if a cycle is in progress).
+    pub async fn holder(&self) -> Holder {
+        self.holder.lock().await.clone()
+    }
+
+    /// Loads the LLM when the engine says it is not loaded. Used before the
+    /// first session and after a failed reload.
+    pub async fn ensure_llm(&self) -> Result<(), LeaseError> {
+        let _guard = self.holder.lock().await;
+        let loaded = self
+            .llm
+            .models()
+            .await?
+            .into_iter()
+            .any(|m| m.id == self.llm_model && m.loaded && m.ready);
+        if !loaded {
+            self.timed(Holder::Llm, "load", self.llm.load(&self.llm_model))
+                .await?;
+        }
+        self.gate.open();
+        Ok(())
+    }
+
+    /// The whole cycle for one media job. The holder lock serialises cycles.
+    pub async fn run_media(&self, name: &str, job: MediaJob) -> Result<MediaOutput, LeaseError> {
+        let adapter = self
+            .media
+            .get(name)
+            .cloned()
+            .ok_or_else(|| LeaseError::UnknownMedia(name.to_owned()))?;
+        let mut holder = self.holder.lock().await;
+        let media_holder = Holder::Media(name.to_owned());
+        self.gate.close();
+        self.timed(Holder::Llm, "unload", self.llm.unload(&self.llm_model))
+            .await?;
+        *holder = media_holder.clone();
+        let result = self.media_cycle(&media_holder, adapter.as_ref(), job).await;
+        let reload = self
+            .timed(Holder::Llm, "load", self.llm.load(&self.llm_model))
+            .await;
+        match reload {
+            Ok(()) => {
+                *holder = Holder::Llm;
+                self.gate.open();
+                self.observe(Holder::Llm, "ready", 0, None);
+            }
+            Err(error) => {
+                self.observe(Holder::Llm, "failed", 0, Some(error.to_string()));
+                // The gate stays closed: requests wait until `ensure_llm` succeeds.
+                return match result {
+                    Ok(_) | Err(_) => Err(LeaseError::ReloadFailed(error)),
+                };
+            }
+        }
+        result
+    }
+
+    async fn media_cycle(
+        &self,
+        holder: &Holder,
+        adapter: &dyn MediaAdapter,
+        job: MediaJob,
+    ) -> Result<MediaOutput, LeaseError> {
+        self.timed(holder.clone(), "load", adapter.load()).await?;
+        let output = self.timed(holder.clone(), "job", adapter.run(job)).await;
+        // Always free the media engine, even after a failed job.
+        let unloaded = self.timed(holder.clone(), "unload", adapter.unload()).await;
+        let output = output?;
+        unloaded?;
+        Ok(output)
+    }
+
+    async fn timed<T, E: std::fmt::Display>(
+        &self,
+        holder: Holder,
+        transition: &str,
+        op: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, E> {
+        let started = Instant::now();
+        let result = op.await;
+        let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match &result {
+            Ok(_) => self.observe(holder, transition, ms, None),
+            Err(error) => {
+                self.observe(holder, "failed", ms, Some(format!("{transition}: {error}")));
+            }
+        }
+        result
+    }
+
+    fn observe(&self, holder: Holder, transition: &str, ms: u64, detail: Option<String>) {
+        (self.observer)(LeaseTransition {
+            holder,
+            transition: transition.to_owned(),
+            ms,
+            detail,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex as StdMutex;
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::ports::ModelState;
+
+    #[derive(Default)]
+    struct Log(StdMutex<Vec<String>>);
+    impl Log {
+        fn push(&self, s: impl Into<String>) {
+            self.0.lock().unwrap().push(s.into());
+        }
+        fn lines(&self) -> Vec<String> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    struct FakeLlm {
+        log: Arc<Log>,
+        loaded: StdMutex<bool>,
+        fail_reload: bool,
+    }
+    #[async_trait]
+    impl EngineAdapter for FakeLlm {
+        fn name(&self) -> &str {
+            "fake-llm"
+        }
+        async fn models(&self) -> Result<Vec<ModelState>, EngineError> {
+            let loaded = *self.loaded.lock().unwrap();
+            Ok(vec![ModelState {
+                id: "m".into(),
+                loaded,
+                ready: loaded,
+                context_length: Some(131072),
+            }])
+        }
+        async fn load(&self, model: &str) -> Result<(), EngineError> {
+            if self.fail_reload && self.log.lines().iter().any(|l| l == "llm unload") {
+                return Err(EngineError::Refused("no memory".into()));
+            }
+            self.log.push(format!("llm load {model}"));
+            *self.loaded.lock().unwrap() = true;
+            Ok(())
+        }
+        async fn unload(&self, _model: &str) -> Result<(), EngineError> {
+            self.log.push("llm unload");
+            *self.loaded.lock().unwrap() = false;
+            Ok(())
+        }
+    }
+
+    struct FakeComfy {
+        log: Arc<Log>,
+        fail_job: bool,
+        gate: Gate,
+    }
+    #[async_trait]
+    impl MediaAdapter for FakeComfy {
+        fn name(&self) -> &str {
+            "comfyui"
+        }
+        async fn load(&self) -> Result<(), MediaError> {
+            self.log.push("comfy load");
+            Ok(())
+        }
+        async fn run(&self, job: MediaJob) -> Result<MediaOutput, MediaError> {
+            self.log.push(format!(
+                "comfy job {} (gate {})",
+                job.kind,
+                if self.gate.is_open() {
+                    "open"
+                } else {
+                    "closed"
+                }
+            ));
+            if self.fail_job {
+                return Err(MediaError::Failed("bad workflow".into()));
+            }
+            Ok(MediaOutput {
+                paths: vec![job.output_dir.join("out.png")],
+                detail: serde_json::json!({}),
+            })
+        }
+        async fn unload(&self) -> Result<(), MediaError> {
+            self.log.push("comfy unload");
+            Ok(())
+        }
+    }
+
+    fn setup(
+        fail_job: bool,
+        fail_reload: bool,
+    ) -> (LeaseManager, Arc<Log>, Arc<StdMutex<Vec<LeaseTransition>>>) {
+        let log = Arc::new(Log::default());
+        let transitions = Arc::new(StdMutex::new(Vec::new()));
+        let seen = transitions.clone();
+        let observer: Observer = Arc::new(move |t| seen.lock().unwrap().push(t));
+        let llm = Arc::new(FakeLlm {
+            log: log.clone(),
+            loaded: StdMutex::new(true),
+            fail_reload,
+        });
+        let gate = Gate::new();
+        let manager =
+            LeaseManager::new(llm, "m", gate.clone(), observer).with_media(Arc::new(FakeComfy {
+                log: log.clone(),
+                fail_job,
+                gate,
+            }));
+        (manager, log, transitions)
+    }
+
+    fn job() -> MediaJob {
+        MediaJob {
+            kind: "image".into(),
+            params: serde_json::json!({"prompt": "a cat"}),
+            output_dir: "/tmp/out".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_media_job_cycles_the_engines_and_closes_the_gate_meanwhile() {
+        let (manager, log, transitions) = setup(false, false);
+        let output = manager.run_media("comfyui", job()).await.unwrap();
+        assert_eq!(
+            output.paths,
+            vec![std::path::PathBuf::from("/tmp/out/out.png")]
+        );
+        assert_eq!(
+            log.lines(),
+            vec![
+                "llm unload",
+                "comfy load",
+                "comfy job image (gate closed)",
+                "comfy unload",
+                "llm load m"
+            ]
+        );
+        assert!(manager.gate().is_open());
+        assert_eq!(manager.holder().await, Holder::Llm);
+        let kinds: Vec<String> = transitions
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|t| format!("{} {}", t.holder, t.transition))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "llm unload",
+                "media:comfyui load",
+                "media:comfyui job",
+                "media:comfyui unload",
+                "llm load",
+                "llm ready"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_job_still_frees_the_media_engine_and_reloads_the_llm() {
+        let (manager, log, transitions) = setup(true, false);
+        let error = manager.run_media("comfyui", job()).await.unwrap_err();
+        assert!(matches!(error, LeaseError::Media(MediaError::Failed(_))));
+        assert_eq!(
+            log.lines(),
+            vec![
+                "llm unload",
+                "comfy load",
+                "comfy job image (gate closed)",
+                "comfy unload",
+                "llm load m"
+            ]
+        );
+        assert!(manager.gate().is_open());
+        assert!(
+            transitions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|t| t.transition == "failed"
+                    && t.detail.as_deref() == Some("job: media job failed: bad workflow"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_reload_keeps_the_gate_closed_until_ensure_llm_succeeds() {
+        let (manager, log, _) = setup(false, true);
+        let error = manager.run_media("comfyui", job()).await.unwrap_err();
+        assert!(matches!(error, LeaseError::ReloadFailed(_)));
+        assert!(!manager.gate().is_open());
+        assert_eq!(manager.holder().await, Holder::Media("comfyui".into()));
+        // The fake refuses to load while an "llm unload" is in its log; clear it and retry.
+        log.0.lock().unwrap().retain(|l| l != "llm unload");
+        manager.ensure_llm().await.unwrap();
+        assert!(manager.gate().is_open());
+    }
+
+    #[tokio::test]
+    async fn unknown_media_and_already_loaded_llm() {
+        let (manager, log, _) = setup(false, false);
+        assert!(matches!(
+            manager.run_media("tts", job()).await.unwrap_err(),
+            LeaseError::UnknownMedia(_)
+        ));
+        manager.ensure_llm().await.unwrap();
+        assert!(log.lines().is_empty(), "already loaded: nothing to do");
+        assert_eq!(manager.media_names(), vec!["comfyui"]);
+    }
+
+    #[tokio::test]
+    async fn gate_wait_open_resolves_when_opened() {
+        let gate = Gate::new();
+        gate.close();
+        let g = gate.clone();
+        let waiter = tokio::spawn(async move {
+            g.wait_open().await;
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        gate.open();
+        waiter.await.unwrap();
+    }
+}

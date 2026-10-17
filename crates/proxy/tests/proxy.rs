@@ -1,0 +1,217 @@
+//! The proxy against a fake engine: usage from JSON and SSE answers, error
+//! classification, and holding requests while the gate is closed.
+
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use axum::response::IntoResponse;
+use smr_core::lease::Gate;
+use smr_proxy::{EngineErrorKind, Proxy, ProxyEvent, ProxyUsage};
+
+async fn fake_engine() -> SocketAddr {
+    let app = axum::Router::new()
+        .route("/v1/models", axum::routing::get(|| async { axum::Json(serde_json::json!({"data": [{"id": "m"}]})) }))
+        .route(
+            "/v1/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let content = body["messages"][0]["content"].as_str().unwrap_or("").to_owned();
+                if content == "too big" {
+                    return (axum::http::StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": {"message": "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}))).into_response();
+                }
+                if body["stream"] == true {
+                    assert_eq!(body["stream_options"]["include_usage"], true, "the proxy asks for usage in streams");
+                    let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":40}}}\n\ndata: [DONE]\n\n";
+                    return ([("content-type", "text/event-stream")], sse).into_response();
+                }
+                axum::Json(serde_json::json!({"choices": [{"message": {"content": "hello"}}], "usage": {"prompt_tokens": 10, "completion_tokens": 3}})).into_response()
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    addr
+}
+
+async fn start(
+    upstream: SocketAddr,
+    gate: Gate,
+) -> (smr_proxy::ProxyHandle, Arc<Mutex<Vec<ProxyEvent>>>) {
+    let events: Arc<Mutex<Vec<ProxyEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let proxy = Arc::new(Proxy::new(
+        format!("http://{upstream}"),
+        gate,
+        Arc::new(move |e| sink.lock().unwrap().push(e)),
+    ));
+    let handle = proxy.start("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    (handle, events)
+}
+
+async fn settle(events: &Arc<Mutex<Vec<ProxyEvent>>>, count: usize) -> Vec<ProxyEvent> {
+    for _ in 0..200 {
+        if events.lock().unwrap().len() >= count {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    events.lock().unwrap().clone()
+}
+
+#[tokio::test]
+async fn forwards_requests_and_records_usage_and_errors() {
+    let upstream = fake_engine().await;
+    let (handle, events) = start(upstream, Gate::new()).await;
+    let client = reqwest::Client::new();
+    let base = handle.base_url();
+
+    let models: serde_json::Value = client
+        .get(format!("{base}/models"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(models["data"][0]["id"], "m");
+
+    let plain: serde_json::Value = client
+        .post(format!("{base}/chat/completions"))
+        .json(&serde_json::json!({"messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(plain["choices"][0]["message"]["content"], "hello");
+
+    let streamed = client
+        .post(format!("{base}/chat/completions"))
+        .json(&serde_json::json!({"stream": true, "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        streamed.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/event-stream")
+    );
+    let text = streamed.text().await.unwrap();
+    assert!(text.contains("data: [DONE]"));
+
+    let error = client
+        .post(format!("{base}/chat/completions"))
+        .json(&serde_json::json!({"messages": [{"role": "user", "content": "too big"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(error.status(), 400);
+
+    let events = settle(&events, 5).await;
+    let completed: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            ProxyEvent::Completed {
+                path,
+                status,
+                stream,
+                usage,
+                ..
+            } => Some((path.clone(), *status, *stream, *usage)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(completed[0], ("/v1/models".to_owned(), 200, false, None));
+    assert_eq!(
+        completed[1],
+        (
+            "/v1/chat/completions".to_owned(),
+            200,
+            false,
+            Some(ProxyUsage {
+                prompt_tokens: 10,
+                cached_tokens: 0,
+                completion_tokens: 3,
+                reasoning_tokens: 0
+            })
+        )
+    );
+    assert_eq!(
+        completed[2],
+        (
+            "/v1/chat/completions".to_owned(),
+            200,
+            true,
+            Some(ProxyUsage {
+                prompt_tokens: 50,
+                cached_tokens: 40,
+                completion_tokens: 2,
+                reasoning_tokens: 0
+            })
+        )
+    );
+    assert_eq!(completed[3].1, 400);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        ProxyEvent::EngineError {
+            status: Some(400),
+            kind: EngineErrorKind::Capacity { max_context: 61488 },
+            ..
+        }
+    )));
+    handle.stop().await;
+}
+
+#[tokio::test]
+async fn holds_requests_while_the_gate_is_closed() {
+    let upstream = fake_engine().await;
+    let gate = Gate::new();
+    gate.close();
+    let (handle, events) = start(upstream, gate.clone()).await;
+    let base = handle.base_url();
+    let request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .get(format!("{base}/models"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !request.is_finished(),
+        "the request went through a closed gate"
+    );
+    gate.open();
+    assert_eq!(request.await.unwrap(), 200);
+    let events = settle(&events, 2).await;
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, ProxyEvent::Held { ms, .. } if *ms >= 90)),
+        "{events:?}"
+    );
+    handle.stop().await;
+}
+
+#[tokio::test]
+async fn an_unreachable_engine_is_a_502_with_an_event() {
+    let (handle, events) = start("127.0.0.1:1".parse().unwrap(), Gate::new()).await;
+    let response = reqwest::Client::new()
+        .get(format!("{}/models", handle.base_url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 502);
+    let events = settle(&events, 1).await;
+    assert!(matches!(
+        events[0],
+        ProxyEvent::EngineError {
+            kind: EngineErrorKind::Unreachable,
+            ..
+        }
+    ));
+    handle.stop().await;
+}

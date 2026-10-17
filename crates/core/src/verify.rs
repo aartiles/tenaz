@@ -1,0 +1,228 @@
+//! The `verify` contract the orchestrator enforces: an executable at the
+//! project root, exit code 0 on success, and one JSON object as the last line
+//! of stdout.
+
+use serde::{Deserialize, Serialize};
+
+use crate::util::clip;
+
+/// One failed check in the report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifyFailure {
+    pub id: String,
+    #[serde(default)]
+    pub msg: String,
+}
+
+/// The JSON last line of `verify`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VerifyReport {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub passed: u64,
+    #[serde(default)]
+    pub failed: Vec<VerifyFailure>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<String>,
+}
+
+/// What running `verify` produced, before interpretation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RawVerifyOutput {
+    /// The executable does not exist at the project root.
+    pub missing: bool,
+    pub timed_out: bool,
+    pub status: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// The interpreted result: pass or fail, the parsed report when the last line
+/// was JSON, and a summary clipped for a model.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VerifyOutcome {
+    pub ok: bool,
+    pub exit: Option<i32>,
+    pub json: Option<serde_json::Value>,
+    pub summary: String,
+}
+
+impl VerifyOutcome {
+    /// The number of passed checks, 0 without a report.
+    pub fn passed(&self) -> u64 {
+        self.json
+            .as_ref()
+            .and_then(|j| j.get("passed"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    }
+
+    pub fn report(&self) -> Option<VerifyReport> {
+        self.json
+            .clone()
+            .and_then(|j| serde_json::from_value(j).ok())
+    }
+}
+
+/// Interprets a `verify` run as the task loop did.
+pub fn interpret(
+    args: &[&str],
+    raw: &RawVerifyOutput,
+    timeout_sec: u64,
+    clip_bytes: usize,
+) -> VerifyOutcome {
+    let argv = args.join(" ");
+    if raw.missing {
+        return VerifyOutcome {
+            ok: false,
+            exit: None,
+            json: None,
+            summary: "verify does not exist at the project root".to_owned(),
+        };
+    }
+    let last_line = raw.stdout.trim().lines().last().unwrap_or("");
+    let parsed: Option<serde_json::Value> = serde_json::from_str(last_line)
+        .ok()
+        .filter(serde_json::Value::is_object);
+    let ok = raw.status == Some(0)
+        && parsed
+            .as_ref()
+            .and_then(|j| j.get("ok"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+    let summary = if raw.timed_out {
+        format!("verify {argv} timed out after {timeout_sec}s")
+    } else if let Some(json) = &parsed {
+        clip(
+            &format!("verify {argv} -> exit {}\n{json}", exit_text(raw.status)),
+            clip_bytes,
+        )
+    } else {
+        format!(
+            "verify {argv} exited {} without a JSON last line.\nstdout tail:\n{}\nstderr tail:\n{}",
+            exit_text(raw.status),
+            tail(&raw.stdout, 2000),
+            tail(&raw.stderr, 1500)
+        )
+    };
+    VerifyOutcome {
+        ok,
+        exit: raw.status,
+        json: parsed,
+        summary,
+    }
+}
+
+fn exit_text(status: Option<i32>) -> String {
+    status.map_or_else(|| "null".to_owned(), |s| s.to_string())
+}
+
+fn tail(text: &str, bytes: usize) -> String {
+    if text.len() <= bytes {
+        return text.to_owned();
+    }
+    let start = text.ceil_char_boundary(text.len() - bytes);
+    text[start..].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw(status: i32, stdout: &str) -> RawVerifyOutput {
+        RawVerifyOutput {
+            status: Some(status),
+            stdout: stdout.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn passing_run_needs_exit_zero_and_ok_true() {
+        let out = interpret(
+            &["--all"],
+            &raw(0, "progress\n{\"ok\":true,\"passed\":3,\"failed\":[]}\n"),
+            120,
+            4000,
+        );
+        assert!(out.ok);
+        assert_eq!(out.passed(), 3);
+        assert_eq!(
+            out.summary,
+            "verify --all -> exit 0\n{\"ok\":true,\"passed\":3,\"failed\":[]}"
+        );
+        assert_eq!(out.report().unwrap().passed, 3);
+        assert!(
+            !interpret(
+                &["--all"],
+                &raw(1, "{\"ok\":true,\"passed\":3,\"failed\":[]}"),
+                120,
+                4000
+            )
+            .ok
+        );
+        assert!(
+            !interpret(
+                &["--all"],
+                &raw(0, "{\"ok\":false,\"passed\":3,\"failed\":[]}"),
+                120,
+                4000
+            )
+            .ok
+        );
+    }
+
+    #[test]
+    fn missing_executable_timeouts_and_non_json_are_explained() {
+        let missing = interpret(
+            &["--all"],
+            &RawVerifyOutput {
+                missing: true,
+                ..Default::default()
+            },
+            120,
+            4000,
+        );
+        assert_eq!(missing.summary, "verify does not exist at the project root");
+        let timeout = interpret(
+            &["--task", "T007"],
+            &RawVerifyOutput {
+                timed_out: true,
+                status: None,
+                ..Default::default()
+            },
+            90,
+            4000,
+        );
+        assert_eq!(timeout.summary, "verify --task T007 timed out after 90s");
+        assert!(!timeout.ok);
+        let text = interpret(
+            &["--all"],
+            &RawVerifyOutput {
+                status: Some(2),
+                stdout: "boom".into(),
+                stderr: "trace".into(),
+                ..Default::default()
+            },
+            120,
+            4000,
+        );
+        assert_eq!(
+            text.summary,
+            "verify --all exited 2 without a JSON last line.\nstdout tail:\nboom\nstderr tail:\ntrace"
+        );
+        assert_eq!(text.json, None);
+    }
+
+    #[test]
+    fn long_summaries_are_clipped() {
+        let big = format!(
+            "{{\"ok\":true,\"passed\":1,\"failed\":[],\"note\":\"{}\"}}",
+            "x".repeat(5000)
+        );
+        let out = interpret(&["--all"], &raw(0, &big), 120, 100);
+        assert!(out.ok);
+        assert!(out.summary.contains("[... clipped"));
+    }
+}
