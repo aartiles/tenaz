@@ -1,0 +1,23 @@
+# cargo-deny configuration: `cargo deny check licenses`.
+# The project is MIT OR Apache-2.0; dependencies must be under a license that
+# is compatible with shipping under either.
+
+[graph]
+all-features = false
+
+[licenses]
+confidence-threshold = 0.9
+# Permissive licenses only. Each entry beyond MIT and Apache-2.0 is required
+# by at least one crate in Cargo.lock (see `cargo deny list -l license`).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+
+[licenses.private]
+ignore = true

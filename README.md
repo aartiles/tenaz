@@ -29,6 +29,30 @@ open.
   Sushi and any OpenAI-compatible engine with start/stop commands; ComfyUI
   for images.
 
+## Install
+
+From a release: download the archive for your platform (macOS arm64 or
+Linux x86_64) from the GitHub releases page, check it and put `smr` on your
+`PATH`:
+
+```bash
+shasum -a 256 -c smr-v0.1.0-aarch64-apple-darwin.tar.gz.sha256
+```
+
+```bash
+tar -xzf smr-v0.1.0-aarch64-apple-darwin.tar.gz
+```
+
+```bash
+install -m 755 smr-v0.1.0-aarch64-apple-darwin/smr ~/.local/bin/smr
+```
+
+From source, with a stable Rust toolchain:
+
+```bash
+cargo install --locked --path crates/cli
+```
+
 ## Build
 
 Requires a stable Rust toolchain (`rustup`; the ADR pins why Rust).
@@ -89,3 +113,8 @@ prompts, per-request engine timings and memory samples.
 Do not publish, push to a public remote or release anything from this
 repository without the owner's explicit approval for that specific
 publication.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.
