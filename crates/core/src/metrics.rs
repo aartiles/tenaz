@@ -95,6 +95,9 @@ pub struct RequestRecord {
     pub prompt_tokens: u64,
     pub cached_tokens: u64,
     pub output_tokens: u64,
+    /// The part of `output_tokens` spent reasoning, when the harness reports it.
+    #[serde(default)]
+    pub reasoning_tokens: u64,
     pub client_first_token_s: Option<f64>,
     pub client_total_s: Option<f64>,
     pub engine: Option<EngineCounters>,
@@ -245,6 +248,7 @@ mod tests {
             prompt_tokens: 250,
             cached_tokens: 0,
             output_tokens: 30,
+            reasoning_tokens: 0,
             client_first_token_s: None,
             client_total_s: None,
             engine: None,
@@ -269,6 +273,7 @@ mod tests {
             prompt_tokens: 1,
             cached_tokens: 1,
             output_tokens: 1,
+            reasoning_tokens: 0,
             client_first_token_s: None,
             client_total_s: None,
             engine: Some(BTreeMap::from([

@@ -14,7 +14,7 @@ use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, DynConnectTo};
 use async_trait::async_trait;
 use smr_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
 
-pub use session::{EngineObservation, ObservationFeed};
+pub use session::{EngineObservation, ObservationFeed, stop_reason_for_finish};
 pub use translate::Translator;
 
 /// Builds a fresh transport to the agent for every session.

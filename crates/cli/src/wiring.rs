@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use smr_acp::fx::{FxLaunch, FxSettings, ProfileMcpServer, write_profile};
-use smr_acp::{EngineObservation, McpEndpoint};
+use smr_acp::{EngineObservation, McpEndpoint, stop_reason_for_finish};
 use smr_adapters::clock::SystemClock;
 use smr_adapters::engine::generic::{Commands, GenericEngine};
 use smr_adapters::engine::sushi::SushiEngine;
@@ -19,7 +19,7 @@ use smr_adapters::notify::DesktopNotifier;
 use smr_adapters::probe_macos::MacMemoryProbe;
 use smr_adapters::verify::VerifyProcess;
 use smr_core::lease::{Gate, LeaseManager, LeaseTransition};
-use smr_core::ledger::JournalRecord;
+use smr_core::ledger::{JournalRecord, SkillPin};
 use smr_core::orchestrator::Deps;
 use smr_core::ports::{EngineAdapter, Harness, MediaAdapter};
 use smr_core::project::Project;
@@ -27,6 +27,7 @@ use smr_core::session::Usage;
 use smr_core::testing::ScriptedHarness;
 use smr_mcp::workflow::WorkflowTemplate;
 use smr_mcp::{MediaTools, serve};
+use smr_pi::PiLaunch;
 use smr_proxy::{Proxy, ProxyEvent};
 
 pub enum EngineChoice {
@@ -45,6 +46,7 @@ pub struct EngineOptions {
 pub struct HarnessOptions {
     pub fx_bin: PathBuf,
     pub fx_args: Vec<String>,
+    pub pi_bin: PathBuf,
 }
 
 pub struct MediaOptions {
@@ -89,6 +91,15 @@ pub fn parse_workflows(specs: &[String]) -> anyhow::Result<BTreeMap<String, Work
         );
     }
     Ok(out)
+}
+
+/// The `reasoning_effort` the engine is asked for, from the ledger's
+/// thinking level; `None` leaves the engine's default (`off`, `none`, unset).
+fn reasoning_effort(thinking: Option<&str>) -> Option<&str> {
+    match thinking.map(str::trim) {
+        None | Some("" | "off" | "none" | "auto") => None,
+        Some(level) => Some(level),
+    }
 }
 
 fn split_command(text: &str) -> Vec<String> {
@@ -199,33 +210,13 @@ pub async fn wire(
     // The proxy sits between the harness and the engine; the harness is pointed at it.
     let (feed, _) = tokio::sync::broadcast::channel::<EngineObservation>(256);
     let harness_base_url = if engine.proxy {
-        let sink = feed.clone();
-        let proxy = Arc::new(Proxy::new(
-            origin(&base_url)?,
+        let handle = start_proxy(
+            &base_url,
             gate.clone(),
-            Arc::new(move |event: ProxyEvent| match event {
-                ProxyEvent::Completed { usage: Some(u), .. } => {
-                    let _ = sink.send(EngineObservation::Completed {
-                        usage: Usage {
-                            input: u.prompt_tokens.saturating_sub(u.cached_tokens),
-                            output: u.completion_tokens,
-                            cache_read: u.cached_tokens,
-                            cache_write: 0,
-                            reasoning: u.reasoning_tokens,
-                        },
-                    });
-                }
-                ProxyEvent::EngineError { message, .. } => {
-                    let _ = sink.send(EngineObservation::Error { message });
-                }
-                ProxyEvent::Completed { .. } | ProxyEvent::Held { .. } => {}
-            }),
-        ));
-        let handle = proxy
-            .start("127.0.0.1:0".parse()?)
-            .await
-            .context("cannot start the engine proxy")?;
-        tracing::info!("engine proxy at {} -> {}", handle.base_url(), base_url);
+            feed.clone(),
+            config.thinking.as_deref(),
+        )
+        .await?;
         let url = handle.base_url();
         services.proxy = Some(handle);
         url
@@ -239,6 +230,7 @@ pub async fn wire(
         &media.timeout,
         harness_base_url,
         &mcp_endpoints,
+        &ledger.skills,
         &feed,
     )?;
     let port = reqwest_url(&base_url)?.2;
@@ -265,8 +257,59 @@ pub async fn wire(
     Ok(Wired { deps, services })
 }
 
+/// The engine proxy: per-request usage and errors go to `feed`, and requests
+/// are given the `reasoning_effort` the thinking level asks for.
+async fn start_proxy(
+    base_url: &str,
+    gate: Gate,
+    feed: tokio::sync::broadcast::Sender<EngineObservation>,
+    thinking: Option<&str>,
+) -> anyhow::Result<smr_proxy::ProxyHandle> {
+    let mut proxy = Proxy::new(
+        origin(base_url)?,
+        gate,
+        Arc::new(move |event: ProxyEvent| match event {
+            ProxyEvent::Completed {
+                usage: Some(u),
+                finish_reason,
+                ..
+            } => {
+                let _ = feed.send(EngineObservation::Completed {
+                    usage: Usage {
+                        input: u.prompt_tokens.saturating_sub(u.cached_tokens),
+                        output: u.completion_tokens,
+                        cache_read: u.cached_tokens,
+                        cache_write: 0,
+                        reasoning: u.reasoning_tokens,
+                    },
+                    stop_reason: stop_reason_for_finish(finish_reason.as_deref()),
+                });
+            }
+            ProxyEvent::EngineError { message, .. } => {
+                let _ = feed.send(EngineObservation::Error { message });
+            }
+            ProxyEvent::Completed { .. } | ProxyEvent::Held { .. } => {}
+        }),
+    );
+    if let Some(effort) = reasoning_effort(thinking) {
+        // fx does not forward its effort to a custom provider; the proxy fills it in.
+        proxy.request_defaults.insert(
+            "reasoning_effort".to_owned(),
+            serde_json::Value::String(effort.to_owned()),
+        );
+    }
+    let handle = Arc::new(proxy)
+        .start("127.0.0.1:0".parse()?)
+        .await
+        .context("cannot start the engine proxy")?;
+    tracing::info!("engine proxy at {} -> {}", handle.base_url(), base_url);
+    Ok(handle)
+}
+
 /// The harness named in the ledger: fx over ACP with its profile written
-/// into the project, or the scripted fake.
+/// into the project, Pi in RPC mode with the pinned skills, or the scripted
+/// fake.
+#[allow(clippy::too_many_arguments)]
 fn build_harness(
     project: &Project,
     config: &smr_core::ledger::ModelConfig,
@@ -274,10 +317,30 @@ fn build_harness(
     media_timeout: &Duration,
     harness_base_url: String,
     mcp_endpoints: &[McpEndpoint],
+    skills: &[SkillPin],
     feed: &tokio::sync::broadcast::Sender<EngineObservation>,
 ) -> anyhow::Result<Arc<dyn Harness>> {
     match config.harness.as_str() {
         "fake" => Ok(Arc::new(ScriptedHarness::default())),
+        "pi" => {
+            // Pi reaches the engine through its provider config (models.json),
+            // so the runner's proxy and media MCP server are not on its path.
+            tracing::info!("pi talks to the engine directly; the proxy is not on its path");
+            let launch = PiLaunch::new(&options.pi_bin, config.model.clone())
+                .thinking(
+                    config
+                        .thinking
+                        .clone()
+                        .unwrap_or_else(|| "medium".to_owned()),
+                )
+                .skills(
+                    skills
+                        .iter()
+                        .map(|s| project.agent_dir().join("skills").join(&s.name))
+                        .collect(),
+                );
+            Ok(Arc::new(launch.harness(config.harness_version.clone())))
+        }
         "fx" => {
             let home = project.private_dir().join("fx-home");
             let settings = FxSettings {
@@ -291,6 +354,7 @@ fn build_harness(
                 max_output_tokens: 16_384,
                 supports_vision: config.supports_images(),
                 permission_mode: "ask".to_owned(),
+                effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
             };
             let profile_mcp: Vec<ProfileMcpServer> = mcp_endpoints
                 .iter()
@@ -304,6 +368,7 @@ fn build_harness(
             write_profile(&home, &settings, &profile_mcp).context("cannot write the fx profile")?;
             let mut launch = FxLaunch::new(&options.fx_bin, &home);
             launch.args.clone_from(&options.fx_args);
+            launch.log_file = Some(project.private_dir().join("fx-acp.log"));
             let mut acp = launch
                 .harness(config.harness_version.clone())
                 .with_observations(feed.clone());
@@ -319,5 +384,19 @@ fn build_harness(
             Ok(Arc::new(acp))
         }
         other => bail!("unknown harness {other} in the ledger"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reasoning_effort;
+
+    #[test]
+    fn thinking_level_becomes_a_reasoning_effort_unless_off() {
+        assert_eq!(reasoning_effort(Some("medium")), Some("medium"));
+        assert_eq!(reasoning_effort(Some(" high ")), Some("high"));
+        assert_eq!(reasoning_effort(Some("off")), None);
+        assert_eq!(reasoning_effort(Some("auto")), None);
+        assert_eq!(reasoning_effort(None), None);
     }
 }

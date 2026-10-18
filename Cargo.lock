@@ -2251,6 +2251,7 @@ dependencies = [
  "smr-adapters",
  "smr-core",
  "smr-mcp",
+ "smr-pi",
  "smr-proxy",
  "tempfile",
  "tokio",
@@ -2326,6 +2327,20 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "smr-pi"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "smr-core",
+ "tempfile",
+ "thiserror",
+ "tokio",
  "tracing",
 ]
 

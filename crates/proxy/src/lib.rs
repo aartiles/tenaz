@@ -36,6 +36,10 @@ pub struct Proxy {
     /// Add `stream_options.include_usage` to streaming chat requests, so the
     /// final chunk carries the usage. Engines ignore it when unsupported.
     pub include_usage: bool,
+    /// Fields added to a completion request that lacks them, such as
+    /// `reasoning_effort`: fx does not forward a reasoning setting to a custom
+    /// OpenAI-compatible provider, and Sushi's default effort is `off`.
+    pub request_defaults: serde_json::Map<String, serde_json::Value>,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -89,6 +93,7 @@ impl Proxy {
             observer,
             sequence: AtomicU64::new(0),
             include_usage: true,
+            request_defaults: serde_json::Map::new(),
         }
     }
 
@@ -141,22 +146,35 @@ fn is_completion(method: &axum::http::Method, path: &str) -> bool {
             || path.ends_with("/responses"))
 }
 
-/// Adds `stream_options.include_usage` to a streaming request that lacks it.
-fn with_usage_option(body: &[u8]) -> Option<Vec<u8>> {
+/// Rewrites a completion request: `stream_options.include_usage` on a
+/// streaming request that lacks it, and the defaults for absent fields.
+/// `None` when nothing changed.
+fn rewrite_request(
+    body: &[u8],
+    include_usage: bool,
+    defaults: &serde_json::Map<String, serde_json::Value>,
+) -> Option<Vec<u8>> {
     let mut json: serde_json::Value = serde_json::from_slice(body).ok()?;
     let object = json.as_object_mut()?;
-    if object.get("stream").and_then(serde_json::Value::as_bool) != Some(true) {
-        return None;
+    let mut changed = false;
+    for (key, value) in defaults {
+        if !object.contains_key(key) {
+            object.insert(key.clone(), value.clone());
+            changed = true;
+        }
     }
-    let options = object
-        .entry("stream_options")
-        .or_insert_with(|| serde_json::json!({}));
-    let options = options.as_object_mut()?;
-    if options.contains_key("include_usage") {
-        return None;
+    if include_usage && object.get("stream").and_then(serde_json::Value::as_bool) == Some(true) {
+        let options = object
+            .entry("stream_options")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(options) = options.as_object_mut()
+            && !options.contains_key("include_usage")
+        {
+            options.insert("include_usage".to_owned(), serde_json::Value::Bool(true));
+            changed = true;
+        }
     }
-    options.insert("include_usage".to_owned(), serde_json::Value::Bool(true));
-    serde_json::to_vec(&json).ok()
+    changed.then(|| serde_json::to_vec(&json).ok()).flatten()
 }
 
 async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
@@ -175,21 +193,20 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
             return (StatusCode::BAD_REQUEST, format!("request body: {error}")).into_response();
         }
     };
-    let rewritten = if completion && proxy.include_usage {
-        with_usage_option(&body)
+    let rewritten = if completion {
+        rewrite_request(&body, proxy.include_usage, &proxy.request_defaults)
     } else {
         None
     };
-    let (body, stream) = if let Some(rewritten) = rewritten {
-        (bytes::Bytes::from(rewritten), true)
-    } else {
-        let stream = completion
-            && serde_json::from_slice::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|j| j.get("stream").and_then(serde_json::Value::as_bool))
-                .unwrap_or(false);
-        (body, stream)
+    let body = match rewritten {
+        Some(rewritten) => bytes::Bytes::from(rewritten),
+        None => body,
     };
+    let stream = completion
+        && serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|j| j.get("stream").and_then(serde_json::Value::as_bool))
+            .unwrap_or(false);
     // Hold while the lease has the LLM away.
     if !proxy.gate.is_open() {
         let waited = Instant::now();
@@ -275,17 +292,38 @@ mod tests {
 
     #[test]
     fn streaming_requests_get_the_usage_option() {
+        let none = serde_json::Map::new();
         let body = br#"{"model":"m","stream":true,"messages":[]}"#;
-        let rewritten = with_usage_option(body).unwrap();
+        let rewritten = rewrite_request(body, true, &none).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
         assert_eq!(json["stream_options"]["include_usage"], true);
         assert_eq!(json["messages"], serde_json::json!([]));
-        assert!(with_usage_option(br#"{"stream":false}"#).is_none());
+        assert!(rewrite_request(br#"{"stream":false}"#, true, &none).is_none());
         assert!(
-            with_usage_option(br#"{"stream":true,"stream_options":{"include_usage":false}}"#)
-                .is_none()
+            rewrite_request(
+                br#"{"stream":true,"stream_options":{"include_usage":false}}"#,
+                true,
+                &none
+            )
+            .is_none()
         );
-        assert!(with_usage_option(b"not json").is_none());
+        assert!(rewrite_request(body, false, &none).is_none());
+        assert!(rewrite_request(b"not json", true, &none).is_none());
+    }
+
+    #[test]
+    fn request_defaults_fill_only_absent_fields() {
+        let defaults = serde_json::json!({"reasoning_effort": "medium"})
+            .as_object()
+            .cloned()
+            .unwrap();
+        let body = br#"{"model":"m","stream":false,"messages":[]}"#;
+        let rewritten = rewrite_request(body, true, &defaults).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(json["reasoning_effort"], "medium");
+        assert!(json.get("stream_options").is_none());
+        let explicit = br#"{"model":"m","reasoning_effort":"low","stream":true,"stream_options":{"include_usage":true}}"#;
+        assert!(rewrite_request(explicit, true, &defaults).is_none());
     }
 
     #[test]

@@ -10,11 +10,18 @@ use smr_core::ledger::ModelConfig;
 use smr_core::orchestrator::{InitOptions, RunOptions, Runner, Templates, init, status_text};
 use smr_core::params::RunParams;
 use smr_core::project::Project;
+use smr_pi::models::ModelEntry;
 use tokio_util::sync::CancellationToken;
 
 /// The runner's version string, journaled per run.
 fn runner_version() -> String {
     format!("smr {}", env!("CARGO_PKG_VERSION"))
+}
+
+/// The project directory as an absolute path: harnesses, `verify` and git
+/// run inside it, where a path relative to the runner's directory is wrong.
+fn absolute(project: PathBuf) -> PathBuf {
+    std::path::absolute(&project).unwrap_or(project)
 }
 
 /// The role prompts and shared rules compiled into the binary.
@@ -65,6 +72,8 @@ struct Cli {
 enum HarnessKind {
     /// fx over ACP (default).
     Fx,
+    /// Pi in RPC mode; the model's provider comes from ~/.pi/agent/models.json.
+    Pi,
     /// The scripted fake harness: exercises the runner without a model.
     Fake,
 }
@@ -92,18 +101,23 @@ enum Command {
         /// The fx executable.
         #[arg(long, default_value = "fx")]
         fx_bin: PathBuf,
+        /// The pi executable.
+        #[arg(long, default_value = "pi")]
+        pi_bin: PathBuf,
         /// The model id as the engine lists it.
         #[arg(long)]
         model: String,
         /// The provider name used in the harness configuration.
         #[arg(long, default_value = "sushi")]
         provider: String,
-        /// The engine's OpenAI-compatible base URL.
-        #[arg(long, default_value = "http://127.0.0.1:12345/v1")]
-        base_url: String,
-        #[arg(long, default_value_t = 131_072)]
-        context_window: u64,
-        /// The model reads images.
+        /// The engine's OpenAI-compatible base URL (default: Sushi on 127.0.0.1:12345;
+        /// with --harness pi, the provider's baseUrl in models.json).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Default 131072; with --harness pi, the model's contextWindow in models.json.
+        #[arg(long)]
+        context_window: Option<u64>,
+        /// The model reads images (with --harness pi, read from models.json when listed there).
         #[arg(long)]
         vision: bool,
         #[arg(long, default_value = "medium")]
@@ -133,6 +147,8 @@ enum Command {
         /// Arguments that put fx in ACP mode.
         #[arg(long, default_value = "acp", value_delimiter = ' ')]
         fx_args: Vec<String>,
+        #[arg(long, default_value = "pi")]
+        pi_bin: PathBuf,
         #[arg(long, value_enum, default_value = "sushi")]
         engine: EngineKind,
         /// Generic engine: the command that starts it (the whole command line).
@@ -179,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
             brief,
             harness,
             fx_bin,
+            pi_bin,
             model,
             provider,
             base_url,
@@ -188,26 +205,15 @@ async fn main() -> anyhow::Result<()> {
             sets,
             skills,
         } => {
-            let project = Project::new(project);
+            let project = Project::new(absolute(project));
             let mut params = RunParams::default();
             for pair in &sets {
                 params.apply_override(pair)?;
             }
-            let (harness_name, harness_version) = match harness {
-                HarnessKind::Fx => (
-                    "fx".to_owned(),
-                    smr_acp::fx::fx_version(&fx_bin)
-                        .with_context(|| format!("cannot run {} --version", fx_bin.display()))?,
-                ),
-                HarnessKind::Fake => (
-                    "fake".to_owned(),
-                    smr_core::testing::ScriptedHarness::default().version(),
-                ),
-            };
-            let mut input = vec!["text".to_owned()];
-            if vision {
-                input.push("image".to_owned());
-            }
+            let (harness_name, harness_version, entry) =
+                pin_harness(harness, &fx_bin, &pi_bin, &provider, &model)?;
+            let (input, base_url, context_window) =
+                resolve_model(entry.as_ref(), vision, base_url, context_window);
             let config = ModelConfig {
                 harness: harness_name,
                 harness_version,
@@ -245,6 +251,7 @@ async fn main() -> anyhow::Result<()> {
             refresh_templates,
             fx_bin,
             fx_args,
+            pi_bin,
             engine,
             engine_start,
             engine_stop,
@@ -253,7 +260,7 @@ async fn main() -> anyhow::Result<()> {
             workflows,
             media_timeout,
         } => {
-            let project = Project::new(project);
+            let project = Project::new(absolute(project));
             let stop = CancellationToken::new();
             spawn_signal_handler(stop.clone());
             let media = wiring::MediaOptions {
@@ -271,7 +278,11 @@ async fn main() -> anyhow::Result<()> {
                 },
                 proxy: !no_proxy,
             };
-            let harness = wiring::HarnessOptions { fx_bin, fx_args };
+            let harness = wiring::HarnessOptions {
+                fx_bin,
+                fx_args,
+                pi_bin,
+            };
             let wired = wiring::wire(&project, &engine, &harness, &media).await?;
             let mut runner = Runner::open(project, wired.deps, stop)?;
             let options = RunOptions {
@@ -299,6 +310,69 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// The harness name and version to pin and, with Pi, the model's entry in
+/// `~/.pi/agent/models.json` (the task loop's `modelConfig`).
+fn pin_harness(
+    harness: HarnessKind,
+    fx_bin: &std::path::Path,
+    pi_bin: &std::path::Path,
+    provider: &str,
+    model: &str,
+) -> anyhow::Result<(String, String, Option<ModelEntry>)> {
+    Ok(match harness {
+        HarnessKind::Fx => (
+            "fx".to_owned(),
+            smr_acp::fx::fx_version(fx_bin)
+                .with_context(|| format!("cannot run {} --version", fx_bin.display()))?,
+            None,
+        ),
+        HarnessKind::Pi => {
+            let entry = match smr_pi::models::default_models_path() {
+                Some(path) => smr_pi::models::model_entry(&path, provider, model)?,
+                None => None,
+            };
+            (
+                "pi".to_owned(),
+                smr_pi::pi_version(pi_bin)
+                    .with_context(|| format!("cannot run {} --version", pi_bin.display()))?,
+                entry,
+            )
+        }
+        HarnessKind::Fake => (
+            "fake".to_owned(),
+            smr_core::testing::ScriptedHarness::default().version(),
+            None,
+        ),
+    })
+}
+
+/// Inputs, base URL and context window: the command line first, then the
+/// models.json entry, then the defaults.
+fn resolve_model(
+    entry: Option<&ModelEntry>,
+    vision: bool,
+    base_url: Option<String>,
+    context_window: Option<u64>,
+) -> (Vec<String>, String, u64) {
+    let input = match entry {
+        Some(entry) if !vision => entry.input.clone(),
+        _ => {
+            let mut input = vec!["text".to_owned()];
+            if vision {
+                input.push("image".to_owned());
+            }
+            input
+        }
+    };
+    let base_url = base_url
+        .or_else(|| entry.and_then(|e| e.base_url.clone()))
+        .unwrap_or_else(|| "http://127.0.0.1:12345/v1".to_owned());
+    let context_window = context_window
+        .or_else(|| entry.and_then(|e| e.context_window))
+        .unwrap_or(131_072);
+    (input, base_url, context_window)
 }
 
 /// Ctrl-C or SIGTERM pause the run; a second signal is left to the OS.

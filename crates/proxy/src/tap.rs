@@ -9,7 +9,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use futures::Stream;
 
-use crate::events::{ProxyEvent, classify_error, usage_from_json};
+use crate::events::{ProxyEvent, classify_error, finish_reason_from_json, usage_from_json};
 use crate::{Proxy, elapsed_ms};
 
 /// Accumulates what the proxy needs from a response.
@@ -27,6 +27,7 @@ pub(crate) struct Tap {
     /// The whole body of a non-streaming or error response (bounded).
     body: Vec<u8>,
     usage: Option<crate::ProxyUsage>,
+    finish_reason: Option<String>,
     done: bool,
 }
 
@@ -54,6 +55,7 @@ impl Tap {
             sse_buffer: String::new(),
             body: Vec::new(),
             usage: None,
+            finish_reason: None,
             done: false,
         }
     }
@@ -86,10 +88,13 @@ impl Tap {
             if data == "[DONE]" {
                 continue;
             }
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(data)
-                && let Some(usage) = usage_from_json(&json)
-            {
-                self.usage = Some(usage);
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                if let Some(usage) = usage_from_json(&json) {
+                    self.usage = Some(usage);
+                }
+                if let Some(reason) = finish_reason_from_json(&json) {
+                    self.finish_reason = Some(reason);
+                }
             }
         }
     }
@@ -116,6 +121,7 @@ impl Tap {
             && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&self.body)
         {
             self.usage = usage_from_json(&json);
+            self.finish_reason = finish_reason_from_json(&json);
         }
         self.proxy.observe(ProxyEvent::Completed {
             request: self.id,
@@ -123,6 +129,7 @@ impl Tap {
             status: self.status,
             stream: self.stream,
             usage: self.usage,
+            finish_reason: self.finish_reason.take(),
             first_byte_ms: self.first_byte.map(|t| {
                 u64::try_from(t.duration_since(self.started).as_millis()).unwrap_or(u64::MAX)
             }),

@@ -43,6 +43,9 @@ pub enum ProxyEvent {
         status: u16,
         stream: bool,
         usage: Option<ProxyUsage>,
+        /// The engine's `finish_reason` (`stop`, `tool_calls`, `length`, …)
+        /// when the response named one.
+        finish_reason: Option<String>,
         first_byte_ms: Option<u64>,
         total_ms: u64,
     },
@@ -81,6 +84,17 @@ pub fn usage_from_json(value: &serde_json::Value) -> Option<ProxyUsage> {
         cached_tokens,
         completion_tokens,
         reasoning_tokens,
+    })
+}
+
+/// The `finish_reason` of the first choice that names one, from a response
+/// or a chunk object (`null` while the choice is still streaming).
+pub fn finish_reason_from_json(value: &serde_json::Value) -> Option<String> {
+    value.get("choices")?.as_array()?.iter().find_map(|choice| {
+        choice
+            .get("finish_reason")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
     })
 }
 
@@ -134,6 +148,23 @@ mod tests {
                 completion_tokens: 7,
                 reasoning_tokens: 3
             })
+        );
+        assert_eq!(
+            finish_reason_from_json(
+                &serde_json::json!({"choices": [{"delta": {}, "finish_reason": null}]})
+            ),
+            None
+        );
+        assert_eq!(
+            finish_reason_from_json(
+                &serde_json::json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})
+            )
+            .as_deref(),
+            Some("tool_calls")
+        );
+        assert_eq!(
+            finish_reason_from_json(&serde_json::json!({"usage": {}})),
+            None
         );
         let responses = serde_json::json!({"usage": {"input_tokens": 5, "output_tokens": 2, "input_tokens_details": {"cached_tokens": 4}}});
         assert_eq!(

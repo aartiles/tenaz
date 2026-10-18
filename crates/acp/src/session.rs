@@ -7,12 +7,12 @@ use std::time::Duration;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, FileSystemCapabilities, Implementation,
-    InitializeRequest, McpServer, NewSessionRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionNotification,
+    InitializeRequest, InitializeResponse, McpServer, NewSessionRequest, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionId, SessionNotification,
 };
 use agent_client_protocol::util::MatchDispatch;
-use agent_client_protocol::{Client, DynConnectTo, Responder, SessionMessage};
+use agent_client_protocol::{Agent, Client, ConnectionTo, DynConnectTo, Responder, SessionMessage};
 use async_trait::async_trait;
 use smr_core::ports::{HarnessError, PermissionDecision, Session, SessionExit, SessionSpec};
 use smr_core::session::{SessionEvent, StopReason, Usage};
@@ -20,11 +20,28 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::translate::{Translator, choose_option};
 
-/// What the engine proxy saw: one request's usage, or an engine error.
+/// What the engine proxy saw: one request's usage and why the engine
+/// stopped, or an engine error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EngineObservation {
-    Completed { usage: Usage },
-    Error { message: String },
+    Completed {
+        usage: Usage,
+        stop_reason: StopReason,
+    },
+    Error {
+        message: String,
+    },
+}
+
+/// The runner's stop reason for an OpenAI-style `finish_reason`. Without
+/// one, the agent is assumed to carry on (a tool call), as fx does.
+pub fn stop_reason_for_finish(finish_reason: Option<&str>) -> StopReason {
+    match finish_reason {
+        None | Some("tool_calls" | "function_call") => StopReason::ToolUse,
+        Some("stop") => StopReason::Stop,
+        Some("length") => StopReason::MaxTokens,
+        Some(other) => StopReason::Other(other.to_owned()),
+    }
 }
 
 /// Fan-out of proxy observations to the open sessions.
@@ -32,6 +49,7 @@ pub type ObservationFeed = broadcast::Sender<EngineObservation>;
 
 enum Command {
     Prompt(String),
+    Steer(String),
     Abort,
     Permission { id: String, allow: bool },
     Close(oneshot::Sender<()>),
@@ -64,12 +82,15 @@ impl AcpSession {
                 .connect_with(transport, async |cx| {
                     let capabilities = ClientCapabilities::new().fs(FileSystemCapabilities::new().read_text_file(false).write_text_file(false)).terminal(false);
                     let init = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities).client_info(Implementation::new("smr", env!("CARGO_PKG_VERSION")));
-                    if let Err(error) = cx.send_request(init).block_task().await {
-                        if let Some(ready) = ready.take() {
-                            let _ = ready.send(Err(format!("initialize: {error}")));
+                    let steering = match cx.send_request(init).block_task().await {
+                        Ok(response) => advertises_steering(&response),
+                        Err(error) => {
+                            if let Some(ready) = ready.take() {
+                                let _ = ready.send(Err(format!("initialize: {error}")));
+                            }
+                            return Err(error);
                         }
-                        return Err(error);
-                    }
+                    };
                     let mut request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
                     if let Some(meta) = meta {
                         request = request.meta(meta);
@@ -86,7 +107,7 @@ impl AcpSession {
                     if let Some(ready) = ready.take() {
                         let _ = ready.send(Ok(()));
                     }
-                    let mut state = Running { translator: Translator::new(), pending: HashMap::new(), request_seen: false, events: event_tx };
+                    let mut state = Running { translator: Translator::new(), pending: HashMap::new(), request_seen: false, prompting: false, steering, events: event_tx };
                     let mut commands = command_rx;
                     let mut observations = observations;
                     loop {
@@ -101,9 +122,21 @@ impl AcpSession {
                                 Some(Command::Prompt(text)) => {
                                     state.request_seen = false;
                                     state.emit(SessionEvent::TurnStart);
-                                    if let Err(error) = session.send_prompt(text) {
-                                        state.emit(SessionEvent::PromptRejected { reason: error.to_string() });
-                                        state.emit(SessionEvent::Settled { aborted: true });
+                                    match session.send_prompt(text) {
+                                        Ok(()) => state.prompting = true,
+                                        Err(error) => {
+                                            state.emit(SessionEvent::PromptRejected { reason: error.to_string() });
+                                            state.emit(SessionEvent::Settled { aborted: true });
+                                        }
+                                    }
+                                }
+                                Some(Command::Steer(text)) => {
+                                    if !state.steering {
+                                        tracing::debug!("steer dropped: the agent does not advertise fx steering");
+                                    } else if !state.prompting {
+                                        tracing::debug!("steer dropped: no prompt in flight");
+                                    } else if let Err(error) = send_steer(&cx, session.session_id().clone(), text) {
+                                        tracing::warn!(%error, "steer prompt could not be sent");
                                     }
                                 }
                                 Some(Command::Abort) => {
@@ -112,9 +145,9 @@ impl AcpSession {
                                 Some(Command::Permission { id, allow }) => state.answer(&id, allow),
                             },
                             observation = recv_observation(&mut observations) => match observation {
-                                EngineObservation::Completed { usage } => {
+                                EngineObservation::Completed { usage, stop_reason } => {
                                     state.request_seen = true;
-                                    for event in state.translator.request_end(usage, StopReason::ToolUse, None) {
+                                    for event in state.translator.request_end(usage, stop_reason, None) {
                                         state.emit(event);
                                     }
                                     state.emit(SessionEvent::TurnStart);
@@ -130,6 +163,7 @@ impl AcpSession {
                             message = session.read_update() => match message {
                                 Err(error) => return Err(error),
                                 Ok(SessionMessage::StopReason(stop)) => {
+                                    state.prompting = false;
                                     for event in state.translator.prompt_end(stop, state.request_seen) {
                                         state.emit(event);
                                     }
@@ -182,6 +216,47 @@ impl AcpSession {
     }
 }
 
+/// Whether the agent advertised fx's steering extension
+/// (`agentCapabilities._meta.fx.steering`, `true` in fx 0.0.14).
+fn advertises_steering(response: &InitializeResponse) -> bool {
+    response
+        .agent_capabilities
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("fx"))
+        .and_then(|fx| fx.get("steering"))
+        .is_some_and(|steering| steering.as_bool().unwrap_or(!steering.is_null()))
+}
+
+/// The `_meta` that marks a `session/prompt` as a steer for fx.
+fn steer_meta() -> serde_json::Map<String, serde_json::Value> {
+    let mut meta = serde_json::Map::new();
+    meta.insert("fx".to_owned(), serde_json::json!({ "steer": true }));
+    meta
+}
+
+/// fx's steer: a text `session/prompt` with `_meta.fx.steer: true`, applied
+/// at the next safe model boundary; its response completes with the active
+/// turn. It goes around `ActiveSession::send_prompt` so that response is
+/// only logged and never becomes a second `Settled` for the turn.
+fn send_steer(
+    cx: &ConnectionTo<Agent>,
+    session_id: SessionId,
+    text: String,
+) -> Result<(), agent_client_protocol::Error> {
+    let request = PromptRequest::new(session_id, vec![text.into()]).meta(steer_meta());
+    cx.send_request(request)
+        .on_receiving_result(async |result| {
+            match result {
+                Ok(response) => {
+                    tracing::debug!(stop_reason = ?response.stop_reason, "steer prompt completed");
+                }
+                Err(error) => tracing::warn!(%error, "steer prompt failed"),
+            }
+            Ok(())
+        })
+}
+
 /// Per-connection state inside the task.
 struct Running {
     translator: Translator,
@@ -193,6 +268,10 @@ struct Running {
         ),
     >,
     request_seen: bool,
+    /// A prompt has been sent and its response has not arrived.
+    prompting: bool,
+    /// The agent accepts fx steer prompts.
+    steering: bool,
     events: mpsc::UnboundedSender<SessionEvent>,
 }
 
@@ -254,10 +333,14 @@ impl Session for AcpSession {
         Some(event)
     }
 
-    /// ACP has no steering message; the steer is recorded by the runner and
-    /// the abort path handles the rest.
-    async fn steer(&mut self, _text: &str) -> Result<(), HarnessError> {
-        Ok(())
+    /// ACP itself has no steering message. With fx's extension (advertised
+    /// at initialize) the steer is a `session/prompt` carrying
+    /// `_meta.fx.steer: true`, sent only while a prompt is in flight;
+    /// otherwise it is a no-op and the abort path handles the rest.
+    async fn steer(&mut self, text: &str) -> Result<(), HarnessError> {
+        self.commands
+            .send(Command::Steer(text.to_owned()))
+            .map_err(|_| HarnessError::Closed)
     }
 
     async fn abort(&mut self) -> Result<(), HarnessError> {
@@ -291,5 +374,56 @@ impl Session for AcpSession {
             Ok(_) => SessionExit { code: Some(1) },
             Err(_) => SessionExit { code: None },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::schema::ProtocolVersion;
+    use agent_client_protocol::schema::v1::AgentCapabilities;
+
+    fn initialize_with(meta: Option<serde_json::Value>) -> InitializeResponse {
+        let mut capabilities = AgentCapabilities::new();
+        if let Some(meta) = meta {
+            capabilities = capabilities.meta(meta.as_object().cloned());
+        }
+        InitializeResponse::new(ProtocolVersion::V1).agent_capabilities(capabilities)
+    }
+
+    #[test]
+    fn steering_is_read_from_the_fx_capability_meta() {
+        assert!(!advertises_steering(&initialize_with(None)));
+        assert!(!advertises_steering(&initialize_with(Some(
+            serde_json::json!({"fx": {"steering": false}})
+        ))));
+        assert!(!advertises_steering(&initialize_with(Some(
+            serde_json::json!({"fx": {"other": true}})
+        ))));
+        assert!(advertises_steering(&initialize_with(Some(
+            serde_json::json!({"fx": {"steering": true}})
+        ))));
+        assert_eq!(
+            serde_json::Value::Object(steer_meta()),
+            serde_json::json!({"fx": {"steer": true}})
+        );
+    }
+
+    #[test]
+    fn finish_reasons_map_to_the_runner_stop_reasons() {
+        assert_eq!(stop_reason_for_finish(Some("stop")), StopReason::Stop);
+        assert_eq!(
+            stop_reason_for_finish(Some("tool_calls")),
+            StopReason::ToolUse
+        );
+        assert_eq!(stop_reason_for_finish(None), StopReason::ToolUse);
+        assert_eq!(
+            stop_reason_for_finish(Some("length")),
+            StopReason::MaxTokens
+        );
+        assert_eq!(
+            stop_reason_for_finish(Some("content_filter")),
+            StopReason::Other("content_filter".into())
+        );
     }
 }

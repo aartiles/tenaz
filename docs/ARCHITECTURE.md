@@ -11,6 +11,7 @@ crates/
   proxy/     smr-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
                            engine error classification.
   acp/       smr-acp       HarnessAdapter over ACP (fx and any ACP agent), harness as a subprocess.
+  pi/        smr-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
   mcp/       smr-mcp       MCP server (streamable HTTP) exposing media tools that take the lease.
   cli/       smr           the `smr` binary: init, run, status, preflight.
 ```
@@ -49,6 +50,31 @@ State lives on disk under `.agent/` in the project, exactly as the task loop
 lays it out, so a run survives the process and the user's existing tooling
 (`jq` over the journal, `git log`) keeps working.
 
+## Harness adapters
+
+Both adapters follow one shape: the harness process runs behind a background
+task, commands go in, `SessionEvent`s come out, and a pure `translate`
+module with unit tests turns the harness's own records into those events.
+
+| | `smr-acp` (fx) | `smr-pi` (Pi) |
+|---|---|---|
+| Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
+| Per session | `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` (the task loop's `piArgs`) |
+| Prompt | `session/prompt` | `{"id":"prompt-N","type":"prompt","message":...}`; a `response` that is not `success` or whose disposition is `handled` becomes `PromptRejected` |
+| Steer | none in ACP; recorded only | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
+| Abort | `session/cancel` | `clear_queue` then `abort`; `agent_settled {aborted:true}` follows |
+| Usage per request | from the engine proxy's observation feed | from Pi's `message_end.message.usage` (input, output, cacheRead, cacheWrite) |
+| Permissions | `request_permission`, answered by the runner | none: Pi's built-in tools run unasked in RPC mode |
+| Raw log | the translated events, one JSON line each | Pi's own stdout lines, verbatim |
+| Close | end the connection, wait, kill after the grace | end stdin (Pi's orderly shutdown), wait, kill after the grace |
+| Engine path | through the proxy (usage, hold while swapping) | direct: Pi reads the provider's `baseUrl` from `~/.pi/agent/models.json`; the proxy is not on its path |
+
+`smr init --harness pi` pins `pi --version` and, when `~/.pi/agent/models.json`
+lists the provider, takes the base URL, context window and inputs from the
+model's entry (a provider that does not list the model is an error, as in the
+task loop). The `fake-pi` binary in `smr-pi` is a scripted Pi that speaks the
+protocol without a model: the adapter's integration tests spawn it.
+
 ## Testing
 
 - Unit tests next to each core module.
@@ -57,7 +83,11 @@ lays it out, so a run survives the process and the user's existing tooling
   and a real temporary git repository, the descendant of `run-fake.sh`.
 - The `smr` binary runs the fake harness end to end through the real
   wiring (proxy, git, verify) in `crates/cli/tests/cli.rs`.
-- Nothing in `cargo test` needs fx, Sushi or ComfyUI; checks against the
+- The Pi adapter runs against the scripted `fake-pi` binary: a tool turn,
+  several prompts in one session, a loop that is aborted, a steer, an engine
+  error with a capacity message, a refused prompt, the stderr log, a close
+  that has to kill. `pi --version` is checked when Pi is installed.
+- Nothing in `cargo test` needs fx, Pi, Sushi or ComfyUI; checks against the
   real ones are listed in `STATUS.md`.
 
 ## Conventions

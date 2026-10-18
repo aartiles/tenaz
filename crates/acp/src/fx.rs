@@ -24,11 +24,15 @@ pub struct FxSettings {
     pub supports_vision: bool,
     /// `ask`: fx asks the client before every tool call.
     pub permission_mode: String,
+    /// fx's reasoning effort (`low`, `medium`, `high`). fx 0.0.14 records it
+    /// but does not forward it to a custom OpenAI-compatible provider; the
+    /// engine proxy fills `reasoning_effort` into the requests instead.
+    pub effort: Option<String>,
 }
 
 impl FxSettings {
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut json = serde_json::json!({
             "providers": {
                 &self.provider: {
                     "protocol": "openai-chat-completions",
@@ -46,8 +50,16 @@ impl FxSettings {
             },
             "provider": self.provider,
             "models": { &self.provider: self.model },
-            "permission_mode": self.permission_mode
-        })
+            "permission_mode": self.permission_mode,
+            "auto_upgrade": false
+        });
+        if let (Some(effort), Some(object)) = (&self.effort, json.as_object_mut()) {
+            object.insert(
+                "effort".to_owned(),
+                serde_json::Value::String(effort.clone()),
+            );
+        }
+        json
     }
 }
 
@@ -107,8 +119,12 @@ pub struct FxLaunch {
     pub binary: PathBuf,
     /// The isolated `HOME` holding `.fx/settings.json` and `.fx/mcp.json`.
     pub home: PathBuf,
-    /// Arguments that put fx in ACP mode. Pinned per fx version.
+    /// Arguments that put fx in ACP mode. Pinned per fx version: `fx acp`
+    /// (fx 0.0.14, build `1a070af32cdf`), global flags before `acp`.
     pub args: Vec<String>,
+    /// Where fx writes its ACP log (`fx acp --log-file`); stdout is the
+    /// protocol, so this is the only place its diagnostics go.
+    pub log_file: Option<PathBuf>,
 }
 
 impl FxLaunch {
@@ -117,10 +133,29 @@ impl FxLaunch {
             binary: binary.into(),
             home: home.into(),
             args: vec!["acp".to_owned()],
+            log_file: None,
         }
     }
 
-    /// The harness: fx as a subprocess with `HOME` set to the profile.
+    /// The command line: the pinned arguments, plus `--log-file` when a log
+    /// is wanted and the arguments do not already name one. The log path is
+    /// made absolute: fx 0.0.14 aborts at startup (`panic: reached
+    /// unreachable code`) when it cannot open the log, and a relative path
+    /// resolves against fx's own working directory.
+    pub fn command_args(&self) -> Vec<String> {
+        let mut args = self.args.clone();
+        if let Some(log) = &self.log_file
+            && !args.iter().any(|a| a == "--log-file")
+        {
+            let log = std::path::absolute(log).unwrap_or_else(|_| log.clone());
+            args.push("--log-file".to_owned());
+            args.push(log.display().to_string());
+        }
+        args
+    }
+
+    /// The harness: fx as a subprocess with `HOME` set to the profile and
+    /// its upgrade check off (no network beyond the engine).
     pub fn harness(&self, version: String) -> AcpHarness {
         let info = HarnessInfo {
             name: "fx".to_owned(),
@@ -129,8 +164,11 @@ impl FxLaunch {
         AcpHarness::subprocess(
             info,
             self.binary.clone(),
-            self.args.clone(),
-            vec![("HOME".to_owned(), self.home.display().to_string())],
+            self.command_args(),
+            vec![
+                ("HOME".to_owned(), self.home.display().to_string()),
+                ("FX_AUTO_UPGRADE".to_owned(), "0".to_owned()),
+            ],
         )
     }
 }
@@ -151,6 +189,7 @@ mod tests {
             max_output_tokens: 16384,
             supports_vision: true,
             permission_mode: "ask".into(),
+            effort: Some("medium".into()),
         };
         let mcp = vec![ProfileMcpServer {
             name: "lease".into(),
@@ -172,6 +211,8 @@ mod tests {
         );
         assert_eq!(written["models"]["sushi"], "Qwen3.8");
         assert_eq!(written["permission_mode"], "ask");
+        assert_eq!(written["effort"], "medium");
+        assert_eq!(written["auto_upgrade"], false);
         let servers: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(home.path().join(".fx/mcp.json")).unwrap(),
         )
@@ -183,8 +224,22 @@ mod tests {
     #[test]
     fn version_of_a_missing_binary_is_an_error() {
         assert!(fx_version(Path::new("/nonexistent/fx")).is_err());
-        let launch = FxLaunch::new("/usr/local/bin/fx", "/tmp/home");
-        assert_eq!(launch.args, vec!["acp"]);
+        let mut launch = FxLaunch::new("/usr/local/bin/fx", "/tmp/home");
+        assert_eq!(launch.command_args(), vec!["acp"]);
+        launch.log_file = Some("/tmp/fx.log".into());
+        assert_eq!(
+            launch.command_args(),
+            vec!["acp", "--log-file", "/tmp/fx.log"]
+        );
+        launch.args = vec!["acp".into(), "--log-file".into(), "/x".into()];
+        assert_eq!(launch.command_args(), vec!["acp", "--log-file", "/x"]);
+        launch.args = vec!["acp".into()];
+        launch.log_file = Some("rel/fx.log".into());
+        let args = launch.command_args();
+        assert!(
+            std::path::Path::new(&args[2]).is_absolute() && args[2].ends_with("rel/fx.log"),
+            "{args:?}"
+        );
         assert_eq!(launch.harness("0.0.14".into()).info().version, "0.0.14");
     }
 }

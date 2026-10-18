@@ -37,7 +37,9 @@ impl VerifyRunner for VerifyProcess {
             permissions.set_mode(permissions.mode() | 0o111);
             let _ = std::fs::set_permissions(&path, permissions);
         }
-        let spawned = tokio::process::Command::new(&path)
+        // `./verify` in the root, as the contract names it: a relative root
+        // joined into the program path would be resolved from the root again.
+        let spawned = tokio::process::Command::new("./verify")
             .args(args)
             .current_dir(&self.root)
             .env("CI", "1")
@@ -118,6 +120,25 @@ mod tests {
         );
         assert_eq!(raw.stderr, "args: --task T001 CI=1\n");
         assert!(!raw.timed_out && !raw.missing);
+    }
+
+    /// `smr run --project proj` from the directory above it.
+    #[tokio::test]
+    async fn runs_verify_under_a_relative_root() {
+        let here = std::env::current_dir().unwrap();
+        let dir = tempfile::tempdir_in(&here).unwrap();
+        std::fs::write(
+            dir.path().join("verify"),
+            "#!/bin/sh\necho '{\"ok\":true,\"passed\":0,\"failed\":[]}'\n",
+        )
+        .unwrap();
+        let relative = dir.path().strip_prefix(&here).unwrap();
+        assert!(relative.is_relative());
+        let raw = VerifyProcess::new(relative)
+            .run(&["--all"], Duration::from_secs(5))
+            .await;
+        assert_eq!(raw.status, Some(0), "{}", raw.stderr);
+        assert!(!raw.missing);
     }
 
     #[tokio::test]

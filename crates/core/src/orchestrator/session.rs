@@ -113,14 +113,17 @@ impl Runner {
                     tracing::debug!("{label}: kill timer fired");
                     break;
                 }
+                // Both deadlines below start when the wait ends: `now` is from
+                // before it, and the abort's grace would already be over.
                 () = clock.sleep(wall_left), if kill_at.is_none() => {
-                    let actions = watchdog.abort_external(&format!("session exceeded {} minutes", self.params.session_minutes), elapsed);
+                    let now = clock.monotonic_ms();
+                    let actions = watchdog.abort_external(&format!("session exceeded {} minutes", self.params.session_minutes), now.saturating_sub(started));
                     kill_at = self.apply(&mut *session, actions, now, kill_at).await;
                     continue;
                 }
                 () = self.stop.cancelled(), if kill_at.is_none() => {
                     let _ = session.abort().await;
-                    kill_at = Some(now + 5_000);
+                    kill_at = Some(clock.monotonic_ms() + 5_000);
                     continue;
                 }
             };
@@ -128,6 +131,9 @@ impl Runner {
                 tracing::debug!("{label}: event stream ended");
                 break;
             };
+            // The wait above may have been long; the event's time is now, not
+            // the time the wait started.
+            let now = clock.monotonic_ms();
             tracing::trace!(
                 "{label}: event {} (kill_at {kill_at:?}, now {now})",
                 event_name(&event)
@@ -631,6 +637,7 @@ fn request_record(
         prompt_tokens: usage.input + usage.cache_read,
         cached_tokens: usage.cache_read,
         output_tokens: usage.output,
+        reasoning_tokens: usage.reasoning,
         client_first_token_s: timing
             .turn_started
             .zip(timing.first_token)
@@ -673,5 +680,45 @@ fn describe(action: &Action) -> String {
     match action {
         Action::Steer { key, .. } => format!("steer:{key}"),
         Action::Abort { reason } => format!("abort — {reason}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::{StopReason, Usage};
+
+    /// Pi reports reasoning per message; the request row keeps it, and rows
+    /// written before the field existed still read.
+    #[test]
+    fn request_rows_keep_reasoning_tokens() {
+        let usage = Usage {
+            input: 1871,
+            output: 111,
+            cache_read: 2048,
+            reasoning: 57,
+            ..Default::default()
+        };
+        let timing = ClientTiming {
+            turn_started: Some(1_000),
+            first_token: Some(4_424),
+            now: 9_420,
+        };
+        let row = request_record("001-bootstrap", 1, &usage, &StopReason::ToolUse, timing);
+        assert_eq!(
+            (
+                row.prompt_tokens,
+                row.cached_tokens,
+                row.output_tokens,
+                row.reasoning_tokens
+            ),
+            (3919, 2048, 111, 57)
+        );
+        assert_eq!(row.client_first_token_s, Some(3.424));
+        let old: RequestRecord = serde_json::from_str(
+            r#"{"session":"s","sequence":1,"stop_reason":"stop","prompt_tokens":1,"cached_tokens":0,"output_tokens":1,"client_first_token_s":null,"client_total_s":null,"engine":null,"engine_matched":false}"#,
+        )
+        .unwrap();
+        assert_eq!(old.reasoning_tokens, 0);
     }
 }

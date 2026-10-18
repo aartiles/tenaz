@@ -21,10 +21,10 @@ async fn fake_engine() -> SocketAddr {
                 }
                 if body["stream"] == true {
                     assert_eq!(body["stream_options"]["include_usage"], true, "the proxy asks for usage in streams");
-                    let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":40}}}\n\ndata: [DONE]\n\n";
+                    let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":40}}}\n\ndata: [DONE]\n\n";
                     return ([("content-type", "text/event-stream")], sse).into_response();
                 }
-                axum::Json(serde_json::json!({"choices": [{"message": {"content": "hello"}}], "usage": {"prompt_tokens": 10, "completion_tokens": 3}})).into_response()
+                axum::Json(serde_json::json!({"choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 3}})).into_response()
             }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -118,12 +118,22 @@ async fn forwards_requests_and_records_usage_and_errors() {
                 status,
                 stream,
                 usage,
+                finish_reason,
                 ..
-            } => Some((path.clone(), *status, *stream, *usage)),
+            } => Some((
+                path.clone(),
+                *status,
+                *stream,
+                *usage,
+                finish_reason.clone(),
+            )),
             _ => None,
         })
         .collect();
-    assert_eq!(completed[0], ("/v1/models".to_owned(), 200, false, None));
+    assert_eq!(
+        completed[0],
+        ("/v1/models".to_owned(), 200, false, None, None)
+    );
     assert_eq!(
         completed[1],
         (
@@ -135,7 +145,8 @@ async fn forwards_requests_and_records_usage_and_errors() {
                 cached_tokens: 0,
                 completion_tokens: 3,
                 reasoning_tokens: 0
-            })
+            }),
+            Some("stop".to_owned())
         )
     );
     assert_eq!(
@@ -149,7 +160,8 @@ async fn forwards_requests_and_records_usage_and_errors() {
                 cached_tokens: 40,
                 completion_tokens: 2,
                 reasoning_tokens: 0
-            })
+            }),
+            Some("length".to_owned())
         )
     );
     assert_eq!(completed[3].1, 400);

@@ -25,8 +25,9 @@ open.
 - **Deterministic progress.** The plan, task state, retries and blocking
   decisions are the runner's. Engine failures are retried without charging
   the task. A run survives the process: pause with Ctrl-C, run again.
-- **Plug and play.** fx over ACP as the first harness; Sushi and any
-  OpenAI-compatible engine with start/stop commands; ComfyUI for images.
+- **Plug and play.** fx over ACP and Pi over its RPC mode as harnesses;
+  Sushi and any OpenAI-compatible engine with start/stop commands; ComfyUI
+  for images.
 
 ## Build
 
@@ -40,9 +41,9 @@ cargo build --release
 cargo test --workspace
 ```
 
-The tests need no model, engine or fx: a scripted harness exercises every
-orchestrator path, fake engines sit under the lease, and in-process fakes
-stand in for the ACP agent, the engine behind the proxy, and ComfyUI.
+The tests need no model, engine, fx or Pi: a scripted harness exercises every
+orchestrator path, fake engines sit under the lease, and fakes stand in for
+the ACP agent, the Pi process, the engine behind the proxy, and ComfyUI.
 
 ## Use
 
@@ -70,6 +71,11 @@ smr status --project runs/my-goal
   `--resume` continues a BLOCKED run. `--set key=value` at `init` overrides
   a parameter; `smr params` lists them.
 - `status` reads files only and is safe while a run works.
+- `--harness pi` at `init` pins `pi --version` and reads the model's base
+  URL, context window and inputs from `~/.pi/agent/models.json`, as the task
+  loop did; `run` then spawns `pi --mode rpc` per session (`--pi-bin` names
+  the executable). Pi talks to the engine directly, so `--no-proxy` is fine
+  there.
 - `--harness fake` at `init` runs the scripted harness end to end without a
   model (what the tests do).
 
