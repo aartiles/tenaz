@@ -1,5 +1,5 @@
 [package]
-name = "smr-acp"
+name = "tenaz-acp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-smr-core.workspace = true
+tenaz-core.workspace = true
 agent-client-protocol = { workspace = true, features = ["process"] }
 tokio.workspace = true
 async-trait.workspace = true

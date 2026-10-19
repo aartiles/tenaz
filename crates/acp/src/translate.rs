@@ -5,7 +5,7 @@ use agent_client_protocol::schema::v1::{
     ContentBlock, PermissionOptionKind, RequestPermissionRequest, SessionUpdate,
     StopReason as AcpStop, ToolCallContent, ToolCallStatus,
 };
-use smr_core::session::{PermissionOption, SessionEvent, StopReason, Usage};
+use tenaz_core::session::{PermissionOption, SessionEvent, StopReason, Usage};
 use std::collections::HashMap;
 
 /// Session state the translation depends on.
@@ -103,7 +103,7 @@ impl Translator {
         usage: Usage,
         stop_reason: StopReason,
         error_message: Option<String>,
-        server: Option<smr_core::session::ServerTimings>,
+        server: Option<tenaz_core::session::ServerTimings>,
     ) -> Vec<SessionEvent> {
         let text = std::mem::take(&mut self.text);
         let thinking_chars = std::mem::take(&mut self.thinking_chars);

@@ -5,18 +5,18 @@ on the core, the core depends on nothing of theirs.
 
 ```text
 crates/
-  core/      smr-core      domain + ports + orchestration. No process, network or git code.
-  adapters/  smr-adapters  git, verify runner, macOS memory probe, notifier, engine adapters
+  core/      tenaz-core      domain + ports + orchestration. No process, network or git code.
+  adapters/  tenaz-adapters  git, verify runner, macOS memory probe, notifier, engine adapters
                            (generic commands, Sushi), ComfyUI media adapter, Prometheus metrics.
-  proxy/     smr-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
+  proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
                            engine error classification.
-  acp/       smr-acp       HarnessAdapter over ACP (fx and any ACP agent), harness as a subprocess.
-  pi/        smr-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
-  mcp/       smr-mcp       MCP server (streamable HTTP) exposing media tools that take the lease.
-  cli/       smr           the `smr` binary: init, run, status, preflight.
+  acp/       tenaz-acp       HarnessAdapter over ACP (fx and any ACP agent), harness as a subprocess.
+  pi/        tenaz-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
+  mcp/       tenaz-mcp       MCP server (streamable HTTP) exposing media tools that take the lease.
+  cli/       tenaz           the `tenaz` binary: init, run, status, preflight.
 ```
 
-## Core (`smr-core`)
+## Core (`tenaz-core`)
 
 Pure modules, each unit-tested without I/O:
 
@@ -56,7 +56,7 @@ Both adapters follow one shape: the harness process runs behind a background
 task, commands go in, `SessionEvent`s come out, and a pure `translate`
 module with unit tests turns the harness's own records into those events.
 
-| | `smr-acp` (fx) | `smr-pi` (Pi) |
+| | `tenaz-acp` (fx) | `tenaz-pi` (Pi) |
 |---|---|---|
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
 | Per session | `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` (the task loop's `piArgs`) |
@@ -69,10 +69,10 @@ module with unit tests turns the harness's own records into those events.
 | Close | end the connection, wait, kill after the grace | end stdin (Pi's orderly shutdown), wait, kill after the grace |
 | Engine path | through the proxy (usage, hold while swapping) | direct: Pi reads the provider's `baseUrl` from `~/.pi/agent/models.json`; the proxy is not on its path |
 
-`smr init --harness pi` pins `pi --version` and, when `~/.pi/agent/models.json`
+`tenaz init --harness pi` pins `pi --version` and, when `~/.pi/agent/models.json`
 lists the provider, takes the base URL, context window and inputs from the
 model's entry (a provider that does not list the model is an error, as in the
-task loop). The `fake-pi` binary in `smr-pi` is a scripted Pi that speaks the
+task loop). The `fake-pi` binary in `tenaz-pi` is a scripted Pi that speaks the
 protocol without a model: the adapter's integration tests spawn it.
 
 ## Testing
@@ -81,7 +81,7 @@ protocol without a model: the adapter's integration tests spawn it.
 - Adapter conformance tests against fakes or a temporary git repository.
 - One end-to-end test drives the whole loop with a scripted fake harness
   and a real temporary git repository, the descendant of `run-fake.sh`.
-- The `smr` binary runs the fake harness end to end through the real
+- The `tenaz` binary runs the fake harness end to end through the real
   wiring (proxy, git, verify) in `crates/cli/tests/cli.rs`.
 - The Pi adapter runs against the scripted `fake-pi` binary: a tool turn,
   several prompts in one session, a loop that is aborted, a steer, an engine

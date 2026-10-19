@@ -27,16 +27,16 @@ macOS memory probe test is ignored on other platforms.
 
 | Crate | Path | What it holds |
 |---|---|---|
-| `smr-core` | `crates/core` | Domain, ports and orchestration. No process, network or git code. |
-| `smr-adapters` | `crates/adapters` | git, the verify runner, macOS memory probe, notifier, engine adapters (generic, Sushi), ComfyUI, Prometheus metrics. |
-| `smr-proxy` | `crates/proxy` | OpenAI-compatible reverse proxy: per-request usage, hold while swapping, error classification. |
-| `smr-acp` | `crates/acp` | Harness adapter over ACP (fx and any ACP agent). |
-| `smr-pi` | `crates/pi` | Harness adapter over Pi's `--mode rpc`. |
-| `smr-mcp` | `crates/mcp` | MCP server exposing media tools that take the lease. |
-| `smr` | `crates/cli` | The `smr` binary: `init`, `run`, `status`, `params`. |
+| `tenaz-core` | `crates/core` | Domain, ports and orchestration. No process, network or git code. |
+| `tenaz-adapters` | `crates/adapters` | git, the verify runner, macOS memory probe, notifier, engine adapters (generic, Sushi), ComfyUI, Prometheus metrics. |
+| `tenaz-proxy` | `crates/proxy` | OpenAI-compatible reverse proxy: per-request usage, hold while swapping, error classification. |
+| `tenaz-acp` | `crates/acp` | Harness adapter over ACP (fx and any ACP agent). |
+| `tenaz-pi` | `crates/pi` | Harness adapter over Pi's `--mode rpc`. |
+| `tenaz-mcp` | `crates/mcp` | MCP server exposing media tools that take the lease. |
+| `tenaz` | `crates/cli` | The `tenaz` binary: `init`, `run`, `status`, `params`. |
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) has the details. New logic
-belongs in `smr-core` when it can be pure; side effects belong in an adapter
+belongs in `tenaz-core` when it can be pure; side effects belong in an adapter
 behind a port.
 
 ## Tests need no model

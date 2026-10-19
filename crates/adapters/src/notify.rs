@@ -1,7 +1,7 @@
 //! Desktop notifications, so whoever shares the machine knows a run holds the
 //! engine and most of its memory.
 
-use smr_core::ports::Notifier;
+use tenaz_core::ports::Notifier;
 
 /// macOS notifications through `osascript`; silent elsewhere.
 #[derive(Clone, Debug)]

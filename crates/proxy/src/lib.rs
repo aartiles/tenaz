@@ -16,7 +16,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures::StreamExt as _;
-use smr_core::lease::Gate;
+use tenaz_core::lease::Gate;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 

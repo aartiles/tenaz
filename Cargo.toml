@@ -11,12 +11,12 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-smr-core = { path = "crates/core" }
-smr-adapters = { path = "crates/adapters" }
-smr-proxy = { path = "crates/proxy" }
-smr-acp = { path = "crates/acp" }
-smr-pi = { path = "crates/pi" }
-smr-mcp = { path = "crates/mcp" }
+tenaz-core = { path = "crates/core" }
+tenaz-adapters = { path = "crates/adapters" }
+tenaz-proxy = { path = "crates/proxy" }
+tenaz-acp = { path = "crates/acp" }
+tenaz-pi = { path = "crates/pi" }
+tenaz-mcp = { path = "crates/mcp" }
 
 agent-client-protocol = "3.4"
 rmcp = { version = "3.5", features = ["server", "transport-streamable-http-server", "macros"] }

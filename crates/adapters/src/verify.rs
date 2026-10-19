@@ -6,8 +6,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use smr_core::ports::VerifyRunner;
-use smr_core::verify::RawVerifyOutput;
+use tenaz_core::ports::VerifyRunner;
+use tenaz_core::verify::RawVerifyOutput;
 use tokio::io::AsyncReadExt;
 
 /// `./verify` at the project root, run with `CI=1`.
@@ -122,7 +122,7 @@ mod tests {
         assert!(!raw.timed_out && !raw.missing);
     }
 
-    /// `smr run --project proj` from the directory above it.
+    /// `tenaz run --project proj` from the directory above it.
     #[tokio::test]
     async fn runs_verify_under_a_relative_root() {
         let here = std::env::current_dir().unwrap();

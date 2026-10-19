@@ -1,5 +1,5 @@
 [package]
-name = "smr-mcp"
+name = "tenaz-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-smr-core.workspace = true
+tenaz-core.workspace = true
 rmcp = { workspace = true, features = ["server", "macros", "schemars", "transport-streamable-http-server"] }
 axum.workspace = true
 tokio.workspace = true

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use async_trait::async_trait;
-use smr_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
+use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
 
 pub use translate::Translator;
 

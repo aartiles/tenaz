@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use smr_core::ports::{EngineAdapter, EngineError, ModelState};
+use tenaz_core::ports::{EngineAdapter, EngineError, ModelState};
 
 use super::openai::{list_models, wait_for_model};
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use smr_core::ports::{MediaAdapter, MediaError, MediaJob, MediaOutput};
+use tenaz_core::ports::{MediaAdapter, MediaError, MediaJob, MediaOutput};
 
 #[derive(Clone, Debug)]
 pub struct ComfyUi {
@@ -22,7 +22,7 @@ impl ComfyUi {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             client: crate::http::local_client(),
-            client_id: format!("smr-{}", std::process::id()),
+            client_id: format!("tenaz-{}", std::process::id()),
             poll: Duration::from_secs(2),
             job_timeout,
         }

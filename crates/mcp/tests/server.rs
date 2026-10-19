@@ -8,12 +8,12 @@ use async_trait::async_trait;
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::StreamableHttpClientTransport;
-use smr_core::lease::{Gate, LeaseManager};
-use smr_core::ports::{
+use tenaz_core::lease::{Gate, LeaseManager};
+use tenaz_core::ports::{
     EngineAdapter, EngineError, MediaAdapter, MediaError, MediaJob, MediaOutput, ModelState,
 };
-use smr_mcp::workflow::WorkflowTemplate;
-use smr_mcp::{MediaTools, serve};
+use tenaz_mcp::workflow::WorkflowTemplate;
+use tenaz_mcp::{MediaTools, serve};
 
 #[derive(Default)]
 struct Log(Mutex<Vec<String>>);

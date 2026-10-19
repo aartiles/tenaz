@@ -9,9 +9,9 @@
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
-use smr_acp::AcpHarness;
-use smr_core::ports::{Harness, HarnessInfo, SessionSpec};
-use smr_core::session::SessionEvent;
+use tenaz_acp::AcpHarness;
+use tenaz_core::ports::{Harness, HarnessInfo, SessionSpec};
+use tenaz_core::session::SessionEvent;
 
 const AGENT: &str = r#"#!/bin/sh
 # A minimal ACP agent over stdio that crashes on the first prompt.

@@ -8,7 +8,7 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `smr` binary with `init`, `run`, `status` and `params`.
+- `tenaz` binary with `init`, `run`, `status` and `params`.
 - Orchestrator ported from the task loop: bootstrap, build, verify, review,
   split or block, replan and final review, with pause and resume.
 - Lease manager keeping one engine resident at a time.

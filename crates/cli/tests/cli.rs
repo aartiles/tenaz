@@ -3,13 +3,13 @@
 
 use std::process::Command;
 
-fn smr() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_smr"))
+fn tenaz() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_tenaz"))
 }
 
 #[test]
 fn params_lists_the_defaults() {
-    let out = smr().arg("params").output().unwrap();
+    let out = tenaz().arg("params").output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("maxAttempts=3\n"));
@@ -24,7 +24,7 @@ fn init_run_and_status_with_the_fake_harness() {
     let project = work.path().join("project");
     // Relative to the runner's directory, as typed: harnesses and `verify`
     // run inside the project, so the runner must not pass it on as is.
-    let init = smr()
+    let init = tenaz()
         .current_dir(work.path())
         .args(["init", "--project", "project"])
         .arg("--brief")
@@ -53,7 +53,7 @@ fn init_run_and_status_with_the_fake_harness() {
         String::from_utf8_lossy(&init.stderr)
     );
     assert!(String::from_utf8_lossy(&init.stdout).contains("fake fake-pi 0.0.1"));
-    let not_initialized = smr()
+    let not_initialized = tenaz()
         .args(["status", "--project"])
         .arg(work.path())
         .output()
@@ -63,7 +63,7 @@ fn init_run_and_status_with_the_fake_harness() {
         "Not initialized.\n"
     );
 
-    let run = smr()
+    let run = tenaz()
         .current_dir(work.path())
         .args(["run", "--project", "project"])
         .output()
@@ -76,7 +76,7 @@ fn init_run_and_status_with_the_fake_harness() {
         "{stderr}"
     );
 
-    let status = smr()
+    let status = tenaz()
         .args(["status", "--project"])
         .arg(&project)
         .output()
@@ -89,7 +89,7 @@ fn init_run_and_status_with_the_fake_harness() {
         "{text}"
     );
 
-    let again = smr()
+    let again = tenaz()
         .args(["run", "--project"])
         .arg(&project)
         .output()
@@ -127,7 +127,7 @@ fn init_with_the_pi_harness_reads_models_json() {
     std::fs::write(&brief, "# Brief\n").unwrap();
     let project = work.path().join("project");
 
-    let unknown = smr()
+    let unknown = tenaz()
         .env("HOME", &home)
         .args(["init", "--project"])
         .arg(&project)
@@ -153,7 +153,7 @@ fn init_with_the_pi_harness_reads_models_json() {
         String::from_utf8_lossy(&unknown.stderr)
     );
 
-    let init = smr()
+    let init = tenaz()
         .env("HOME", &home)
         .args(["init", "--project"])
         .arg(&project)
@@ -193,7 +193,7 @@ fn init_with_the_pi_harness_reads_models_json() {
         serde_json::json!(["text", "image"])
     );
 
-    let status = smr()
+    let status = tenaz()
         .args(["status", "--project"])
         .arg(&project)
         .output()

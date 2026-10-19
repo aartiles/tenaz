@@ -28,7 +28,7 @@ pub(crate) struct Tap {
     body: Vec<u8>,
     usage: Option<crate::ProxyUsage>,
     finish_reason: Option<String>,
-    timings: Option<smr_core::session::ServerTimings>,
+    timings: Option<tenaz_core::session::ServerTimings>,
     done: bool,
 }
 
@@ -99,7 +99,7 @@ impl Tap {
                 }
                 if let Some(timings) = json
                     .get("timings")
-                    .and_then(smr_core::session::ServerTimings::from_json)
+                    .and_then(tenaz_core::session::ServerTimings::from_json)
                 {
                     self.timings = Some(timings);
                 }
@@ -132,7 +132,7 @@ impl Tap {
             self.finish_reason = finish_reason_from_json(&json);
             self.timings = json
                 .get("timings")
-                .and_then(smr_core::session::ServerTimings::from_json);
+                .and_then(tenaz_core::session::ServerTimings::from_json);
         }
         self.proxy.observe(ProxyEvent::Completed {
             request: self.id,

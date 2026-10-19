@@ -8,14 +8,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use smr_adapters::git::GitRepo;
-use smr_adapters::notify::SilentNotifier;
-use smr_adapters::verify::VerifyProcess;
-use smr_core::ledger::{JournalRecord, ModelConfig, Phase, TaskOutcome};
-use smr_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
-use smr_core::params::RunParams;
-use smr_core::project::Project;
-use smr_core::testing::{FastClock, ScriptedHarness};
+use tenaz_adapters::git::GitRepo;
+use tenaz_adapters::notify::SilentNotifier;
+use tenaz_adapters::verify::VerifyProcess;
+use tenaz_core::ledger::{JournalRecord, ModelConfig, Phase, TaskOutcome};
+use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
+use tenaz_core::params::RunParams;
+use tenaz_core::project::Project;
+use tenaz_core::testing::{FastClock, ScriptedHarness};
 use tokio_util::sync::CancellationToken;
 
 fn templates() -> Templates {
@@ -300,7 +300,7 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     assert!(has(
         &|r| matches!(r, JournalRecord::Run { outcome, .. } if outcome == "COMPLETE")
     ));
-    let status = smr_core::orchestrator::status_text(&project);
+    let status = tenaz_core::orchestrator::status_text(&project);
     assert!(status.starts_with("Phase: COMPLETE\n"), "{status}");
     assert!(status.contains("Tasks: done 5, split 1"), "{status}");
 }

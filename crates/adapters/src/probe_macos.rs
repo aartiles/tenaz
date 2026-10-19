@@ -2,8 +2,8 @@
 //! counters, and the footprint of the process listening on the engine's port.
 
 use async_trait::async_trait;
-use smr_core::memory::{MemoryReading, parse_size_gib, parse_swap_used_gib, parse_vm_stat};
-use smr_core::ports::MemoryProbe;
+use tenaz_core::memory::{MemoryReading, parse_size_gib, parse_swap_used_gib, parse_vm_stat};
+use tenaz_core::ports::MemoryProbe;
 
 /// Reads `sysctl`, `vm_stat`, `lsof` and `top`.
 #[derive(Clone, Debug)]

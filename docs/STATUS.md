@@ -7,19 +7,19 @@ verification changes are not committed yet.
 
 | Piece | Where | Verified by |
 |---|---|---|
-| Task cards, spec, backlog, coverage, `verify` contract | `smr-core` | unit tests |
-| Watchdog rules (loop, repeat, idle, big output, context, turns, compaction, provider errors) | `smr-core::watchdog` | unit tests with the task loop's thresholds |
-| Session wrapper: engine retries with backoff, capacity cap, context and image continuations, pause | `smr-core::orchestrator::session` | the end-to-end fake run |
-| Phases: bootstrap validation, attempts, review with retry, split, block, replan, final review | `smr-core::orchestrator::phases` | the end-to-end fake run (`crates/adapters/tests/fake_loop.rs`, the port of `run-fake.sh`) |
-| Ledger and journal with the task loop's field names | `smr-core::ledger` | round-trip tests |
-| Lease manager and gate | `smr-core::lease` | fake engines: full cycle, failed job, failed reload |
-| git, `verify` process, clock, notifier, macOS memory probe, Prometheus metrics | `smr-adapters` | temp repositories, scripts, mock servers |
-| Sushi, generic and ComfyUI adapters | `smr-adapters` | mock HTTP servers |
-| Engine proxy: hold, per-request usage and finish reason (JSON and SSE), `reasoning_effort` default, error classification | `smr-proxy` | fake engine behind it, and Sushi (below) |
-| ACP harness: initialize, session/new with MCP servers and meta, tool calls, permissions, cancel, fx steering (a `session/prompt` with `_meta.fx.steer` while a turn runs), proxy usage merge with the engine's finish reason | `smr-acp` | an in-process ACP agent built with the same crate, and fx 0.0.14 (below) |
-| Pi harness: `piArgs` command line, prompt ids, tool calls, usage and stop reasons, steer, `clear_queue` + `abort`, prompt rejection, raw and stderr logs, close with kill | `smr-pi` | the scripted `fake-pi` binary over real pipes; `models.json` reading; `pi --version` when installed; streams recorded from Pi 1.1.0 (below) |
-| Media MCP server with `generate_image` through the lease | `smr-mcp` | rmcp client over HTTP against fake engines |
-| `smr` binary: init, run, status, params; `init --harness pi` from `models.json` | `smr` | the binary end to end with the fake harness; init with a stand-in `pi` |
+| Task cards, spec, backlog, coverage, `verify` contract | `tenaz-core` | unit tests |
+| Watchdog rules (loop, repeat, idle, big output, context, turns, compaction, provider errors) | `tenaz-core::watchdog` | unit tests with the task loop's thresholds |
+| Session wrapper: engine retries with backoff, capacity cap, context and image continuations, pause | `tenaz-core::orchestrator::session` | the end-to-end fake run |
+| Phases: bootstrap validation, attempts, review with retry, split, block, replan, final review | `tenaz-core::orchestrator::phases` | the end-to-end fake run (`crates/adapters/tests/fake_loop.rs`, the port of `run-fake.sh`) |
+| Ledger and journal with the task loop's field names | `tenaz-core::ledger` | round-trip tests |
+| Lease manager and gate | `tenaz-core::lease` | fake engines: full cycle, failed job, failed reload |
+| git, `verify` process, clock, notifier, macOS memory probe, Prometheus metrics | `tenaz-adapters` | temp repositories, scripts, mock servers |
+| Sushi, generic and ComfyUI adapters | `tenaz-adapters` | mock HTTP servers |
+| Engine proxy: hold, per-request usage and finish reason (JSON and SSE), `reasoning_effort` default, error classification | `tenaz-proxy` | fake engine behind it, and Sushi (below) |
+| ACP harness: initialize, session/new with MCP servers and meta, tool calls, permissions, cancel, fx steering (a `session/prompt` with `_meta.fx.steer` while a turn runs), proxy usage merge with the engine's finish reason | `tenaz-acp` | an in-process ACP agent built with the same crate, and fx 0.0.14 (below) |
+| Pi harness: `piArgs` command line, prompt ids, tool calls, usage and stop reasons, steer, `clear_queue` + `abort`, prompt rejection, raw and stderr logs, close with kill | `tenaz-pi` | the scripted `fake-pi` binary over real pipes; `models.json` reading; `pi --version` when installed; streams recorded from Pi 1.1.0 (below) |
+| Media MCP server with `generate_image` through the lease | `tenaz-mcp` | rmcp client over HTTP against fake engines |
+| `tenaz` binary: init, run, status, params; `init --harness pi` from `models.json` | `tenaz` | the binary end to end with the fake harness; init with a stand-in `pi` |
 
 ## Verified against fx 0.0.14 and Sushi (2026-10-17/18)
 
@@ -102,7 +102,7 @@ serving `Qwen3.8-Flash-Next-Sushi-2.6bpw`. The run is kept, uncommitted, in
   Sushi was shared with the still-running `fx-smoke-20261017` run and
   others (4 requests in flight), so step 3's 7,367-token answer took 659 s.
 - **fx aborts on a relative `--log-file`** (`panic: reached unreachable
-  code`, before initialize, whatever the current directory). `smr run
+  code`, before initialize, whatever the current directory). `tenaz run
   --project ./project` produced exactly that; `FxLaunch::command_args` now
   passes the log path absolute.
 
@@ -111,7 +111,7 @@ serving `Qwen3.8-Flash-Next-Sushi-2.6bpw`. The run is kept, uncommitted, in
 Brief: a Python `wordstats.py` with tests, five requirements. Sushi was
 shared with the owner's own task-loop run the whole time, so wall times are
 about half of what the model does alone (decode about 23 tokens/s per
-request, 2 requests running). `smr init` pinned fx 0.0.14; `smr run` went
+request, 2 requests running). `tenaz init` pinned fx 0.0.14; `tenaz run` went
 through the preflight, two bootstrap sessions, the T001 build, verify,
 commit and review, and on into T002. The run was paused with Ctrl-C during
 the T002 builder (the session was aborted, the pause journaled) and resumed
@@ -142,8 +142,8 @@ and `effort=medium reasoning=unsupported_or_missing` on every request.
 ## Verified against Pi 1.1.0 and Sushi (2026-10-18)
 
 Pi 1.1.0 (`pi --mode rpc`, fnm node 24) against Sushi 1.2.4 serving
-`Qwen3.8-Flash-Next-Sushi-2.6bpw`, `smr init --harness pi --provider sushi`
-and `smr run --no-proxy`, with a three-requirement shell brief (`greet.sh`,
+`Qwen3.8-Flash-Next-Sushi-2.6bpw`, `tenaz init --harness pi --provider sushi`
+and `tenaz run --no-proxy`, with a three-requirement shell brief (`greet.sh`,
 `VERSION`, `verify`). Sushi was shared with other sessions' runs the whole
 time (2–3 requests running, decode down to about 7 tokens/s), so wall times
 are long and `engine_matched` is mostly false. The runs are kept,
@@ -193,7 +193,7 @@ uncommitted, in `local-runs/pi-smoke-20261018/` (its `README.md` lists them).
   verify: No such file or directory"): the program path was joined to the
   root and then resolved from the root again. It is now spawned as
   `./verify` in the root (test: `runs_verify_under_a_relative_root`), and
-  `smr init`/`run` make `--project` absolute once (the fake-harness CLI
+  `tenaz init`/`run` make `--project` absolute once (the fake-harness CLI
   test now runs with a relative project).
 - **A pause dropped the aborted turn and gave no grace.** After a long wait
   for the model, Ctrl-C (and the `sessionMinutes` limit) set the 5 s kill
@@ -244,7 +244,7 @@ uncommitted, in `local-runs/pi-smoke-20261018/` (its `README.md` lists them).
 
 ## Fixed after the Pocket Ledger run (2026-10-18)
 
-The run with smr, fx and Sushi on Pocket Ledger
+The run with tenaz, fx and Sushi on Pocket Ledger
 (`local-model-benchmarks`, report
 `benchmarks/reports/2026-10-18-qwen38-flash-next-sushi-v124-smr-pocket-ledger.md`)
 completed and reported three runner issues:

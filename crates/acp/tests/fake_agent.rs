@@ -16,9 +16,9 @@ use agent_client_protocol::schema::v1::{
     ToolCallUpdateFields, UsageUpdate,
 };
 use agent_client_protocol::{Agent, DynConnectTo};
-use smr_acp::{AcpHarness, EngineObservation, McpEndpoint};
-use smr_core::ports::{Harness, HarnessInfo, PermissionDecision, SessionSpec};
-use smr_core::session::{SessionEvent, StopReason as CoreStop, Usage};
+use tenaz_acp::{AcpHarness, EngineObservation, McpEndpoint};
+use tenaz_core::ports::{Harness, HarnessInfo, PermissionDecision, SessionSpec};
+use tenaz_core::session::{SessionEvent, StopReason as CoreStop, Usage};
 
 /// A steer prompt as the fake agent received it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,7 +181,7 @@ fn spec(dir: &Path) -> SessionSpec {
 use std::path::Path;
 
 async fn drain(
-    session: &mut Box<dyn smr_core::ports::Session>,
+    session: &mut Box<dyn tenaz_core::ports::Session>,
     answer: PermissionDecision,
 ) -> Vec<SessionEvent> {
     let mut events = Vec::new();
@@ -333,7 +333,7 @@ async fn proxy_observations_become_per_request_turns() {
             ..Default::default()
         },
         stop_reason: CoreStop::ToolUse,
-        server: Some(smr_core::session::ServerTimings {
+        server: Some(tenaz_core::session::ServerTimings {
             prompt_ms: Some(120.5),
             decode_ms: Some(866.1),
             cached_tokens: Some(90),
@@ -392,7 +392,7 @@ async fn proxy_observations_become_per_request_turns() {
 /// Runs the `loop` prompt, steers at the third tool call and, with `abort`,
 /// aborts at the sixth; returns the tool-call count and every `Settled`.
 async fn loop_with_steer(
-    session: &mut Box<dyn smr_core::ports::Session>,
+    session: &mut Box<dyn tenaz_core::ports::Session>,
     abort: bool,
 ) -> (usize, Vec<bool>) {
     session.prompt("loop").await.unwrap();

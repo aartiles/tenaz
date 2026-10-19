@@ -1,4 +1,4 @@
-//! `smr`: the single-model runner command line.
+//! `tenaz`: the single-model runner command line.
 
 mod wiring;
 
@@ -6,16 +6,16 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
-use smr_core::ledger::ModelConfig;
-use smr_core::orchestrator::{InitOptions, RunOptions, Runner, Templates, init, status_text};
-use smr_core::params::RunParams;
-use smr_core::project::Project;
-use smr_pi::models::ModelEntry;
+use tenaz_core::ledger::ModelConfig;
+use tenaz_core::orchestrator::{InitOptions, RunOptions, Runner, Templates, init, status_text};
+use tenaz_core::params::RunParams;
+use tenaz_core::project::Project;
+use tenaz_pi::models::ModelEntry;
 use tokio_util::sync::CancellationToken;
 
 /// The runner's version string, journaled per run.
 fn runner_version() -> String {
-    format!("smr {}", env!("CARGO_PKG_VERSION"))
+    format!("tenaz {}", env!("CARGO_PKG_VERSION"))
 }
 
 /// The project directory as an absolute path: harnesses, `verify` and git
@@ -26,7 +26,7 @@ fn absolute(project: PathBuf) -> PathBuf {
 
 /// The role prompts and shared rules compiled into the binary.
 fn templates() -> Templates {
-    use smr_core::role::Role;
+    use tenaz_core::role::Role;
     let prompts = [
         (
             Role::Bootstrap,
@@ -58,9 +58,9 @@ fn templates() -> Templates {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "smr",
+    name = "tenaz",
     version,
-    about = "Single-model runner: one resident model, a goal, a verified result."
+    about = "Tenaz, a single-model runner: one resident model, a goal, a verified result."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -122,7 +122,7 @@ enum Command {
         vision: bool,
         #[arg(long, default_value = "medium")]
         thinking: String,
-        /// Parameter overrides, `key=value` (see `smr params`).
+        /// Parameter overrides, `key=value` (see `tenaz params`).
         #[arg(long = "set")]
         sets: Vec<String>,
         /// Skill directories to pin read-only into .agent/skills/.
@@ -225,8 +225,8 @@ async fn main() -> anyhow::Result<()> {
                 input,
                 thinking: Some(thinking),
             };
-            let vcs = smr_adapters::git::GitRepo::new(project.root());
-            let clock = smr_adapters::clock::SystemClock::new();
+            let vcs = tenaz_adapters::git::GitRepo::new(project.root());
+            let clock = tenaz_adapters::clock::SystemClock::new();
             let options = InitOptions {
                 brief,
                 config,
@@ -324,25 +324,25 @@ fn pin_harness(
     Ok(match harness {
         HarnessKind::Fx => (
             "fx".to_owned(),
-            smr_acp::fx::fx_version(fx_bin)
+            tenaz_acp::fx::fx_version(fx_bin)
                 .with_context(|| format!("cannot run {} --version", fx_bin.display()))?,
             None,
         ),
         HarnessKind::Pi => {
-            let entry = match smr_pi::models::default_models_path() {
-                Some(path) => smr_pi::models::model_entry(&path, provider, model)?,
+            let entry = match tenaz_pi::models::default_models_path() {
+                Some(path) => tenaz_pi::models::model_entry(&path, provider, model)?,
                 None => None,
             };
             (
                 "pi".to_owned(),
-                smr_pi::pi_version(pi_bin)
+                tenaz_pi::pi_version(pi_bin)
                     .with_context(|| format!("cannot run {} --version", pi_bin.display()))?,
                 entry,
             )
         }
         HarnessKind::Fake => (
             "fake".to_owned(),
-            smr_core::testing::ScriptedHarness::default().version(),
+            tenaz_core::testing::ScriptedHarness::default().version(),
             None,
         ),
     })

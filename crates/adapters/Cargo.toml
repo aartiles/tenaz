@@ -1,5 +1,5 @@
 [package]
-name = "smr-adapters"
+name = "tenaz-adapters"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-smr-core.workspace = true
+tenaz-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -18,7 +18,7 @@ reqwest.workspace = true
 time.workspace = true
 
 [dev-dependencies]
-smr-core = { workspace = true, features = ["testing"] }
+tenaz-core = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 axum.workspace = true
 tokio-util.workspace = true

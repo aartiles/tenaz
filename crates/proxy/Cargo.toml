@@ -1,5 +1,5 @@
 [package]
-name = "smr-proxy"
+name = "tenaz-proxy"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-smr-core.workspace = true
+tenaz-core.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 axum.workspace = true

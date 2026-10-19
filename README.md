@@ -1,6 +1,6 @@
-# Single-model runner (`smr`)
+# Tenaz
 
-A runner for hardware that holds one model at a time: a Mac with 16–64 GB of
+A single-model runner for hardware that holds one model at a time: a Mac with 16–64 GB of
 unified memory, or one consumer GPU. Given a goal, it plans, splits the work
 into tasks, and drives an agent harness session by session until the goal is
 met, while only one engine (the LLM, an image model, ...) is resident at any
@@ -32,19 +32,19 @@ open.
 ## Install
 
 From a release: download the archive for your platform (macOS arm64 or
-Linux x86_64) from the GitHub releases page, check it and put `smr` on your
+Linux x86_64) from the GitHub releases page, check it and put `tenaz` on your
 `PATH`:
 
 ```bash
-shasum -a 256 -c smr-v0.1.0-aarch64-apple-darwin.tar.gz.sha256
+shasum -a 256 -c tenaz-v0.1.0-aarch64-apple-darwin.tar.gz.sha256
 ```
 
 ```bash
-tar -xzf smr-v0.1.0-aarch64-apple-darwin.tar.gz
+tar -xzf tenaz-v0.1.0-aarch64-apple-darwin.tar.gz
 ```
 
 ```bash
-install -m 755 smr-v0.1.0-aarch64-apple-darwin/smr ~/.local/bin/smr
+install -m 755 tenaz-v0.1.0-aarch64-apple-darwin/tenaz ~/.local/bin/tenaz
 ```
 
 From source, with a stable Rust toolchain:
@@ -72,18 +72,18 @@ the ACP agent, the Pi process, the engine behind the proxy, and ComfyUI.
 ## Use
 
 ```bash
-smr init --project runs/my-goal --brief brief.md \
+tenaz init --project runs/my-goal --brief brief.md \
   --model Qwen3.8-Flash-Next-Sushi-2.6bpw --provider sushi \
   --base-url http://127.0.0.1:12345/v1 --context-window 131072 --vision
 ```
 
 ```bash
-smr run --project runs/my-goal --fx-bin /path/to/fx \
+tenaz run --project runs/my-goal --fx-bin /path/to/fx \
   --comfyui http://127.0.0.1:8188 --workflow default=workflows/txt2img.json
 ```
 
 ```bash
-smr status --project runs/my-goal
+tenaz status --project runs/my-goal
 ```
 
 - `init` copies the brief to `BRIEF.md`, the shared rules to `AGENTS.md`, the
@@ -93,7 +93,7 @@ smr status --project runs/my-goal
   then loops: bootstrap, build, verify, review, split or block, replan, final
   review. Ctrl-C pauses after the current session; `run` again continues.
   `--resume` continues a BLOCKED run. `--set key=value` at `init` overrides
-  a parameter; `smr params` lists them.
+  a parameter; `tenaz params` lists them.
 - `status` reads files only and is safe while a run works.
 - `--harness pi` at `init` pins `pi --version` and reads the model's base
   URL, context window and inputs from `~/.pi/agent/models.json`, as the task

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use smr_core::session::{capacity_limit, is_image_refusal};
+use tenaz_core::session::{capacity_limit, is_image_refusal};
 
 /// Token usage of one engine response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +50,7 @@ pub enum ProxyEvent {
         /// (prefill and decode time; speculative drafts when the engine
         /// reports them there).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        timings: Option<smr_core::session::ServerTimings>,
+        timings: Option<tenaz_core::session::ServerTimings>,
         first_byte_ms: Option<u64>,
         total_ms: u64,
     },

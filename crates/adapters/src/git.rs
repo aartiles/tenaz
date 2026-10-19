@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use smr_core::ports::{Vcs, VcsError};
-use smr_core::util::sha256_hex;
+use tenaz_core::ports::{Vcs, VcsError};
+use tenaz_core::util::sha256_hex;
 
 /// A git repository at `root`.
 #[derive(Clone, Debug)]

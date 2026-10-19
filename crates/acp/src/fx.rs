@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
-use smr_core::ports::HarnessInfo;
+use tenaz_core::ports::HarnessInfo;
 
 use crate::AcpHarness;
 
@@ -181,7 +181,7 @@ impl FxLaunch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use smr_core::ports::Harness as _;
+    use tenaz_core::ports::Harness as _;
 
     #[test]
     fn profile_files_match_the_spike_layout() {

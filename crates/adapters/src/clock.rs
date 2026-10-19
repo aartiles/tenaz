@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use smr_core::ports::Clock;
+use tenaz_core::ports::Clock;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 

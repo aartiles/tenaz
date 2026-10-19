@@ -10,18 +10,18 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use smr_adapters::git::GitRepo;
-use smr_adapters::notify::SilentNotifier;
-use smr_adapters::verify::VerifyProcess;
-use smr_core::ledger::ModelConfig;
-use smr_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
-use smr_core::params::RunParams;
-use smr_core::ports::{
+use tenaz_adapters::git::GitRepo;
+use tenaz_adapters::notify::SilentNotifier;
+use tenaz_adapters::verify::VerifyProcess;
+use tenaz_core::ledger::ModelConfig;
+use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
+use tenaz_core::params::RunParams;
+use tenaz_core::ports::{
     Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit, SessionSpec,
 };
-use smr_core::project::Project;
-use smr_core::session::{SessionEvent, StopReason, Usage};
-use smr_core::testing::{FastClock, ScriptedHarness};
+use tenaz_core::project::Project;
+use tenaz_core::session::{SessionEvent, StopReason, Usage};
+use tenaz_core::testing::{FastClock, ScriptedHarness};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 

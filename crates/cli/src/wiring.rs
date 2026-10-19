@@ -7,28 +7,28 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
-use smr_acp::fx::{FxLaunch, FxSettings, ProfileMcpServer, write_profile};
-use smr_acp::{EngineObservation, McpEndpoint, stop_reason_for_finish};
-use smr_adapters::clock::SystemClock;
-use smr_adapters::engine::generic::{Commands, GenericEngine};
-use smr_adapters::engine::sushi::SushiEngine;
-use smr_adapters::git::GitRepo;
-use smr_adapters::media::comfyui::ComfyUi;
-use smr_adapters::metrics::PrometheusMetrics;
-use smr_adapters::notify::DesktopNotifier;
-use smr_adapters::probe_macos::MacMemoryProbe;
-use smr_adapters::verify::VerifyProcess;
-use smr_core::lease::{Gate, LeaseManager, LeaseTransition};
-use smr_core::ledger::{JournalRecord, SkillPin};
-use smr_core::orchestrator::Deps;
-use smr_core::ports::{EngineAdapter, Harness, MediaAdapter};
-use smr_core::project::Project;
-use smr_core::session::Usage;
-use smr_core::testing::ScriptedHarness;
-use smr_mcp::workflow::WorkflowTemplate;
-use smr_mcp::{MediaTools, serve};
-use smr_pi::PiLaunch;
-use smr_proxy::{Proxy, ProxyEvent};
+use tenaz_acp::fx::{FxLaunch, FxSettings, ProfileMcpServer, write_profile};
+use tenaz_acp::{EngineObservation, McpEndpoint, stop_reason_for_finish};
+use tenaz_adapters::clock::SystemClock;
+use tenaz_adapters::engine::generic::{Commands, GenericEngine};
+use tenaz_adapters::engine::sushi::SushiEngine;
+use tenaz_adapters::git::GitRepo;
+use tenaz_adapters::media::comfyui::ComfyUi;
+use tenaz_adapters::metrics::PrometheusMetrics;
+use tenaz_adapters::notify::DesktopNotifier;
+use tenaz_adapters::probe_macos::MacMemoryProbe;
+use tenaz_adapters::verify::VerifyProcess;
+use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
+use tenaz_core::ledger::{JournalRecord, SkillPin};
+use tenaz_core::orchestrator::Deps;
+use tenaz_core::ports::{EngineAdapter, Harness, MediaAdapter};
+use tenaz_core::project::Project;
+use tenaz_core::session::Usage;
+use tenaz_core::testing::ScriptedHarness;
+use tenaz_mcp::workflow::WorkflowTemplate;
+use tenaz_mcp::{MediaTools, serve};
+use tenaz_pi::PiLaunch;
+use tenaz_proxy::{Proxy, ProxyEvent};
 
 pub enum EngineChoice {
     Sushi,
@@ -58,8 +58,8 @@ pub struct MediaOptions {
 /// Background services a run holds open.
 #[derive(Default)]
 pub struct Services {
-    proxy: Option<smr_proxy::ProxyHandle>,
-    mcp: Option<smr_mcp::McpHandle>,
+    proxy: Option<tenaz_proxy::ProxyHandle>,
+    mcp: Option<tenaz_mcp::McpHandle>,
 }
 
 impl Services {
@@ -162,8 +162,8 @@ pub async fn wire(
     let gate = Gate::new();
     let journal_project = project.clone();
     let clock_for_lease = SystemClock::new();
-    let observer: smr_core::lease::Observer = Arc::new(move |t: LeaseTransition| {
-        use smr_core::ports::Clock as _;
+    let observer: tenaz_core::lease::Observer = Arc::new(move |t: LeaseTransition| {
+        use tenaz_core::ports::Clock as _;
         let _ = journal_project.append_journal(
             clock_for_lease.now_rfc3339(),
             JournalRecord::Lease {
@@ -250,9 +250,9 @@ pub async fn wire(
         engine: (config.harness != "fake").then_some(engine_adapter),
         lease: (config.harness != "fake").then_some(lease),
         engine_metrics: PrometheusMetrics::from_base_url(&base_url)
-            .map(|m| Arc::new(m) as Arc<dyn smr_core::ports::EngineMetricsSource>),
+            .map(|m| Arc::new(m) as Arc<dyn tenaz_core::ports::EngineMetricsSource>),
         memory: cfg!(target_os = "macos")
-            .then(|| Arc::new(MacMemoryProbe::new(port)) as Arc<dyn smr_core::ports::MemoryProbe>),
+            .then(|| Arc::new(MacMemoryProbe::new(port)) as Arc<dyn tenaz_core::ports::MemoryProbe>),
     };
     Ok(Wired { deps, services })
 }
@@ -264,7 +264,7 @@ async fn start_proxy(
     gate: Gate,
     feed: tokio::sync::broadcast::Sender<EngineObservation>,
     thinking: Option<&str>,
-) -> anyhow::Result<smr_proxy::ProxyHandle> {
+) -> anyhow::Result<tenaz_proxy::ProxyHandle> {
     let mut proxy = Proxy::new(
         origin(base_url)?,
         gate,
@@ -314,7 +314,7 @@ async fn start_proxy(
 #[allow(clippy::too_many_arguments)]
 fn build_harness(
     project: &Project,
-    config: &smr_core::ledger::ModelConfig,
+    config: &tenaz_core::ledger::ModelConfig,
     options: &HarnessOptions,
     media_timeout: &Duration,
     harness_base_url: String,

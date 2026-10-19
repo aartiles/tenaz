@@ -14,8 +14,8 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::util::MatchDispatch;
 use agent_client_protocol::{Agent, Client, ConnectionTo, DynConnectTo, Responder, SessionMessage};
 use async_trait::async_trait;
-use smr_core::ports::{HarnessError, PermissionDecision, Session, SessionExit, SessionSpec};
-use smr_core::session::{SessionEvent, StopReason, Usage};
+use tenaz_core::ports::{HarnessError, PermissionDecision, Session, SessionExit, SessionSpec};
+use tenaz_core::session::{SessionEvent, StopReason, Usage};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::translate::{Translator, choose_option};
@@ -28,7 +28,7 @@ pub enum EngineObservation {
         usage: Usage,
         stop_reason: StopReason,
         /// The engine's own figures for the request, when it reported them.
-        server: Option<smr_core::session::ServerTimings>,
+        server: Option<tenaz_core::session::ServerTimings>,
     },
     Error {
         message: String,
@@ -81,10 +81,10 @@ impl AcpSession {
             let mut ready = Some(ready_tx);
             Client
                 .builder()
-                .name("smr")
+                .name("tenaz")
                 .connect_with(transport, async |cx| {
                     let capabilities = ClientCapabilities::new().fs(FileSystemCapabilities::new().read_text_file(false).write_text_file(false)).terminal(false);
-                    let init = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities).client_info(Implementation::new("smr", env!("CARGO_PKG_VERSION")));
+                    let init = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities).client_info(Implementation::new("tenaz", env!("CARGO_PKG_VERSION")));
                     let steering = match cx.send_request(init).block_task().await {
                         Ok(response) => advertises_steering(&response),
                         Err(error) => {
@@ -379,7 +379,7 @@ impl Session for AcpSession {
                 // The connection ended with an error: usually the agent process
                 // exited, and the error carries its status and stderr tail.
                 if let Some(log) = &self.stderr_log {
-                    crate::append_line(log, &format!("[smr] the agent connection ended: {error}"));
+                    crate::append_line(log, &format!("[tenaz] the agent connection ended: {error}"));
                 }
                 SessionExit { code: Some(1) }
             }

@@ -1,5 +1,5 @@
 [package]
-name = "smr-core"
+name = "tenaz-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

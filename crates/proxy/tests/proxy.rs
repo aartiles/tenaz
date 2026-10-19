@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::response::IntoResponse;
-use smr_core::lease::Gate;
-use smr_proxy::{EngineErrorKind, Proxy, ProxyEvent, ProxyUsage};
+use tenaz_core::lease::Gate;
+use tenaz_proxy::{EngineErrorKind, Proxy, ProxyEvent, ProxyUsage};
 
 async fn fake_engine() -> SocketAddr {
     let app = axum::Router::new()
@@ -36,7 +36,7 @@ async fn fake_engine() -> SocketAddr {
 async fn start(
     upstream: SocketAddr,
     gate: Gate,
-) -> (smr_proxy::ProxyHandle, Arc<Mutex<Vec<ProxyEvent>>>) {
+) -> (tenaz_proxy::ProxyHandle, Arc<Mutex<Vec<ProxyEvent>>>) {
     let events: Arc<Mutex<Vec<ProxyEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
     let proxy = Arc::new(Proxy::new(
@@ -120,7 +120,7 @@ async fn forwards_requests_and_records_usage_and_errors() {
     assert_eq!(timings[0], None, "/v1/models carries no timings");
     assert_eq!(
         timings[1],
-        Some(smr_core::session::ServerTimings {
+        Some(tenaz_core::session::ServerTimings {
             prompt_ms: Some(4.0),
             decode_ms: Some(9.5),
             ..Default::default()
@@ -129,7 +129,7 @@ async fn forwards_requests_and_records_usage_and_errors() {
     );
     assert_eq!(
         timings[2],
-        Some(smr_core::session::ServerTimings {
+        Some(tenaz_core::session::ServerTimings {
             prompt_ms: Some(12.5),
             decode_ms: Some(30.0),
             cached_tokens: Some(40),

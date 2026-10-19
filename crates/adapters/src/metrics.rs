@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use smr_core::metrics::{EngineCounters, parse_prometheus};
-use smr_core::ports::EngineMetricsSource;
+use tenaz_core::metrics::{EngineCounters, parse_prometheus};
+use tenaz_core::ports::EngineMetricsSource;
 
 /// Reads `/metrics` on the engine's origin.
 #[derive(Clone, Debug)]

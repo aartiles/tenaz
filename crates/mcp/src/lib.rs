@@ -19,8 +19,8 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use smr_core::lease::LeaseManager;
-use smr_core::ports::MediaJob;
+use tenaz_core::lease::LeaseManager;
+use tenaz_core::ports::MediaJob;
 use tokio_util::sync::CancellationToken;
 
 use workflow::WorkflowTemplate;
@@ -175,7 +175,7 @@ impl MediaTools {
 impl ServerHandler for MediaTools {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("smr-media", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new("tenaz-media", env!("CARGO_PKG_VERSION")))
             .with_instructions("Media tools of the single-model runner. generate_image renders with the local image engine; it unloads and reloads the LLM, so call it once with a complete prompt.")
     }
 }

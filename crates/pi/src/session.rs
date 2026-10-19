@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use smr_core::ports::{HarnessError, PermissionDecision, Session, SessionExit, SessionSpec};
-use smr_core::session::SessionEvent;
+use tenaz_core::ports::{HarnessError, PermissionDecision, Session, SessionExit, SessionSpec};
+use tenaz_core::session::SessionEvent;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;

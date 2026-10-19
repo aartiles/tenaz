@@ -1,5 +1,5 @@
 [package]
-name = "smr"
+name = "tenaz"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,16 +8,16 @@ license.workspace = true
 description = "Single-model runner: plans, builds and verifies a goal with one resident local model at a time."
 
 [[bin]]
-name = "smr"
+name = "tenaz"
 path = "src/main.rs"
 
 [dependencies]
-smr-core = { workspace = true, features = ["testing"] }
-smr-adapters.workspace = true
-smr-proxy.workspace = true
-smr-acp.workspace = true
-smr-pi.workspace = true
-smr-mcp.workspace = true
+tenaz-core = { workspace = true, features = ["testing"] }
+tenaz-adapters.workspace = true
+tenaz-proxy.workspace = true
+tenaz-acp.workspace = true
+tenaz-pi.workspace = true
+tenaz-mcp.workspace = true
 clap.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

@@ -3,8 +3,8 @@
 //! --no-mcp --no-extensions --no-skills --approve --offline`) answering one
 //! prompt through Sushi, replayed through the translator.
 
-use smr_core::session::{SessionEvent, StopReason, Usage};
-use smr_pi::Translator;
+use tenaz_core::session::{SessionEvent, StopReason, Usage};
+use tenaz_pi::Translator;
 
 #[test]
 fn a_captured_pi_1_1_0_prompt_translates_to_one_turn() {

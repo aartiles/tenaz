@@ -4,7 +4,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use smr_core::session::{SessionEvent, StopReason, Usage};
+use tenaz_core::session::{SessionEvent, StopReason, Usage};
 
 /// Per-session state the translation depends on.
 #[derive(Debug, Default)]
@@ -194,7 +194,7 @@ fn str_field(record: &Value, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use smr_core::session::capacity_limit;
+    use tenaz_core::session::capacity_limit;
 
     use super::*;
 

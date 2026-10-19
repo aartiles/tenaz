@@ -12,7 +12,7 @@ use std::sync::Arc;
 use agent_client_protocol::schema::v1::{HttpHeader, McpServer, McpServerHttp};
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, DynConnectTo, LineDirection};
 use async_trait::async_trait;
-use smr_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
+use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
 
 pub use session::{EngineObservation, ObservationFeed, stop_reason_for_finish};
 pub use translate::Translator;

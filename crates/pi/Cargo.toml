@@ -1,5 +1,5 @@
 [package]
-name = "smr-pi"
+name = "tenaz-pi"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 description = "Pi harness adapter for the single-model runner: drives `pi --mode rpc` over JSON lines."
 
 [dependencies]
-smr-core.workspace = true
+tenaz-core.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 serde.workspace = true

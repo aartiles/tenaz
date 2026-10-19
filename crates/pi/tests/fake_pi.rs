@@ -6,9 +6,9 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use smr_core::ports::{Harness, HarnessError, Session, SessionSpec};
-use smr_core::session::{SessionEvent, StopReason, capacity_limit};
-use smr_pi::{PI_TOOLS, PiHarness, PiLaunch};
+use tenaz_core::ports::{Harness, HarnessError, Session, SessionSpec};
+use tenaz_core::session::{SessionEvent, StopReason, capacity_limit};
+use tenaz_pi::{PI_TOOLS, PiHarness, PiLaunch};
 
 fn fake_pi() -> &'static str {
     env!("CARGO_BIN_EXE_fake-pi")

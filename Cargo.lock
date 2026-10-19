@@ -2241,127 +2241,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
 
 [[package]]
-name = "smr"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "serde_json",
- "smr-acp",
- "smr-adapters",
- "smr-core",
- "smr-mcp",
- "smr-pi",
- "smr-proxy",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "smr-acp"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "async-trait",
- "serde",
- "serde_json",
- "smr-core",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "smr-adapters"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "reqwest",
- "serde",
- "serde_json",
- "smr-core",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "smr-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "hex",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "smr-mcp"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "rmcp",
- "schemars 1.2.3",
- "serde",
- "serde_json",
- "smr-core",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "smr-pi"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "smr-core",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "smr-proxy"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bytes",
- "futures",
- "reqwest",
- "serde",
- "serde_json",
- "smr-core",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2476,6 +2355,127 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tenaz"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "tempfile",
+ "tenaz-acp",
+ "tenaz-adapters",
+ "tenaz-core",
+ "tenaz-mcp",
+ "tenaz-pi",
+ "tenaz-proxy",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "tenaz-acp"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tenaz-core",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "tenaz-adapters"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tenaz-core",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "tenaz-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hex",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "tenaz-mcp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rmcp",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tenaz-core",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "tenaz-pi"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tenaz-core",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "tenaz-proxy"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tenaz-core",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

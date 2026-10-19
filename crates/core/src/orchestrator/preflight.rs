@@ -17,7 +17,7 @@ impl Runner {
         let image_dir = if vision {
             Some(
                 tempfile::Builder::new()
-                    .prefix("smr-preflight-")
+                    .prefix("tenaz-preflight-")
                     .tempdir()?,
             )
         } else {

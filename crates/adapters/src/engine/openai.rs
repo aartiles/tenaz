@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use serde::Deserialize;
-use smr_core::ports::{EngineError, ModelState};
+use tenaz_core::ports::{EngineError, ModelState};
 
 #[derive(Deserialize)]
 struct ModelList {

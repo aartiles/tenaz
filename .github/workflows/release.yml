@@ -31,13 +31,13 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --locked -p smr --target ${{ matrix.target }}
+        run: cargo build --release --locked -p tenaz --target ${{ matrix.target }}
       - name: Package
         shell: bash
         run: |
-          name="smr-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="tenaz-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/smr" README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          cp "target/${{ matrix.target }}/release/tenaz" README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           cd dist
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"

@@ -6,14 +6,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use smr_adapters::git::GitRepo;
-use smr_adapters::notify::SilentNotifier;
-use smr_adapters::verify::VerifyProcess;
-use smr_core::ledger::{JournalRecord, ModelConfig, Phase};
-use smr_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
-use smr_core::params::RunParams;
-use smr_core::project::Project;
-use smr_core::testing::{FastClock, ScriptedHarness};
+use tenaz_adapters::git::GitRepo;
+use tenaz_adapters::notify::SilentNotifier;
+use tenaz_adapters::verify::VerifyProcess;
+use tenaz_core::ledger::{JournalRecord, ModelConfig, Phase};
+use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
+use tenaz_core::params::RunParams;
+use tenaz_core::project::Project;
+use tenaz_core::testing::{FastClock, ScriptedHarness};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
