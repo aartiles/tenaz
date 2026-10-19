@@ -91,9 +91,12 @@ pub fn init(
     templates: &Templates,
     options: InitOptions,
 ) -> Result<Ledger, RunError> {
-    if project.exists(".agent/run.json") {
+    if let Some(note) = project.legacy_layout_note() {
+        return Err(RunError::Precondition(note));
+    }
+    if project.exists(".tenaz/run.json") {
         return Err(RunError::Precondition(
-            ".agent/run.json already exists; this project is already initialized".to_owned(),
+            ".tenaz/run.json already exists; this project is already initialized".to_owned(),
         ));
     }
     fs::create_dir_all(project.root())?;
@@ -129,7 +132,7 @@ pub fn init(
         skills,
     );
     ledger.launch = options.launch;
-    project.write(".agent/journal.jsonl", "")?;
+    project.write(".tenaz/journal.jsonl", "")?;
     project.save_ledger(&ledger)?;
     ledger.checkpoint = Some(vcs.commit_all("tenaz: init")?);
     project.save_ledger(&ledger)?;
@@ -144,7 +147,7 @@ pub(crate) fn refresh_templates(
 ) -> Result<(), RunError> {
     templates.write_into(project)?;
     vcs.commit_paths(
-        &["AGENTS.md", ".agent/prompts"],
+        &["AGENTS.md", ".tenaz/prompts"],
         "tenaz: refresh shared rules and prompts",
     )?;
     Ok(())
@@ -189,7 +192,7 @@ pub(crate) fn tree_hash(dir: &Path) -> io::Result<String> {
     Ok(sha256_hex(lines.join("\n")))
 }
 
-/// Copies a skill into `.agent/skills/<name>/`, read-only, and hashes it.
+/// Copies a skill into `.tenaz/skills/<name>/`, read-only, and hashes it.
 fn install_skill(project: &Project, source: &Path) -> Result<SkillPin, RunError> {
     if !source.join("SKILL.md").exists() {
         return Err(RunError::Precondition(format!(
@@ -201,7 +204,7 @@ fn install_skill(project: &Project, source: &Path) -> Result<SkillPin, RunError>
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let to = project.path(&format!(".agent/skills/{name}"));
+    let to = project.path(&format!(".tenaz/skills/{name}"));
     let files = tree_files(source)?;
     for file in &files {
         let target = to.join(file);

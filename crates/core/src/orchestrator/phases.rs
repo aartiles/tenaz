@@ -78,8 +78,8 @@ impl Runner {
         extra: Vec<(String, String)>,
     ) -> Result<String, RunError> {
         let role_prompt = self.project.role_prompt(role)?;
-        let spec = self.project.read_if(".agent/spec.md");
-        let map = self.project.read_if(".agent/map.md");
+        let spec = self.project.read_if(".tenaz/spec.md");
+        let map = self.project.read_if(".tenaz/map.md");
         let b = Briefing {
             role_prompt: &role_prompt,
             spec: spec.as_deref(),
@@ -97,16 +97,16 @@ impl Runner {
         let mut errors = Vec::new();
         let reqs = self.project.requirements();
         if reqs.is_empty() {
-            errors.push(".agent/spec.md has no requirement lines like \"- R1: ...\"".to_owned());
+            errors.push(".tenaz/spec.md has no requirement lines like \"- R1: ...\"".to_owned());
         }
-        if !self.project.exists(".agent/map.md") {
-            errors.push(".agent/map.md is missing".to_owned());
+        if !self.project.exists(".tenaz/map.md") {
+            errors.push(".tenaz/map.md is missing".to_owned());
         }
         let loaded = self.project.load_backlog();
         errors.extend(loaded.errors);
         let backlog = loaded.backlog;
         if backlog.is_empty() {
-            errors.push("no task cards in .agent/tasks/".to_owned());
+            errors.push("no task cards in .tenaz/tasks/".to_owned());
         }
         let cov = coverage(&reqs, backlog.cards(), false);
         if !cov.missing.is_empty() {
@@ -304,7 +304,7 @@ impl Runner {
         }
         let task_id = task.map(|t| t.id.clone());
         if !errors.is_empty() {
-            self.deps.vcs.restore_paths(&before, &[".agent/tasks"])?;
+            self.deps.vcs.restore_paths(&before, &[".tenaz/tasks"])?;
             self.journal(match role {
                 Role::Split => JournalRecord::SplitRejected {
                     task: task_id,
@@ -753,7 +753,7 @@ impl Runner {
                 &diff[..cut]
             );
         }
-        let review_path = format!(".agent/reviews/{task}.md");
+        let review_path = format!(".tenaz/reviews/{task}.md");
         self.project.remove(&review_path)?;
         let mut verdict: Option<String> = None;
         let mut text: Option<String> = None;
@@ -888,7 +888,7 @@ impl Runner {
                 cov.missing.join(", ")
             }
         );
-        let review_path = ".agent/reviews/FINAL.md";
+        let review_path = ".tenaz/reviews/FINAL.md";
         self.project.remove(review_path)?;
         let fields = vec![(
             "Cycle".to_owned(),

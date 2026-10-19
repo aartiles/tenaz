@@ -19,7 +19,7 @@ counting them against the work.
 
 - **Fresh sessions, state on disk.** Every unit of work is a new agent
   session with a short context. The spec, task cards, notes and progress live
-  in the project under `.agent/`, and every step is a git commit.
+  in the project under `.tenaz/`, and every step is a git commit.
 - **The runner decides, not the model.** Tenaz runs the project's `verify`
   script itself, commits or reverts, and decides when to retry, split a task,
   block or replan.
@@ -81,7 +81,7 @@ tenaz init --project demo --brief brief.md --harness fake --model fake --provide
 tenaz run --project demo
 ```
 
-Then look at `demo/.agent/` and `git -C demo log --oneline`.
+Then look at `demo/.tenaz/` and `git -C demo log --oneline`.
 
 ## Run it on a real goal
 
@@ -107,9 +107,9 @@ tenaz status
 ```
 
 - `init` creates the project, writes the goal to `BRIEF.md`, adds the
-  agent rules (`AGENTS.md`) and role prompts (`.agent/prompts/`), pins the
+  agent rules (`AGENTS.md`) and role prompts (`.tenaz/prompts/`), pins the
   model, the agent, how to start the engine and the run parameters in
-  `.agent/run.json`, and makes the first commit.
+  `.tenaz/run.json`, and makes the first commit.
 - `run` reads all of that from `run.json`, probes the engine, then works
   until the goal is met or a task blocks. A launch flag given to `run`
   (`--comfyui`, `--engine-start`, ...) replaces the pinned value and is
@@ -134,10 +134,10 @@ workflow (`--comfyui http://127.0.0.1:8188 --workflow default=txt2img.json`);
 with an engine other than Sushi, `--engine-stop` and `--engine-start` let
 Tenaz free the memory while images render.
 
-The prompts in `.agent/prompts/` and the rules in `AGENTS.md` are plain
+The prompts in `.tenaz/prompts/` and the rules in `AGENTS.md` are plain
 Markdown in your project; edit them to change how the agent works. Skill
 directories passed with `--skill` at `init` are pinned read-only into
-`.agent/skills/`.
+`.tenaz/skills/`.
 
 ## How it compares
 

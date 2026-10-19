@@ -18,6 +18,9 @@ uses [Semantic Versioning](https://semver.org/).
   media timeout), so `tenaz run` needs no flags; a flag given to `run`
   replaces the pinned value and is saved. `run` and `status` default to
   the current directory.
+- The run's state lives in `.tenaz/` (it was `.agent/`). A project still
+  in the old layout is not run: `init`, `run` and `status` say how to move
+  it (`mv .agent .tenaz`, the `.gitignore` lines, `--refresh-templates`).
 - Without `--engine`, `init` asks the engine at `--base-url` which API it
   speaks (Sushi or generic) and names the provider after it.
 - Orchestrator: bootstrap, build, verify, review,

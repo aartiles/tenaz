@@ -28,9 +28,9 @@ pub fn header(role: Role, fields: &[(String, String)]) -> String {
 #[derive(Clone, Debug, Default)]
 pub struct Briefing<'a> {
     pub role_prompt: &'a str,
-    /// `.agent/spec.md`, when it exists.
+    /// `.tenaz/spec.md`, when it exists.
     pub spec: Option<&'a str>,
-    /// `.agent/map.md`, when it exists; clipped to `map_clip_bytes`.
+    /// `.tenaz/map.md`, when it exists; clipped to `map_clip_bytes`.
     pub map: Option<&'a str>,
     pub map_clip_bytes: usize,
     /// Pack spec, map and card into the prompt. Off, a builder is only told
@@ -46,9 +46,9 @@ pub struct Briefing<'a> {
 pub fn build(role: Role, b: &Briefing<'_>) -> String {
     let mut text = b.role_prompt.to_owned();
     if role != Role::Bootstrap && b.packed {
-        text += &section("Spec (.agent/spec.md)", b.spec.unwrap_or(""));
+        text += &section("Spec (.tenaz/spec.md)", b.spec.unwrap_or(""));
         text += &section(
-            "Repository map (.agent/map.md)",
+            "Repository map (.tenaz/map.md)",
             &clip(b.map.unwrap_or(""), b.map_clip_bytes),
         );
     }
@@ -82,7 +82,7 @@ pub fn image_continuation(refusal: &str) -> String {
         .take(300)
         .collect();
     format!(
-        "## Continuation\n\nAn earlier session on this same work was stopped because the engine refused an image it had read: \"{quoted}\". Every image you read stays in the conversation. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Read only PNG or JPEG images; convert any other format with ffmpeg into `.agent/private/` first. Read few images: combine several stills into one small contact sheet (for example with ffmpeg's `tile` filter) and read that, and do not read the same image twice."
+        "## Continuation\n\nAn earlier session on this same work was stopped because the engine refused an image it had read: \"{quoted}\". Every image you read stays in the conversation. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Read only PNG or JPEG images; convert any other format with ffmpeg into `.tenaz/private/` first. Read few images: combine several stills into one small contact sheet (for example with ffmpeg's `tile` filter) and read that, and do not read the same image twice."
     )
 }
 
@@ -117,7 +117,7 @@ mod tests {
                 ("Task".into(), "T007".into()),
                 ("Attempt".into(), "1 of 3".into()),
             ],
-            card: Some((".agent/tasks/T007.md", "---\nid: T007\n---\n## Goal")),
+            card: Some((".tenaz/tasks/T007.md", "---\nid: T007\n---\n## Goal")),
             extra: vec![
                 ("Latest ./verify --all".into(), "verify ok".into()),
                 ("Empty".into(), "  ".into()),
@@ -126,7 +126,7 @@ mod tests {
         let text = build(Role::Builder, &b);
         assert_eq!(
             text,
-            "ROLE: BUILDER\n\n## Spec (.agent/spec.md)\n\n- R1: a\n\n## Repository map (.agent/map.md)\n\n- src: code\n\n## Session\n\nRole: BUILDER\nTask: T007\nAttempt: 1 of 3\nThis is a fresh session. Do only this unit of work, then stop.\n\n## Task card (.agent/tasks/T007.md)\n\n---\nid: T007\n---\n## Goal\n\n## Latest ./verify --all\n\nverify ok"
+            "ROLE: BUILDER\n\n## Spec (.tenaz/spec.md)\n\n- R1: a\n\n## Repository map (.tenaz/map.md)\n\n- src: code\n\n## Session\n\nRole: BUILDER\nTask: T007\nAttempt: 1 of 3\nThis is a fresh session. Do only this unit of work, then stop.\n\n## Task card (.tenaz/tasks/T007.md)\n\n---\nid: T007\n---\n## Goal\n\n## Latest ./verify --all\n\nverify ok"
         );
     }
 
@@ -138,13 +138,13 @@ mod tests {
             map: Some("M"),
             map_clip_bytes: 10,
             packed: false,
-            card: Some((".agent/tasks/T001.md", "C")),
+            card: Some((".tenaz/tasks/T001.md", "C")),
             ..Default::default()
         };
         let text = build(Role::Builder, &b);
         assert!(!text.contains("## Spec"));
         assert!(text.ends_with(
-            "Your task card is .agent/tasks/T001.md. Read it, then the spec and map as needed."
+            "Your task card is .tenaz/tasks/T001.md. Read it, then the spec and map as needed."
         ));
     }
 

@@ -11,6 +11,6 @@ card's Context. A child may depend on the original card's dependencies and
 on its siblings.
 
 You may also adjust other `todo` cards if the split changes their
-dependencies. Edit nothing outside `.agent/tasks/` except
-`.agent/notes/PLANNER.md` (short, about 15 lines). Do not edit `done` cards,
+dependencies. Edit nothing outside `.tenaz/tasks/` except
+`.tenaz/notes/PLANNER.md` (short, about 15 lines). Do not edit `done` cards,
 source code, or `verify`.

@@ -46,7 +46,7 @@ clock, for the crates above the core.
 the session wrapper with engine retries, capacity caps and continuations,
 the task attempt loop with review, split and block, and pause and resume.
 
-State lives on disk under `.agent/` in the project, so a run survives the
+State lives on disk under `.tenaz/` in the project, so a run survives the
 process and the user's existing tooling (`jq` over the journal, `git log`)
 keeps working.
 

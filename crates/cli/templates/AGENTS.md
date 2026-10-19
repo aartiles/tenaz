@@ -8,8 +8,8 @@ session knows only what you leave in it.
 ## Rules for every session
 
 - `BRIEF.md` is the original request. Never edit it, `AGENTS.md`, or
-  `.agent/prompts/`.
-- `.agent/run.json` and `.agent/journal.jsonl` belong to the orchestrator.
+  `.tenaz/prompts/`.
+- `.tenaz/run.json` and `.tenaz/journal.jsonl` belong to the orchestrator.
   Do not edit them.
 - The orchestrator runs `./verify` after your session and decides the outcome
   from its result. Make the checks pass; a claim of success counts for
@@ -24,8 +24,8 @@ session knows only what you leave in it.
   about 300 lines) whole: grep for the section you need, then read that range.
 - Commands must finish on their own. Start no server or watcher that
   outlives the command that started it.
-- Write only inside the project. Put temporary files in `.agent/private/`.
-- Notes in `.agent/notes/` are short handovers. Write them once; the
+- Write only inside the project. Put temporary files in `.tenaz/private/`.
+- Notes in `.tenaz/notes/` are short handovers. Write them once; the
   orchestrator trims long ones, so do not spend turns counting lines or
   polishing them.
 - When your unit of work is done, stop. Do not start another task.
@@ -54,7 +54,7 @@ session knows only what you leave in it.
 
 ## Task cards
 
-`.agent/tasks/<ID>.md` holds one task:
+`.tenaz/tasks/<ID>.md` holds one task:
 
 ```markdown
 ---

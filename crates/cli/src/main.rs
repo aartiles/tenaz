@@ -165,7 +165,7 @@ struct InitArgs {
     /// Parameter overrides, `key=value` (see `tenaz params`).
     #[arg(long = "set")]
     sets: Vec<String>,
-    /// Skill directories to pin read-only into .agent/skills/.
+    /// Skill directories to pin read-only into .tenaz/skills/.
     #[arg(long = "skill")]
     skills: Vec<PathBuf>,
     /// The engine API (default: detected from the engine at --base-url).
@@ -516,7 +516,7 @@ impl RunArgs {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// A new project from a brief; the model, harness and how to launch them
-    /// are pinned in .agent/run.json. Without --model, in a terminal, a setup
+    /// are pinned in .tenaz/run.json. Without --model, in a terminal, a setup
     /// wizard asks for them.
     Init(InitArgs),
     /// Run (resumable). Ctrl-C pauses; run again to continue.
@@ -554,9 +554,12 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Run(args) => {
             let project = Project::new(absolute(args.project.clone()));
-            if !project.exists(".agent/run.json") {
+            if let Some(note) = project.legacy_layout_note() {
+                anyhow::bail!(note);
+            }
+            if !project.exists(".tenaz/run.json") {
                 anyhow::bail!(
-                    "{} has no .agent/run.json; run tenaz init first",
+                    "{} has no .tenaz/run.json; run tenaz init first",
                     project.root().display()
                 );
             }
@@ -565,7 +568,7 @@ async fn main() -> anyhow::Result<()> {
             if launch != ledger.launch {
                 ledger.launch = launch.clone();
                 project.save_ledger(&ledger)?;
-                tracing::info!("saved the new launch settings in .agent/run.json");
+                tracing::info!("saved the new launch settings in .tenaz/run.json");
             }
             let stop = CancellationToken::new();
             spawn_signal_handler(stop.clone());

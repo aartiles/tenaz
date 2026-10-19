@@ -1,4 +1,4 @@
-//! Periodic memory sampling to `.agent/private/memory.jsonl`, with a window
+//! Periodic memory sampling to `.tenaz/private/memory.jsonl`, with a window
 //! per session for the journal.
 
 use std::sync::Arc;
@@ -68,7 +68,7 @@ impl Sampler {
         if let Ok(line) = serde_json::to_string(&sample) {
             let _ = self
                 .project
-                .append(".agent/private/memory.jsonl", &format!("{line}\n"));
+                .append(".tenaz/private/memory.jsonl", &format!("{line}\n"));
         }
         if let Some(window) = &mut state.window {
             window.add(&sample);

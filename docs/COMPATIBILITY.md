@@ -47,7 +47,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
   comes from the engine where it reports one (Sushi, vLLM, llama.cpp's
   `/props`, LM Studio's `/api/v0/models`); Ollama does not, so the wizard
   asks. Detection is tested against recorded answers, not live engines.
-- fx runs with an isolated `HOME` under `.agent/private/fx-home/`, so your
+- fx runs with an isolated `HOME` under `.tenaz/private/fx-home/`, so your
   own fx settings and MCP servers are not touched. Pi uses your
   `~/.pi/agent/models.json` for the provider.
 
@@ -63,7 +63,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
   tool call that forks without limit is not stopped by the runner.
 - A pause during a bootstrap session counts as one of its attempts, and
   `--resume` does not reset the count: a run blocked in bootstrap needs
-  `maxBootstrapAttempts` raised in `.agent/run.json`.
+  `maxBootstrapAttempts` raised in `.tenaz/run.json`.
 - Ctrl-C during the preflight ends the run instead of pausing it.
 
 ## Model and engine behaviour seen in testing

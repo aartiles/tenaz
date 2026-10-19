@@ -7,6 +7,9 @@ use crate::project::Project;
 
 /// The status text, or a note when the project is not initialized.
 pub fn status_text(project: &Project) -> String {
+    if let Some(note) = project.legacy_layout_note() {
+        return format!("{note}\n");
+    }
     let Ok(ledger) = project.load_ledger() else {
         return "Not initialized.\n".to_owned();
     };
@@ -28,13 +31,13 @@ pub fn status_text(project: &Project) -> String {
         })
         .collect();
     let requests: Vec<RequestRecord> = project
-        .read_if(".agent/private/requests.jsonl")
+        .read_if(".tenaz/private/requests.jsonl")
         .unwrap_or_default()
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
     let samples: Vec<MemorySample> = project
-        .read_if(".agent/private/memory.jsonl")
+        .read_if(".tenaz/private/memory.jsonl")
         .unwrap_or_default()
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())

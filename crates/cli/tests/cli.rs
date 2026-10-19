@@ -182,7 +182,7 @@ fn init_with_the_pi_harness_reads_models_json() {
         String::from_utf8_lossy(&init.stdout)
     );
     let ledger: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(project.join(".agent/run.json")).unwrap())
+        serde_json::from_str(&std::fs::read_to_string(project.join(".tenaz/run.json")).unwrap())
             .unwrap();
     assert_eq!(ledger["config"]["harness"], "pi");
     assert_eq!(ledger["config"]["harnessVersion"], "9.9.9-test");
@@ -203,4 +203,31 @@ fn init_with_the_pi_harness_reads_models_json() {
         text.contains("Model: sushi/Qwen3.8 (thinking medium), pi 9.9.9-test"),
         "{text}"
     );
+}
+
+/// A project in the `.agent/` layout of earlier builds is not run, and both
+/// `run` and `status` say how to move it.
+#[test]
+fn an_old_agent_layout_is_refused_with_the_way_to_move_it() {
+    let work = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(work.path().join(".agent")).unwrap();
+    std::fs::write(work.path().join(".agent/run.json"), "{}").unwrap();
+    let run = tenaz()
+        .args(["run", "--project"])
+        .arg(work.path())
+        .output()
+        .unwrap();
+    assert!(!run.status.success());
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("keeps its Tenaz state in .agent/"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("--refresh-templates"), "{stderr}");
+    let status = tenaz()
+        .args(["status", "--project"])
+        .arg(work.path())
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&status.stdout).contains("mv '"));
 }

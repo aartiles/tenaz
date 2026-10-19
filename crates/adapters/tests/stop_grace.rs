@@ -144,7 +144,7 @@ async fn a_pause_after_a_long_wait_keeps_the_aborted_turn() {
     let watcher = {
         let (stop, log) = (
             stop.clone(),
-            project.path(".agent/private/orchestrator.log"),
+            project.path(".tenaz/private/orchestrator.log"),
         );
         tokio::spawn(async move {
             for _ in 0..3000 {
@@ -182,7 +182,7 @@ async fn a_pause_after_a_long_wait_keeps_the_aborted_turn() {
         "the bootstrap session never started"
     );
 
-    let journal = project.read(".agent/journal.jsonl").unwrap();
+    let journal = project.read(".tenaz/journal.jsonl").unwrap();
     let session = journal
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())

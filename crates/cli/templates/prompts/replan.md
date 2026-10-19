@@ -12,5 +12,5 @@ briefing. Keep the plan honest and small-stepped. You may:
 
 Every requirement except `manual` ones must stay covered by a card that is
 not dropped. Do not edit `done` cards, source code, or `verify`. Write
-`.agent/notes/PLANNER.md` (short, about 15 lines) explaining what you changed and
+`.tenaz/notes/PLANNER.md` (short, about 15 lines) explaining what you changed and
 why. If the plan is already right, change nothing and say so in the notes.

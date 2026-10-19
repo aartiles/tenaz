@@ -27,10 +27,10 @@ pub struct SessionSpec {
     /// `003-builder-T007`; names the raw logs.
     pub label: String,
     pub cwd: PathBuf,
-    /// Where the harness may keep its own session state (`.agent/private/sessions`).
+    /// Where the harness may keep its own session state (`.tenaz/private/sessions`).
     /// `None` asks for no persistence.
     pub persist_dir: Option<PathBuf>,
-    /// Where the raw event stream is appended (`.agent/private/<label>.rpc.jsonl`).
+    /// Where the raw event stream is appended (`.tenaz/private/<label>.rpc.jsonl`).
     pub raw_log: Option<PathBuf>,
     /// Where the harness's stderr is appended.
     pub stderr_log: Option<PathBuf>,
@@ -113,7 +113,7 @@ pub trait Vcs: Send + Sync {
     fn restore_paths(&self, sha: &str, paths: &[&str]) -> Result<(), VcsError>;
     /// A hash of the working tree state (status plus diff).
     fn worktree_fingerprint(&self) -> Result<String, VcsError>;
-    /// `git diff <from> <to>`, excluding `.agent/` when asked.
+    /// `git diff <from> <to>`, excluding `.tenaz/` when asked.
     fn diff(&self, from: &str, to: &str, exclude_agent: bool) -> Result<String, VcsError>;
     /// `git diff --stat <from> [<to>]`.
     fn diff_stat(

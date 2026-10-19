@@ -1,4 +1,4 @@
-//! The backlog: every card under `.agent/tasks/`, validated as a whole
+//! The backlog: every card under `.tenaz/tasks/`, validated as a whole
 //! (references, cycles), with the scheduling rules of the task loop.
 
 use std::collections::BTreeMap;
@@ -20,7 +20,7 @@ pub struct LoadedBacklog {
 }
 
 impl Backlog {
-    /// Parses `(file name, text)` pairs from `.agent/tasks/` and validates
+    /// Parses `(file name, text)` pairs from `.tenaz/tasks/` and validates
     /// references against the spec and each other. Unreadable cards are
     /// reported and skipped.
     pub fn load<'a>(
@@ -34,7 +34,7 @@ impl Backlog {
                 Ok(card) => {
                     tasks.insert(card.id.clone(), card);
                 }
-                Err(error) => errors.push(format!(".agent/tasks/{file}: {error}")),
+                Err(error) => errors.push(format!(".tenaz/tasks/{file}: {error}")),
             }
         }
         for task in tasks.values() {
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(
             loaded.errors,
             vec![
-                ".agent/tasks/T003.md: missing --- frontmatter ---",
+                ".tenaz/tasks/T003.md: missing --- frontmatter ---",
                 "T001: depends on missing T009",
                 "T002: requires unknown R7",
                 "T002: parent T050 does not exist",

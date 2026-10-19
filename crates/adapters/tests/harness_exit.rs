@@ -78,7 +78,7 @@ async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
         })
         .await
         .unwrap();
-    let log = project.read(".agent/private/orchestrator.log").unwrap();
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
     assert_eq!(
         project.load_ledger().unwrap().phase,
         Phase::Complete,

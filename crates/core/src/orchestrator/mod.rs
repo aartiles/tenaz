@@ -106,9 +106,12 @@ impl std::fmt::Debug for Runner {
 impl Runner {
     /// Loads the ledger and checks the pins. `stop` pauses the run when cancelled.
     pub fn open(project: Project, deps: Deps, stop: CancellationToken) -> Result<Self, RunError> {
-        if !project.exists(".agent/run.json") {
+        if let Some(note) = project.legacy_layout_note() {
+            return Err(RunError::Precondition(note));
+        }
+        if !project.exists(".tenaz/run.json") {
             return Err(RunError::Precondition(
-                "No .agent/run.json; run init first".to_owned(),
+                "No .tenaz/run.json; run init first".to_owned(),
             ));
         }
         let ledger = project.load_ledger()?;
@@ -139,12 +142,12 @@ impl Runner {
         self.deps.clock.now_rfc3339()
     }
 
-    /// Writes to the run log (stdout through tracing, and `.agent/private/orchestrator.log`).
+    /// Writes to the run log (stdout through tracing, and `.tenaz/private/orchestrator.log`).
     pub(crate) fn log(&self, message: &str) {
         tracing::info!("{message}");
-        if self.project.exists(".agent/private") {
+        if self.project.exists(".tenaz/private") {
             let _ = self.project.append(
-                ".agent/private/orchestrator.log",
+                ".tenaz/private/orchestrator.log",
                 &format!("[{}] {message}\n", self.now()),
             );
         }
@@ -194,16 +197,16 @@ impl Runner {
         Ok(())
     }
 
-    /// Checks that the pinned skills in `.agent/skills/` are unchanged.
+    /// Checks that the pinned skills in `.tenaz/skills/` are unchanged.
     fn check_skills(&self) -> Result<(), RunError> {
         for skill in &self.ledger.skills {
-            let dir = self.project.path(&format!(".agent/skills/{}", skill.name));
+            let dir = self.project.path(&format!(".tenaz/skills/{}", skill.name));
             if init::tree_hash(&dir)? != skill.sha256 {
                 self.journal(JournalRecord::SkillChanged {
                     skill: skill.name.clone(),
                 });
                 return Err(RunError::Precondition(format!(
-                    "The pinned skill {} in .agent/skills/ changed during the run; it must stay read-only",
+                    "The pinned skill {} in .tenaz/skills/ changed during the run; it must stay read-only",
                     skill.name
                 )));
             }
@@ -327,7 +330,7 @@ impl Runner {
             self.save()?;
             if !ok {
                 if !options.allow_weak_engine {
-                    return Err(RunError::Precondition("Engine preflight failed (see .agent/run.json \"preflight\"). Fix thinking/prefix cache, or pass --allow-weak-engine to record the run anyway.".to_owned()));
+                    return Err(RunError::Precondition("Engine preflight failed (see .tenaz/run.json \"preflight\"). Fix thinking/prefix cache, or pass --allow-weak-engine to record the run anyway.".to_owned()));
                 }
                 if let Some(p) = &mut self.ledger.preflight {
                     p.accepted_weak = true;

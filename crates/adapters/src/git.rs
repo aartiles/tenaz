@@ -98,7 +98,7 @@ fn diff_args<'a>(
         args.push(to);
     }
     if exclude_agent {
-        args.extend(["--", ".", ":(exclude).agent"]);
+        args.extend(["--", ".", ":(exclude).tenaz"]);
     }
     args
 }
@@ -255,8 +255,8 @@ mod tests {
         let clean = repo.worktree_fingerprint().unwrap();
         std::fs::write(dir.path().join("a.txt"), "edited\n").unwrap();
         assert_ne!(repo.worktree_fingerprint().unwrap(), clean);
-        std::fs::create_dir_all(dir.path().join(".agent/tasks")).unwrap();
-        std::fs::write(dir.path().join(".agent/tasks/T001.md"), "card\n").unwrap();
+        std::fs::create_dir_all(dir.path().join(".tenaz/tasks")).unwrap();
+        std::fs::write(dir.path().join(".tenaz/tasks/T001.md"), "card\n").unwrap();
         let second = repo.commit_all("edit").unwrap();
         assert!(repo.diff(&base, &second, true).unwrap().contains("edited"));
         assert!(!repo.diff(&base, &second, true).unwrap().contains("T001"));
@@ -266,14 +266,14 @@ mod tests {
                 .unwrap()
                 .contains("a.txt")
         );
-        std::fs::write(dir.path().join(".agent/tasks/T002.md"), "new\n").unwrap();
-        std::fs::write(dir.path().join(".agent/tasks/T001.md"), "changed\n").unwrap();
-        repo.restore_paths(&second, &[".agent/tasks"]).unwrap();
+        std::fs::write(dir.path().join(".tenaz/tasks/T002.md"), "new\n").unwrap();
+        std::fs::write(dir.path().join(".tenaz/tasks/T001.md"), "changed\n").unwrap();
+        repo.restore_paths(&second, &[".tenaz/tasks"]).unwrap();
         assert_eq!(
-            std::fs::read_to_string(dir.path().join(".agent/tasks/T001.md")).unwrap(),
+            std::fs::read_to_string(dir.path().join(".tenaz/tasks/T001.md")).unwrap(),
             "card\n"
         );
-        assert!(!dir.path().join(".agent/tasks/T002.md").exists());
+        assert!(!dir.path().join(".tenaz/tasks/T002.md").exists());
         std::fs::write(dir.path().join("junk.txt"), "x\n").unwrap();
         repo.reset_hard(&base).unwrap();
         assert_eq!(repo.head().unwrap(), base);

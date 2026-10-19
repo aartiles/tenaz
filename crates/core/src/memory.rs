@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One sample, as written to `.agent/private/memory.jsonl`.
+/// One sample, as written to `.tenaz/private/memory.jsonl`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MemorySample {
     pub at: String,

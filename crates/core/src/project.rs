@@ -1,5 +1,5 @@
 //! The project on disk: `BRIEF.md`, `AGENTS.md`, `verify`, and the
-//! orchestration state under `.agent/`.
+//! orchestration state under `.tenaz/`.
 
 use std::fs;
 use std::io;
@@ -26,31 +26,50 @@ impl Project {
         &self.root
     }
 
-    pub fn agent_dir(&self) -> PathBuf {
-        self.root.join(".agent")
+    pub fn tenaz_dir(&self) -> PathBuf {
+        self.root.join(".tenaz")
+    }
+
+    /// What to do when the project still keeps its state in `.agent/`,
+    /// where builds before the rename to `.tenaz/` put it; `None` otherwise.
+    pub fn legacy_layout_note(&self) -> Option<String> {
+        if self.exists(".tenaz/run.json") || !self.exists(".agent/run.json") {
+            return None;
+        }
+        let root = self.root.display();
+        Some(format!(
+            "{root} keeps its Tenaz state in .agent/, the layout of earlier builds; this \
+             version reads .tenaz/. To move it:\n  \
+             mv '{root}/.agent' '{root}/.tenaz'\n  \
+             change .agent/ to .tenaz/ in '{root}/.gitignore'\n  \
+             tenaz run --project '{root}' --refresh-templates\n\
+             The last step rewrites AGENTS.md and the prompts with the new paths. \
+             Pass the launch flags (--engine, --comfyui, ...) to that run once; they \
+             are saved in run.json."
+        ))
     }
 
     pub fn private_dir(&self) -> PathBuf {
-        self.agent_dir().join("private")
+        self.tenaz_dir().join("private")
     }
 
     pub fn ledger_path(&self) -> PathBuf {
-        self.agent_dir().join("run.json")
+        self.tenaz_dir().join("run.json")
     }
 
     pub fn journal_path(&self) -> PathBuf {
-        self.agent_dir().join("journal.jsonl")
+        self.tenaz_dir().join("journal.jsonl")
     }
 
     pub fn tasks_dir(&self) -> PathBuf {
-        self.agent_dir().join("tasks")
+        self.tenaz_dir().join("tasks")
     }
 
     pub fn path(&self, relative: &str) -> PathBuf {
         self.root.join(relative)
     }
 
-    /// Creates the `.agent/` layout.
+    /// Creates the `.tenaz/` layout.
     pub fn create_layout(&self) -> io::Result<()> {
         for dir in [
             "prompts",
@@ -60,7 +79,7 @@ impl Project {
             "private",
             "private/sessions",
         ] {
-            fs::create_dir_all(self.agent_dir().join(dir))?;
+            fs::create_dir_all(self.tenaz_dir().join(dir))?;
         }
         Ok(())
     }
@@ -127,19 +146,19 @@ impl Project {
     pub fn save_ledger(&self, ledger: &Ledger) -> io::Result<()> {
         let text = serde_json::to_string_pretty(ledger)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        self.write_atomic(".agent/run.json", &format!("{text}\n"))
+        self.write_atomic(".tenaz/run.json", &format!("{text}\n"))
     }
 
     pub fn append_journal(&self, at: String, record: JournalRecord) -> io::Result<()> {
         let entry = JournalEntry { at, record };
         let line = serde_json::to_string(&entry)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        self.append(".agent/journal.jsonl", &format!("{line}\n"))
+        self.append(".tenaz/journal.jsonl", &format!("{line}\n"))
     }
 
     /// Every journal line that parses.
     pub fn journal(&self) -> Vec<JournalEntry> {
-        self.read_if(".agent/journal.jsonl")
+        self.read_if(".tenaz/journal.jsonl")
             .unwrap_or_default()
             .lines()
             .filter(|l| !l.trim().is_empty())
@@ -150,16 +169,16 @@ impl Project {
     // ---------- spec, map, cards, notes, prompts ----------
 
     pub fn requirements(&self) -> Vec<Requirement> {
-        parse_requirements(&self.read_if(".agent/spec.md").unwrap_or_default())
+        parse_requirements(&self.read_if(".tenaz/spec.md").unwrap_or_default())
     }
 
-    /// Reads every `.md` card under `.agent/tasks/`.
+    /// Reads every `.md` card under `.tenaz/tasks/`.
     pub fn load_backlog(&self) -> LoadedBacklog {
         let dir = self.tasks_dir();
         let Ok(entries) = fs::read_dir(&dir) else {
             return LoadedBacklog {
                 backlog: Backlog::default(),
-                errors: vec![".agent/tasks/ does not exist".to_owned()],
+                errors: vec![".tenaz/tasks/ does not exist".to_owned()],
             };
         };
         let mut files: Vec<(String, String)> = entries
@@ -187,7 +206,7 @@ impl Project {
     }
 
     pub fn note(&self, id: &str) -> Option<String> {
-        self.read_if(&format!(".agent/notes/{id}.md"))
+        self.read_if(&format!(".tenaz/notes/{id}.md"))
     }
 
     pub fn role_prompt(&self, role: Role) -> io::Result<String> {
@@ -215,10 +234,10 @@ impl Project {
     /// Adds the orchestrator's private paths to `.gitignore` when missing.
     pub fn ensure_gitignore(&self) -> io::Result<()> {
         let wanted = [
-            ".agent/private/",
-            ".agent/run.json",
-            ".agent/journal.jsonl",
-            ".agent/skills/",
+            ".tenaz/private/",
+            ".tenaz/run.json",
+            ".tenaz/journal.jsonl",
+            ".tenaz/skills/",
         ];
         let current = self.read_if(".gitignore").unwrap_or_default();
         let missing: Vec<&str> = wanted
@@ -250,15 +269,28 @@ mod tests {
     }
 
     #[test]
+    fn a_project_in_the_old_agent_layout_gets_a_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Project::new(dir.path());
+        assert_eq!(p.legacy_layout_note(), None);
+        p.write(".agent/run.json", "{}").unwrap();
+        let note = p.legacy_layout_note().unwrap();
+        assert!(note.contains("mv '"), "{note}");
+        assert!(note.contains("--refresh-templates"), "{note}");
+        p.write(".tenaz/run.json", "{}").unwrap();
+        assert_eq!(p.legacy_layout_note(), None);
+    }
+
+    #[test]
     fn cards_and_fields_round_trip_through_disk() {
         let (_dir, p) = project();
-        p.write(".agent/spec.md", "- R1: a\n").unwrap();
+        p.write(".tenaz/spec.md", "- R1: a\n").unwrap();
         p.write(
-            ".agent/tasks/T001.md",
+            ".tenaz/tasks/T001.md",
             "---\nid: T001\nstatus: todo\nrequires: [R1]\n---\n## Goal\n",
         )
         .unwrap();
-        p.write(".agent/tasks/notes.txt", "ignored").unwrap();
+        p.write(".tenaz/tasks/notes.txt", "ignored").unwrap();
         let loaded = p.load_backlog();
         assert_eq!(loaded.errors, Vec::<String>::new());
         let id = TaskId::parse("T001").unwrap();
@@ -269,7 +301,7 @@ mod tests {
             crate::task::TaskStatus::Done
         );
         assert_eq!(p.note("T001"), None);
-        p.write(".agent/notes/T001.md", "did it").unwrap();
+        p.write(".tenaz/notes/T001.md", "did it").unwrap();
         assert_eq!(p.note("T001").as_deref(), Some("did it"));
     }
 
@@ -285,7 +317,7 @@ mod tests {
         )
         .unwrap();
         p.append(
-            "/.agent/journal.jsonl".trim_start_matches('/'),
+            "/.tenaz/journal.jsonl".trim_start_matches('/'),
             "not json\n",
         )
         .unwrap();
@@ -303,29 +335,29 @@ mod tests {
     fn verdict_reads_the_first_matching_line() {
         let (_dir, p) = project();
         p.write(
-            ".agent/reviews/T001.md",
+            ".tenaz/reviews/T001.md",
             "notes\nVerdict: CHANGES\n- [MAJOR] x\n",
         )
         .unwrap();
         assert_eq!(
-            p.verdict(".agent/reviews/T001.md").0.as_deref(),
+            p.verdict(".tenaz/reviews/T001.md").0.as_deref(),
             Some("CHANGES")
         );
-        p.write(".agent/reviews/T001.md", "Verdict: ACCEPTED?\n")
+        p.write(".tenaz/reviews/T001.md", "Verdict: ACCEPTED?\n")
             .unwrap();
-        assert_eq!(p.verdict(".agent/reviews/T001.md").0, None);
-        assert_eq!(p.verdict(".agent/reviews/none.md"), (None, None));
+        assert_eq!(p.verdict(".tenaz/reviews/T001.md").0, None);
+        assert_eq!(p.verdict(".tenaz/reviews/none.md"), (None, None));
     }
 
     #[test]
     fn gitignore_gets_only_the_missing_lines() {
         let (_dir, p) = project();
-        p.write(".gitignore", "node_modules\n.agent/run.json")
+        p.write(".gitignore", "node_modules\n.tenaz/run.json")
             .unwrap();
         p.ensure_gitignore().unwrap();
         assert_eq!(
             p.read(".gitignore").unwrap(),
-            "node_modules\n.agent/run.json\n.agent/private/\n.agent/journal.jsonl\n.agent/skills/\n"
+            "node_modules\n.tenaz/run.json\n.tenaz/private/\n.tenaz/journal.jsonl\n.tenaz/skills/\n"
         );
         p.ensure_gitignore().unwrap();
         assert_eq!(p.read(".gitignore").unwrap().lines().count(), 5);
@@ -334,9 +366,9 @@ mod tests {
     #[test]
     fn atomic_write_replaces_content() {
         let (_dir, p) = project();
-        p.write_atomic(".agent/run.json", "{}\n").unwrap();
-        p.write_atomic(".agent/run.json", "{\"a\":1}\n").unwrap();
-        assert_eq!(p.read(".agent/run.json").unwrap(), "{\"a\":1}\n");
-        assert!(!p.exists(&format!(".agent/run.{}.tmp", std::process::id())));
+        p.write_atomic(".tenaz/run.json", "{}\n").unwrap();
+        p.write_atomic(".tenaz/run.json", "{\"a\":1}\n").unwrap();
+        assert_eq!(p.read(".tenaz/run.json").unwrap(), "{\"a\":1}\n");
+        assert!(!p.exists(&format!(".tenaz/run.{}.tmp", std::process::id())));
     }
 }

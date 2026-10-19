@@ -6,7 +6,7 @@ the verification harness and project skeleton. Do not implement features.
 
 Produce:
 
-1. `.agent/spec.md`: every requirement of the brief as one numbered line,
+1. `.tenaz/spec.md`: every requirement of the brief as one numbered line,
    `- R1: ...`. Use one testable statement per line and keep the brief's
    non-negotiable rules. Mark a requirement that cannot be checked
    automatically as `- R9: ... (manual: why)`.
@@ -14,11 +14,11 @@ Produce:
    the simplest tooling that can test this kind of project (shell, node,
    python, a headless browser for web UIs). Include at least one real
    `T000.` smoke check that passes now.
-3. `.agent/map.md`: one line per source file or directory, giving its
+3. `.tenaz/map.md`: one line per source file or directory, giving its
    purpose and key exports. Include how to run the project and `verify`.
-4. `.agent/tasks/T001.md`, `T002.md`, and so on, using the card format in
+4. `.tenaz/tasks/T001.md`, `T002.md`, and so on, using the card format in
    `AGENTS.md`.
-5. `.agent/notes/BOOTSTRAP.md` (short, about 15 lines): stack, project layout,
+5. `.tenaz/notes/BOOTSTRAP.md` (short, about 15 lines): stack, project layout,
    how `verify` works, and decisions that later sessions must respect.
 
 Task sizing:

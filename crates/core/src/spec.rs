@@ -1,4 +1,4 @@
-//! `.agent/spec.md`: one requirement per line, `- R1: ...`, with
+//! `.tenaz/spec.md`: one requirement per line, `- R1: ...`, with
 //! `(manual: why)` for what cannot be checked automatically.
 
 use std::sync::LazyLock;

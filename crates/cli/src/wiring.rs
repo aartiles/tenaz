@@ -138,7 +138,7 @@ pub async fn wire(
 ) -> anyhow::Result<Wired> {
     let ledger = project
         .load_ledger()
-        .context("No .agent/run.json; run init first")?;
+        .context("No .tenaz/run.json; run init first")?;
     let config = &ledger.config;
     let base_url = config
         .base_url
@@ -339,7 +339,7 @@ fn build_harness(
                 .skills(
                     skills
                         .iter()
-                        .map(|s| project.agent_dir().join("skills").join(&s.name))
+                        .map(|s| project.tenaz_dir().join("skills").join(&s.name))
                         .collect(),
                 );
             Ok(Arc::new(launch.harness(config.harness_version.clone())))

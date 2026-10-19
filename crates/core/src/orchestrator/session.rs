@@ -49,7 +49,7 @@ const ABORT_GRACE: Duration = Duration::from_secs(60);
 impl Runner {
     /// Runs the harness once with `prompts` sent one after another (the
     /// preflight sends several). `persist` keeps the raw stream and the
-    /// harness state under `.agent/private/`.
+    /// harness state under `.tenaz/private/`.
     pub(crate) async fn run_harness(
         &self,
         label: &str,
@@ -275,7 +275,7 @@ impl Runner {
         });
         self.save()?;
         self.project
-            .write(&format!(".agent/private/{label}.prompt.md"), prompt)?;
+            .write(&format!(".tenaz/private/{label}.prompt.md"), prompt)?;
         self.log(&format!("Session {label} started"));
         let watch = WatchConfig {
             turns: ctx.turns.unwrap_or(self.params.turn_budget),
@@ -579,7 +579,7 @@ impl RequestRecorder {
                 if let Some(project) = &project
                     && let Ok(line) = serde_json::to_string(&record)
                 {
-                    let _ = project.append(".agent/private/requests.jsonl", &format!("{line}\n"));
+                    let _ = project.append(".tenaz/private/requests.jsonl", &format!("{line}\n"));
                 }
                 requests.push(record);
             }

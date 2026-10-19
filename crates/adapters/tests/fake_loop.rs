@@ -38,7 +38,7 @@ fn deps(project: &Project, harness: ScriptedHarness) -> Deps {
 
 fn card_line(project: &Project, id: &str, prefix: &str) -> Option<String> {
     project
-        .read(&format!(".agent/tasks/{id}.md"))
+        .read(&format!(".tenaz/tasks/{id}.md"))
         .ok()?
         .lines()
         .find(|l| l.starts_with(prefix))
@@ -95,7 +95,7 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     let watcher = {
         let (stop, log) = (
             stop.clone(),
-            project.path(".agent/private/orchestrator.log"),
+            project.path(".tenaz/private/orchestrator.log"),
         );
         tokio::spawn(async move {
             for _ in 0..3000 {
@@ -118,7 +118,7 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
         watcher.await.unwrap(),
         "the run never reached the T002 builder"
     );
-    let log = project.read(".agent/private/orchestrator.log").unwrap();
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
     assert!(log.contains("PAUSED during"), "run did not pause:\n{log}");
     assert_eq!(
         card_line(&project, "T002", "attempts:").as_deref(),
@@ -134,7 +134,7 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     )
     .unwrap();
     runner.run(run_options).await.unwrap();
-    let log = project.read(".agent/private/orchestrator.log").unwrap();
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
     let ledger = project.load_ledger().unwrap();
     assert_eq!(
         ledger.phase,

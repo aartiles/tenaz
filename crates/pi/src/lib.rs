@@ -182,15 +182,15 @@ mod tests {
     fn args_follow_the_task_loops_pi_args() {
         let launch = PiLaunch::new("pi", "sushi/Qwen3.8")
             .thinking("high")
-            .skills(vec![PathBuf::from("/p/.agent/skills/rust")]);
-        let with_dir = launch.args(Some(Path::new("/p/.agent/private/sessions")));
+            .skills(vec![PathBuf::from("/p/.tenaz/skills/rust")]);
+        let with_dir = launch.args(Some(Path::new("/p/.tenaz/private/sessions")));
         assert_eq!(
             with_dir,
             [
                 "--mode",
                 "rpc",
                 "--session-dir",
-                "/p/.agent/private/sessions",
+                "/p/.tenaz/private/sessions",
                 "--model",
                 "sushi/Qwen3.8",
                 "--thinking",
@@ -201,7 +201,7 @@ mod tests {
                 "--no-extensions",
                 "--no-skills",
                 "--skill",
-                "/p/.agent/skills/rust",
+                "/p/.tenaz/skills/rust",
                 "--approve",
                 "--offline",
             ]
@@ -218,17 +218,17 @@ mod tests {
     fn relative_paths_are_resolved_against_the_runners_directory() {
         let cwd = std::env::current_dir().unwrap();
         let args = PiLaunch::new("pi", "fake/fake")
-            .skills(vec![PathBuf::from("proj/.agent/skills/rust")])
-            .args(Some(Path::new("proj/.agent/private/sessions")));
+            .skills(vec![PathBuf::from("proj/.tenaz/skills/rust")])
+            .args(Some(Path::new("proj/.tenaz/private/sessions")));
         let after = |flag: &str| {
             let at = args.iter().position(|a| a == flag).unwrap();
             PathBuf::from(&args[at + 1])
         };
         assert_eq!(
             after("--session-dir"),
-            cwd.join("proj/.agent/private/sessions")
+            cwd.join("proj/.tenaz/private/sessions")
         );
-        assert_eq!(after("--skill"), cwd.join("proj/.agent/skills/rust"));
+        assert_eq!(after("--skill"), cwd.join("proj/.tenaz/skills/rust"));
     }
 
     #[test]

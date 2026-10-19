@@ -16,7 +16,7 @@ Check that:
   when the model can see images.
 
 You may read files and run commands, including `./verify` and the program
-itself. Edit no file except `.agent/reviews/<TASK>.md`.
+itself. Edit no file except `.tenaz/reviews/<TASK>.md`.
 
 In that file, write `Verdict: ACCEPT` or `Verdict: CHANGES` on the first
 line. For `CHANGES`, list each finding as

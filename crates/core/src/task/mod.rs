@@ -1,4 +1,4 @@
-//! Task cards: one Markdown file per task under `.agent/tasks/`, with a
+//! Task cards: one Markdown file per task under `.tenaz/tasks/`, with a
 //! frontmatter the orchestrator partly owns (`status`, `attempts`).
 
 pub mod frontmatter;
@@ -46,9 +46,9 @@ impl TaskId {
         format!("{}.md", self.0)
     }
 
-    /// `.agent/tasks/T007.md`.
+    /// `.tenaz/tasks/T007.md`.
     pub fn card_path(&self) -> String {
-        format!(".agent/tasks/{}", self.file_name())
+        format!(".tenaz/tasks/{}", self.file_name())
     }
 }
 
@@ -132,7 +132,7 @@ pub struct TaskCard {
     pub budget: Budget,
     /// Everything after the frontmatter.
     pub body: String,
-    /// `.agent/tasks/T007.md`.
+    /// `.tenaz/tasks/T007.md`.
     pub file: String,
 }
 
@@ -150,7 +150,7 @@ pub enum CardError {
 }
 
 impl TaskCard {
-    /// Parses the card stored as `.agent/tasks/<file_name>`.
+    /// Parses the card stored as `.tenaz/tasks/<file_name>`.
     pub fn parse(file_name: &str, text: &str) -> Result<Self, CardError> {
         let fm = parse_frontmatter(text)?;
         let text_of = |key: &str| fm.get(key).and_then(Value::to_text).unwrap_or_default();
@@ -190,7 +190,7 @@ impl TaskCard {
             .and_then(whole_u32)
             .unwrap_or(0);
         Ok(Self {
-            file: format!(".agent/tasks/{file_name}"),
+            file: format!(".tenaz/tasks/{file_name}"),
             id,
             title: text_of("title"),
             status,
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(card.attempts, 2);
         assert_eq!(card.parent, None);
         assert_eq!(card.body, "## Goal\nOne line.\n");
-        assert_eq!(card.file, ".agent/tasks/T007.md");
+        assert_eq!(card.file, ".tenaz/tasks/T007.md");
     }
 
     #[test]

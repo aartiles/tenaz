@@ -142,7 +142,7 @@ pub struct Preflight {
     pub accepted_weak: bool,
 }
 
-/// A skill copied read-only into `.agent/skills/` and hashed.
+/// A skill copied read-only into `.tenaz/skills/` and hashed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillPin {
     pub name: String,

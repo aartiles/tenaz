@@ -230,7 +230,7 @@ impl Player {
 
     /// Per-project counters, so repeated sessions take different branches.
     fn bump(&self, key: &str) -> u32 {
-        let path = self.cwd.join(".agent/private/fake-state.json");
+        let path = self.cwd.join(".tenaz/private/fake-state.json");
         let mut state: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -361,7 +361,7 @@ impl Player {
             "BUILDER" => self.builder(&task, attempt).await,
             "REVIEWER" => {
                 let file = field(prompt, "Review file")
-                    .unwrap_or(".agent/reviews/unknown.md")
+                    .unwrap_or(".tenaz/reviews/unknown.md")
                     .to_owned();
                 let n = self.bump(&format!("review-{task}"));
                 if task == "T004" && n == 1 {
@@ -377,13 +377,13 @@ impl Player {
             }
             "SPLIT" => {
                 self.write_tool(
-                    &format!(".agent/tasks/{task}a.md"),
+                    &format!(".tenaz/tasks/{task}a.md"),
                     &card(&format!("{task}a"), &["R3"], &["T001"], Some(&task)),
                     false,
                 )
                 .await;
                 self.write_tool(
-                    &format!(".agent/tasks/{task}b.md"),
+                    &format!(".tenaz/tasks/{task}b.md"),
                     &card(
                         &format!("{task}b"),
                         &["R3"],
@@ -393,21 +393,21 @@ impl Player {
                     false,
                 )
                 .await;
-                self.write_tool(".agent/notes/PLANNER.md", "Split.\n", false)
+                self.write_tool(".tenaz/notes/PLANNER.md", "Split.\n", false)
                     .await;
                 self.finish("Done.");
             }
             "REPLAN" => {
-                self.write_tool(".agent/notes/PLANNER.md", "Plan is fine.\n", false)
+                self.write_tool(".tenaz/notes/PLANNER.md", "Plan is fine.\n", false)
                     .await;
-                if self.cwd.join(".agent/tasks/T001.md").exists() {
-                    self.write_tool(".agent/tasks/T001.md", "tampered done card\n", false)
+                if self.cwd.join(".tenaz/tasks/T001.md").exists() {
+                    self.write_tool(".tenaz/tasks/T001.md", "tampered done card\n", false)
                         .await; // must be reverted
                 }
                 self.finish("Done.");
             }
             "FINAL-REVIEWER" => {
-                self.write_tool(".agent/reviews/FINAL.md", "Verdict: ACCEPT\n", false)
+                self.write_tool(".tenaz/reviews/FINAL.md", "Verdict: ACCEPT\n", false)
                     .await;
                 self.finish("Done.");
             }
@@ -460,13 +460,13 @@ impl Player {
             return self.engine_error(&message);
         }
         self.write_tool(
-            ".agent/spec.md",
+            ".tenaz/spec.md",
             "# Spec\n\n- R1: one\n- R2: two\n- R3: three\n- R4: looks good (manual: visual)\n",
             false,
         )
         .await;
         self.write_tool(
-            ".agent/map.md",
+            ".tenaz/map.md",
             "- verify: runs checks/*.sh\n- src/: one file per task\n",
             false,
         )
@@ -475,30 +475,30 @@ impl Player {
         self.write_tool("checks/T000.smoke.sh", "exit 0\n", false)
             .await;
         self.write_tool(
-            ".agent/tasks/T001.md",
+            ".tenaz/tasks/T001.md",
             &card("T001", &["R1"], &[], None),
             false,
         )
         .await;
         self.write_tool(
-            ".agent/tasks/T002.md",
+            ".tenaz/tasks/T002.md",
             &card("T002", &["R2"], &["T001"], None),
             false,
         )
         .await;
         self.write_tool(
-            ".agent/tasks/T003.md",
+            ".tenaz/tasks/T003.md",
             &card("T003", &["R3"], &["T001"], None),
             false,
         )
         .await;
         self.write_tool(
-            ".agent/tasks/T004.md",
+            ".tenaz/tasks/T004.md",
             &card("T004", &["R1"], &["T002"], None),
             false,
         )
         .await;
-        self.write_tool(".agent/notes/BOOTSTRAP.md", "Fake stack.\n", false)
+        self.write_tool(".tenaz/notes/BOOTSTRAP.md", "Fake stack.\n", false)
             .await;
         self.write_tool("BRIEF.md", "tampered\n", false).await; // must be reverted
         self.finish("Done.");
@@ -540,7 +540,7 @@ impl Player {
         )
         .await;
         self.write_tool(
-            &format!(".agent/notes/{task}.md"),
+            &format!(".tenaz/notes/{task}.md"),
             &format!("Built {task}.\n"),
             false,
         )
@@ -549,14 +549,14 @@ impl Player {
             // Finished, then circles between two calls with the same results.
             while !self.aborted() {
                 self.write_tool(
-                    &format!(".agent/notes/{task}.md"),
+                    &format!(".tenaz/notes/{task}.md"),
                     &format!("Built {task}.\n"),
                     false,
                 )
                 .await;
                 self.turn(
                     "bash",
-                    serde_json::json!({ "command": format!("wc -l .agent/notes/{task}.md") }),
+                    serde_json::json!({ "command": format!("wc -l .tenaz/notes/{task}.md") }),
                     |_| {},
                     "ok",
                     None,
@@ -582,7 +582,7 @@ impl Player {
             return self.finish("Done.");
         }
         if task == "T001" {
-            self.write_tool(".agent/tasks/T001.md", "tampered\n", false)
+            self.write_tool(".tenaz/tasks/T001.md", "tampered\n", false)
                 .await; // must be reverted
         }
         self.finish("Done.");
@@ -595,11 +595,11 @@ mod tests {
 
     #[test]
     fn prompt_fields_are_read_from_the_session_header() {
-        let prompt = "ROLE: BUILDER\n\n## Session\n\nRole: BUILDER\nTask: T007\nAttempt: 2 of 3\nReview file: .agent/reviews/T007.md\n";
+        let prompt = "ROLE: BUILDER\n\n## Session\n\nRole: BUILDER\nTask: T007\nAttempt: 2 of 3\nReview file: .tenaz/reviews/T007.md\n";
         assert_eq!(field(prompt, "Role"), Some("BUILDER"));
         assert_eq!(field(prompt, "Task"), Some("T007"));
         assert_eq!(field(prompt, "Attempt"), Some("2 of 3"));
-        assert_eq!(field(prompt, "Review file"), Some(".agent/reviews/T007.md"));
+        assert_eq!(field(prompt, "Review file"), Some(".tenaz/reviews/T007.md"));
         assert_eq!(field("nothing", "Role"), None);
     }
 

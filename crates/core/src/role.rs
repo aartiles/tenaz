@@ -37,9 +37,9 @@ impl Role {
         }
     }
 
-    /// `.agent/prompts/<role>.md`.
+    /// `.tenaz/prompts/<role>.md`.
     pub fn prompt_path(self) -> String {
-        format!(".agent/prompts/{}.md", self.as_str())
+        format!(".tenaz/prompts/{}.md", self.as_str())
     }
 
     /// Roles whose sessions are expected to change files; the idle watchdog applies.

@@ -14,7 +14,7 @@ pub trait RepoFacts {
 
 /// `BRIEF.md`, `AGENTS.md` and the role prompts are never edited by a session.
 pub fn is_protected(path: &str) -> bool {
-    path == "BRIEF.md" || path == "AGENTS.md" || path.starts_with(".agent/prompts/")
+    path == "BRIEF.md" || path == "AGENTS.md" || path.starts_with(".tenaz/prompts/")
 }
 
 /// Whether `role` may leave a change at `path`.
@@ -22,14 +22,14 @@ pub fn allowed(role: Role, path: &str, task: Option<&TaskId>, repo: &dyn RepoFac
     if is_protected(path) {
         return false;
     }
-    let allowed = if let Some(agent_path) = path.strip_prefix(".agent/") {
+    let allowed = if let Some(agent_path) = path.strip_prefix(".tenaz/") {
         agent_rule(role, agent_path, task, repo)
     } else {
         matches!(role, Role::Bootstrap | Role::Builder)
     };
     // A done card is history: nobody may rewrite it.
     if allowed
-        && path.starts_with(".agent/tasks/")
+        && path.starts_with(".tenaz/tasks/")
         && repo
             .head_content(path)
             .is_some_and(|text| TaskCard::text_is_done(&text))
@@ -56,7 +56,7 @@ fn agent_rule(role: Role, agent_path: &str, task: Option<&TaskId>, repo: &dyn Re
         Role::FinalReviewer => {
             agent_path == "reviews/FINAL.md"
                 || (agent_path.starts_with("tasks/")
-                    && !repo.in_head(&format!(".agent/{agent_path}")))
+                    && !repo.in_head(&format!(".tenaz/{agent_path}")))
         }
     }
 }
@@ -78,7 +78,7 @@ pub fn partition<'a>(
 /// The explanation the next session gets when files were reverted.
 pub fn reverted_note(role: Role, paths: &[String]) -> String {
     format!(
-        "The orchestrator reverted your changes to {}, because a {role} session may not write there. Under .agent/ a bootstrap session writes only spec.md, map.md, tasks/ and notes/; BRIEF.md, AGENTS.md and .agent/prompts/ are never edited. Put verify and any code it runs in the project itself (for example a checks/ or scripts/ folder at the root), not under .agent/.",
+        "The orchestrator reverted your changes to {}, because a {role} session may not write there. Under .tenaz/ a bootstrap session writes only spec.md, map.md, tasks/ and notes/; BRIEF.md, AGENTS.md and .tenaz/prompts/ are never edited. Put verify and any code it runs in the project itself (for example a checks/ or scripts/ folder at the root), not under .tenaz/.",
         paths.join(", ")
     )
 }
@@ -105,8 +105,8 @@ mod tests {
     fn repo() -> Repo {
         Repo {
             head: vec![
-                (".agent/tasks/T001.md", "---\nid: T001\nstatus: done\n---\n"),
-                (".agent/tasks/T002.md", "---\nid: T002\nstatus: todo\n---\n"),
+                (".tenaz/tasks/T001.md", "---\nid: T001\nstatus: done\n---\n"),
+                (".tenaz/tasks/T002.md", "---\nid: T002\nstatus: todo\n---\n"),
             ],
         }
     }
@@ -117,11 +117,11 @@ mod tests {
         for role in Role::ALL {
             assert!(!allowed(role, "BRIEF.md", None, &r), "{role}");
             assert!(
-                !allowed(role, ".agent/prompts/builder.md", None, &r),
+                !allowed(role, ".tenaz/prompts/builder.md", None, &r),
                 "{role}"
             );
             assert!(
-                !allowed(role, ".agent/tasks/T001.md", None, &r),
+                !allowed(role, ".tenaz/tasks/T001.md", None, &r),
                 "{role}: done card"
             );
         }
@@ -132,45 +132,45 @@ mod tests {
         let r = repo();
         let t = TaskId::parse("T007").unwrap();
         assert!(allowed(Role::Bootstrap, "verify", None, &r));
-        assert!(allowed(Role::Bootstrap, ".agent/tasks/T002.md", None, &r));
-        assert!(!allowed(Role::Bootstrap, ".agent/checks/x.sh", None, &r));
+        assert!(allowed(Role::Bootstrap, ".tenaz/tasks/T002.md", None, &r));
+        assert!(!allowed(Role::Bootstrap, ".tenaz/checks/x.sh", None, &r));
         assert!(allowed(Role::Builder, "src/a.js", Some(&t), &r));
-        assert!(allowed(Role::Builder, ".agent/notes/T007.md", Some(&t), &r));
-        assert!(allowed(Role::Builder, ".agent/map.md", Some(&t), &r));
+        assert!(allowed(Role::Builder, ".tenaz/notes/T007.md", Some(&t), &r));
+        assert!(allowed(Role::Builder, ".tenaz/map.md", Some(&t), &r));
         assert!(!allowed(
             Role::Builder,
-            ".agent/notes/T008.md",
+            ".tenaz/notes/T008.md",
             Some(&t),
             &r
         ));
         assert!(!allowed(
             Role::Builder,
-            ".agent/tasks/T002.md",
+            ".tenaz/tasks/T002.md",
             Some(&t),
             &r
         ));
         assert!(!allowed(Role::Reviewer, "src/a.js", Some(&t), &r));
         assert!(allowed(
             Role::Reviewer,
-            ".agent/reviews/T007.md",
+            ".tenaz/reviews/T007.md",
             Some(&t),
             &r
         ));
-        assert!(allowed(Role::Split, ".agent/tasks/T007a.md", Some(&t), &r));
-        assert!(allowed(Role::Replan, ".agent/notes/PLANNER.md", None, &r));
-        assert!(!allowed(Role::Replan, ".agent/notes/T001.md", None, &r));
+        assert!(allowed(Role::Split, ".tenaz/tasks/T007a.md", Some(&t), &r));
+        assert!(allowed(Role::Replan, ".tenaz/notes/PLANNER.md", None, &r));
+        assert!(!allowed(Role::Replan, ".tenaz/notes/T001.md", None, &r));
         assert!(allowed(
             Role::FinalReviewer,
-            ".agent/reviews/FINAL.md",
+            ".tenaz/reviews/FINAL.md",
             None,
             &r
         ));
         assert!(
-            allowed(Role::FinalReviewer, ".agent/tasks/T009.md", None, &r),
+            allowed(Role::FinalReviewer, ".tenaz/tasks/T009.md", None, &r),
             "new card"
         );
         assert!(
-            !allowed(Role::FinalReviewer, ".agent/tasks/T002.md", None, &r),
+            !allowed(Role::FinalReviewer, ".tenaz/tasks/T002.md", None, &r),
             "existing card"
         );
     }
@@ -180,12 +180,12 @@ mod tests {
         let r = repo();
         let reverted = partition(
             Role::Bootstrap,
-            ["verify", "BRIEF.md", ".agent/checks/a.sh"],
+            ["verify", "BRIEF.md", ".tenaz/checks/a.sh"],
             None,
             &r,
         );
-        assert_eq!(reverted, vec!["BRIEF.md", ".agent/checks/a.sh"]);
+        assert_eq!(reverted, vec!["BRIEF.md", ".tenaz/checks/a.sh"]);
         let note = reverted_note(Role::Bootstrap, &reverted);
-        assert!(note.starts_with("The orchestrator reverted your changes to BRIEF.md, .agent/checks/a.sh, because a bootstrap session may not write there."));
+        assert!(note.starts_with("The orchestrator reverted your changes to BRIEF.md, .tenaz/checks/a.sh, because a bootstrap session may not write there."));
     }
 }

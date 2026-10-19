@@ -238,7 +238,7 @@ fn ask_project<R: BufRead, W: Write>(
     };
     loop {
         let dir = PathBuf::from(p.ask("Project directory", Some(&suggested))?);
-        if !dir.join(".agent/run.json").exists() {
+        if !dir.join(".tenaz/run.json").exists() && !dir.join(".agent/run.json").exists() {
             return Ok(dir);
         }
         p.say("  That directory already has a Tenaz run; pick another.")?;

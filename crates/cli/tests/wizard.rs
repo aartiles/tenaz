@@ -104,7 +104,7 @@ fn the_wizard_pins_everything_run_needs() {
         "# Goal\n\nBuild four trivial files.\n"
     );
     let ledger: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(project.join(".agent/run.json")).unwrap())
+        serde_json::from_str(&std::fs::read_to_string(project.join(".tenaz/run.json")).unwrap())
             .unwrap();
     assert_eq!(ledger["config"]["model"], "local/beta");
     assert_eq!(ledger["config"]["contextWindow"], 40000);
@@ -126,7 +126,7 @@ fn the_wizard_pins_everything_run_needs() {
     assert!(run.status.success(), "{stderr}");
     assert!(stderr.contains("Run finished: COMPLETE"), "{stderr}");
     let ledger: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(project.join(".agent/run.json")).unwrap())
+        serde_json::from_str(&std::fs::read_to_string(project.join(".tenaz/run.json")).unwrap())
             .unwrap();
     assert_eq!(ledger["launch"]["mediaTimeoutSec"], 99);
     assert_eq!(ledger["launch"]["comfyui"], origin);
