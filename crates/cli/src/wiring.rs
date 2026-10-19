@@ -251,8 +251,9 @@ pub async fn wire(
         lease: (config.harness != "fake").then_some(lease),
         engine_metrics: PrometheusMetrics::from_base_url(&base_url)
             .map(|m| Arc::new(m) as Arc<dyn tenaz_core::ports::EngineMetricsSource>),
-        memory: cfg!(target_os = "macos")
-            .then(|| Arc::new(MacMemoryProbe::new(port)) as Arc<dyn tenaz_core::ports::MemoryProbe>),
+        memory: cfg!(target_os = "macos").then(|| {
+            Arc::new(MacMemoryProbe::new(port)) as Arc<dyn tenaz_core::ports::MemoryProbe>
+        }),
     };
     Ok(Wired { deps, services })
 }

@@ -20,7 +20,7 @@ crates/
 
 Pure modules, each unit-tested without I/O:
 
-| Module | Responsibility (ported from `docs/reference/task-loop/task-loop.mjs`) |
+| Module | Responsibility |
 |---|---|
 | `params` | Run parameters, defaults and `key=value` overrides pinned in `run.json`. |
 | `task` | Task IDs (`T007`, `T007a`), statuses, card frontmatter parse and field updates. |
@@ -40,15 +40,15 @@ Pure modules, each unit-tested without I/O:
 `Session`, `Vcs`, `VerifyRunner`, `Clock`, `Notifier`, `MemoryProbe`,
 `EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
-holds the scripted harness that plays `fake-pi.mjs`'s script and a fast
+holds the scripted harness that plays a fixed session script and a fast
 clock, for the crates above the core.
 `orchestrator` is the application service: phases (bootstrap, loop, final),
 the session wrapper with engine retries, capacity caps and continuations,
 the task attempt loop with review, split and block, and pause and resume.
 
-State lives on disk under `.agent/` in the project, exactly as the task loop
-lays it out, so a run survives the process and the user's existing tooling
-(`jq` over the journal, `git log`) keeps working.
+State lives on disk under `.agent/` in the project, so a run survives the
+process and the user's existing tooling (`jq` over the journal, `git log`)
+keeps working.
 
 ## Harness adapters
 
@@ -59,7 +59,7 @@ module with unit tests turns the harness's own records into those events.
 | | `tenaz-acp` (fx) | `tenaz-pi` (Pi) |
 |---|---|---|
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
-| Per session | `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` (the task loop's `piArgs`) |
+| Per session | `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
 | Prompt | `session/prompt` | `{"id":"prompt-N","type":"prompt","message":...}`; a `response` that is not `success` or whose disposition is `handled` becomes `PromptRejected` |
 | Steer | none in ACP; recorded only | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
 | Abort | `session/cancel` | `clear_queue` then `abort`; `agent_settled {aborted:true}` follows |
@@ -71,8 +71,7 @@ module with unit tests turns the harness's own records into those events.
 
 `tenaz init --harness pi` pins `pi --version` and, when `~/.pi/agent/models.json`
 lists the provider, takes the base URL, context window and inputs from the
-model's entry (a provider that does not list the model is an error, as in the
-task loop). The `fake-pi` binary in `tenaz-pi` is a scripted Pi that speaks the
+model's entry (a provider that does not list the model is an error). The `fake-pi` binary in `tenaz-pi` is a scripted Pi that speaks the
 protocol without a model: the adapter's integration tests spawn it.
 
 ## Testing
@@ -80,7 +79,7 @@ protocol without a model: the adapter's integration tests spawn it.
 - Unit tests next to each core module.
 - Adapter conformance tests against fakes or a temporary git repository.
 - One end-to-end test drives the whole loop with a scripted fake harness
-  and a real temporary git repository, the descendant of `run-fake.sh`.
+  and a real temporary git repository.
 - The `tenaz` binary runs the fake harness end to end through the real
   wiring (proxy, git, verify) in `crates/cli/tests/cli.rs`.
 - The Pi adapter runs against the scripted `fake-pi` binary: a tool turn,
@@ -88,7 +87,7 @@ protocol without a model: the adapter's integration tests spawn it.
   error with a capacity message, a refused prompt, the stderr log, a close
   that has to kill. `pi --version` is checked when Pi is installed.
 - Nothing in `cargo test` needs fx, Pi, Sushi or ComfyUI; checks against the
-  real ones are listed in `STATUS.md`.
+  real ones are listed in `COMPATIBILITY.md`.
 
 ## Conventions
 
@@ -96,4 +95,5 @@ protocol without a model: the adapter's integration tests spawn it.
 - Errors: `thiserror` enums per boundary; `anyhow` only in the binary.
 - Async: tokio. Ports that wrap blocking tools (git, verify) are synchronous
   and short; the orchestrator calls them directly.
-- Field names in `run.json` and the journal keep the task loop's names.
+- Field names in `run.json` and the journal are kept stable across
+  versions, so scripts that read them keep working.

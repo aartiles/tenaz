@@ -199,7 +199,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_match_the_task_loop() {
+    fn defaults_are_the_documented_ones() {
         let p = RunParams::default();
         assert_eq!(p.max_attempts, 3);
         assert_eq!(p.context_floor, 32768);

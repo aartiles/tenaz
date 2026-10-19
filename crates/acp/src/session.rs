@@ -379,7 +379,10 @@ impl Session for AcpSession {
                 // The connection ended with an error: usually the agent process
                 // exited, and the error carries its status and stderr tail.
                 if let Some(log) = &self.stderr_log {
-                    crate::append_line(log, &format!("[tenaz] the agent connection ended: {error}"));
+                    crate::append_line(
+                        log,
+                        &format!("[tenaz] the agent connection ended: {error}"),
+                    );
                 }
                 SessionExit { code: Some(1) }
             }

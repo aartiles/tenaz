@@ -313,7 +313,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// The harness name and version to pin and, with Pi, the model's entry in
-/// `~/.pi/agent/models.json` (the task loop's `modelConfig`).
+/// `~/.pi/agent/models.json`.
 fn pin_harness(
     harness: HarnessKind,
     fx_bin: &std::path::Path,

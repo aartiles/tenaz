@@ -1,8 +1,8 @@
 //! End-to-end: the whole loop against the scripted harness and a real
-//! temporary git repository, the descendant of `run-fake.sh`. It exercises
-//! bootstrap with engine failures, the capacity cap, a context stop and its
-//! continuation, a pause and resume, every watchdog, a review rejection, a
-//! split, a replan, out-of-role edits, and the final review.
+//! temporary git repository. It exercises bootstrap with engine failures,
+//! the capacity cap, a context stop and its continuation, a pause and
+//! resume, every watchdog, a review rejection, a split, a replan,
+//! out-of-role edits, and the final review.
 
 use std::path::Path;
 use std::sync::Arc;

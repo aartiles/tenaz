@@ -207,7 +207,7 @@ impl Runner {
         }
         self.ledger.last_errors = None;
         self.ledger.phase = Phase::Loop;
-        self.ledger.checkpoint = Some(self.deps.vcs.commit_all("task-loop: bootstrap accepted")?);
+        self.ledger.checkpoint = Some(self.deps.vcs.commit_all("tenaz: bootstrap accepted")?);
         self.save()?;
         self.log(&format!(
             "Bootstrap accepted: {} tasks, {} requirements",
@@ -228,7 +228,7 @@ impl Runner {
         let before = self
             .deps
             .vcs
-            .commit_all(&format!("task-loop: bookkeeping before {role}"))?;
+            .commit_all(&format!("tenaz: bookkeeping before {role}"))?;
         let tasks = self.project.load_backlog().backlog;
         let mut extra = vec![
             ("Task list".to_owned(), tasks.table()),
@@ -321,7 +321,7 @@ impl Runner {
         let suffix = task.map(|t| format!(" {}", t.id)).unwrap_or_default();
         self.deps
             .vcs
-            .commit_all(&format!("task-loop: {role}{suffix}"))?;
+            .commit_all(&format!("tenaz: {role}{suffix}"))?;
         let added: Vec<TaskId> = after
             .ids()
             .filter(|id| !tasks.contains(id))
@@ -381,7 +381,7 @@ impl Runner {
                 self.ledger.checkpoint = Some(
                     self.deps
                         .vcs
-                        .commit_all(&format!("task-loop: {} split into {names}", task.id))?,
+                        .commit_all(&format!("tenaz: {} split into {names}", task.id))?,
                 );
                 self.journal(JournalRecord::Task {
                     task: task.id.clone(),
@@ -403,7 +403,7 @@ impl Runner {
         self.ledger.checkpoint = Some(
             self.deps
                 .vcs
-                .commit_all(&format!("task-loop: {} blocked", task.id))?,
+                .commit_all(&format!("tenaz: {} blocked", task.id))?,
         );
         self.journal(JournalRecord::Task {
             task: task.id.clone(),
@@ -431,7 +431,7 @@ impl Runner {
             let base = self
                 .deps
                 .vcs
-                .commit_all(&format!("task-loop: start {}", task.id))?;
+                .commit_all(&format!("tenaz: start {}", task.id))?;
             self.ledger.current = Some(CurrentTask {
                 task: task.id.clone(),
                 base,
@@ -505,7 +505,7 @@ impl Runner {
                                     ));
                                 }
                                 self.deps.vcs.commit_all(&format!(
-                                    "task-loop: review {} attempt {attempt}",
+                                    "tenaz: review {} attempt {attempt}",
                                     task.id
                                 ))?;
                                 self.save()?;
@@ -634,7 +634,7 @@ impl Runner {
         self.ledger.checkpoint = Some(
             self.deps
                 .vcs
-                .commit_all(&format!("task-loop: {} done", task.id))?,
+                .commit_all(&format!("tenaz: {} done", task.id))?,
         );
         let stopped_sessions = self
             .ledger
@@ -923,10 +923,9 @@ impl Runner {
             )?;
         }
         self.ledger.final_cycles += 1;
-        self.deps.vcs.commit_all(&format!(
-            "task-loop: final review {}",
-            self.ledger.final_cycles
-        ))?;
+        self.deps
+            .vcs
+            .commit_all(&format!("tenaz: final review {}", self.ledger.final_cycles))?;
         self.journal(JournalRecord::FinalReview {
             cycle: self.ledger.final_cycles,
             verdict: verdict.clone(),

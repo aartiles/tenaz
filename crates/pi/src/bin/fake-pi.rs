@@ -1,8 +1,8 @@
-//! A scripted stand-in for `pi --mode rpc`, the protocol half of the task
-//! loop's `fake-pi.mjs`: it speaks Pi's JSON lines on stdin and stdout and
-//! plays a short script chosen by the prompt text, so the adapter can be
-//! tested without a model. `--version` prints a version like Pi does. When
-//! `FAKE_PI_ARGS` names a file, the command line is written there.
+//! A scripted stand-in for `pi --mode rpc`: it speaks Pi's JSON lines on
+//! stdin and stdout and plays a short script chosen by the prompt text, so
+//! the adapter can be tested without a model. `--version` prints a version
+//! like Pi does. When `FAKE_PI_ARGS` names a file, the command line is
+//! written there.
 //!
 //! Prompts: `tool` (one tool turn with streaming updates, then a reply),
 //! `loop` (tool turns until aborted), `steer` (tool turns until steered,

@@ -14,9 +14,9 @@ pub struct GitRepo {
 
 const IDENTITY: [&str; 6] = [
     "-c",
-    "user.name=Task Loop",
+    "user.name=Tenaz",
     "-c",
-    "user.email=task-loop@localhost",
+    "user.email=tenaz@localhost",
     "-c",
     "commit.gpgsign=false",
 ];

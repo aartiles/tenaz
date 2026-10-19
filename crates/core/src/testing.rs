@@ -1,5 +1,5 @@
 //! Fakes for tests: a scripted harness that exercises every orchestrator
-//! path without a model (the port of `fake-pi.mjs`), and a clock that runs
+//! path without a model (a fixed session script), and a clock that runs
 //! faster than real time.
 
 use std::path::{Path, PathBuf};

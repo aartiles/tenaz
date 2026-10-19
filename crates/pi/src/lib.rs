@@ -1,8 +1,8 @@
 //! The Pi harness adapter: runs `pi --mode rpc` as a subprocess per session
-//! and turns its JSON event stream into the runner's session events, as the
-//! original task loop did. Pi talks to the engine through its own provider
-//! configuration (`~/.pi/agent/models.json`), so the engine proxy is
-//! optional with this harness.
+//! and turns its JSON event stream into the runner's session events. Pi
+//! talks to the engine through its own provider configuration
+//! (`~/.pi/agent/models.json`), so the engine proxy is optional with this
+//! harness.
 
 pub mod models;
 mod session;
@@ -74,7 +74,7 @@ impl PiLaunch {
         self
     }
 
-    /// The command line of one session, the task loop's `piArgs`: RPC mode,
+    /// The command line of one session: RPC mode,
     /// a session directory or no persistence, the model and thinking level,
     /// the tool allowlist, no MCP, no extensions, no skill discovery (pinned
     /// skills are passed explicitly), project files trusted, offline.

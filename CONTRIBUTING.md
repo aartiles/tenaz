@@ -47,7 +47,7 @@ path, fake engines sit under the lease, and fakes stand in for the ACP agent,
 the Pi process, the engine behind the proxy and ComfyUI. Keep it that way:
 a new adapter comes with a fake or a recorded transcript, and pure
 translation code gets unit tests. Checks against real tools are documented in
-`docs/` (see [`docs/STATUS.md`](docs/STATUS.md)) rather than added to
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) rather than added to
 `cargo test`.
 
 ## License

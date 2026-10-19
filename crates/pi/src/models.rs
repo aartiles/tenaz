@@ -1,6 +1,5 @@
 //! Pi's provider configuration, `~/.pi/agent/models.json`: the base URL,
-//! context window and inputs of the model a run pins, read at init as the
-//! task loop's `modelConfig` did.
+//! context window and inputs of the model a run pins, read at init.
 
 use std::path::{Path, PathBuf};
 

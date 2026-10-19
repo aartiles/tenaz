@@ -264,7 +264,7 @@ impl Runner {
         if !self.deps.vcs.changed_paths()?.is_empty() {
             self.deps
                 .vcs
-                .commit_all(&format!("task-loop: bookkeeping before {role}"))?;
+                .commit_all(&format!("tenaz: bookkeeping before {role}"))?;
         }
         let label = self.ledger.next_label(role, ctx.task.as_ref());
         self.ledger.inflight = Some(Inflight {

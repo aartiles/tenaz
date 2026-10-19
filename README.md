@@ -1,118 +1,143 @@
 # Tenaz
 
-A single-model runner for hardware that holds one model at a time: a Mac with 16–64 GB of
-unified memory, or one consumer GPU. Given a goal, it plans, splits the work
-into tasks, and drives an agent harness session by session until the goal is
-met, while only one engine (the LLM, an image model, ...) is resident at any
-moment.
+Give it a goal; it plans the work, splits it into tasks and drives a coding
+agent session by session until the goal is met, on a local model.
 
-It is the port of the task loop in
-[`docs/reference/task-loop/`](docs/reference/task-loop/) to Rust, generalised
-over harnesses and engines, plus the pieces the handoff asked for: an engine
-proxy, a lease over the engines, and media tools over MCP. See
-[`docs/SINGLE-MODEL-RUNNER-HANDOFF.md`](docs/SINGLE-MODEL-RUNNER-HANDOFF.md)
-for the design and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the
-crates. [`docs/STATUS.md`](docs/STATUS.md) says what is verified and what is
-open.
+Tenaz is built for machines that fit **one model at a time**: a laptop or a
+single GPU running a local LLM. Long agent runs on that kind of hardware fail
+in predictable ways: the context fills up, the engine runs out of memory or
+restarts, the model loops on the same tool call, and an image or speech model
+cannot be loaded next to the LLM. Tenaz handles those failures instead of
+counting them against the work.
 
-## What it guarantees
+## How it works
 
-- **One resident model.** The lease manager owns the memory. A media tool
-  unloads the LLM, runs the job, frees the media engine and reloads the LLM.
-- **Media through the same lease.** The session calls `generate_image` over
-  MCP; the proxy holds its LLM requests while the LLM is away, so the harness
-  never sees a refused connection.
-- **Deterministic progress.** The plan, task state, retries and blocking
-  decisions are the runner's. Engine failures are retried without charging
-  the task. A run survives the process: pause with Ctrl-C, run again.
-- **Plug and play.** fx over ACP and Pi over its RPC mode as harnesses;
-  Sushi and any OpenAI-compatible engine with start/stop commands; ComfyUI
-  for images.
+```text
+ goal ─▶ bootstrap ─▶ ┌─ build task ─▶ verify ─▶ review ─▶ commit ─┐ ─▶ final review ─▶ done
+                      └──────────── retry, split, block or replan ◀──┘
+```
+
+- **Fresh sessions, state on disk.** Every unit of work is a new agent
+  session with a short context. The spec, task cards, notes and progress live
+  in the project under `.agent/`, and every step is a git commit.
+- **The runner decides, not the model.** Tenaz runs the project's `verify`
+  script itself, commits or reverts, and decides when to retry, split a task,
+  block or replan.
+- **Engine failures are not task failures.** A crash, a refused connection or
+  a smaller context than expected is retried with backoff without charging
+  the task.
+- **Watchdogs.** Loops, repeated calls, idle turns and huge outputs get a
+  steering message first, then the session is stopped.
+- **One resident model.** When the agent asks for an image, Tenaz unloads the
+  LLM, runs the image model, frees it and reloads the LLM. The agent's
+  requests wait meanwhile instead of failing.
+- **Pause and resume.** Ctrl-C pauses after the current session; run again
+  to continue.
+
+## What you need
+
+- macOS on Apple silicon or Linux x86_64, and `git`.
+- **A coding agent** Tenaz can drive: [fx](https://github.com/vercel-labs/fx)
+  (over ACP) or [Pi](https://github.com/earendil-works/pi) (over its RPC mode).
+- **An OpenAI-compatible engine** serving a model with tool calling:
+  llama.cpp's `llama-server`, LM Studio, Ollama, vLLM, Sushi or similar.
+  Reasoning and prefix caching are checked before the first session.
+- Optional: [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for images.
+
+How much memory depends on the model you choose, not on Tenaz.
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) lists what has been
+tested and what has not.
 
 ## Install
 
-From a release: download the archive for your platform (macOS arm64 or
-Linux x86_64) from the GitHub releases page, check it and put `tenaz` on your
-`PATH`:
+Download the archive for your platform from the
+[releases page](../../releases), unpack it and put `tenaz` on your `PATH`:
 
 ```bash
-shasum -a 256 -c tenaz-v0.1.0-aarch64-apple-darwin.tar.gz.sha256
+tar -xzf tenaz-*.tar.gz && install -m 755 tenaz-*/tenaz ~/.local/bin/tenaz
+```
+
+Or build from source with a stable Rust toolchain:
+
+```bash
+cargo install --locked --git https://github.com/OWNER/tenaz tenaz
+```
+
+## Try it without a model
+
+The scripted harness plays a fixed session script, with engine failures,
+watchdog stops and a review rejection, against a real git repository. It
+needs no agent and no engine:
+
+```bash
+echo "Build four trivial files." > brief.md
 ```
 
 ```bash
-tar -xzf tenaz-v0.1.0-aarch64-apple-darwin.tar.gz
+tenaz init --project demo --brief brief.md --harness fake --model fake --provider fake --set engineRetryBaseSec=0 --set notify=false
 ```
 
 ```bash
-install -m 755 tenaz-v0.1.0-aarch64-apple-darwin/tenaz ~/.local/bin/tenaz
+tenaz run --project demo
 ```
 
-From source, with a stable Rust toolchain:
+Then look at `demo/.agent/` and `git -C demo log --oneline`.
+
+## Run it on a real goal
+
+Write what you want in a brief, then pin the model and the agent. With
+llama.cpp's server on its default port:
 
 ```bash
-cargo install --locked --path crates/cli
-```
-
-## Build
-
-Requires a stable Rust toolchain (`rustup`; the ADR pins why Rust).
-
-```bash
-cargo build --release
+tenaz init --project my-goal --brief brief.md --model my-model --provider llamacpp --base-url http://127.0.0.1:8080/v1 --context-window 65536
 ```
 
 ```bash
-cargo test --workspace
-```
-
-The tests need no model, engine, fx or Pi: a scripted harness exercises every
-orchestrator path, fake engines sit under the lease, and fakes stand in for
-the ACP agent, the Pi process, the engine behind the proxy, and ComfyUI.
-
-## Use
-
-```bash
-tenaz init --project runs/my-goal --brief brief.md \
-  --model Qwen3.8-Flash-Next-Sushi-2.6bpw --provider sushi \
-  --base-url http://127.0.0.1:12345/v1 --context-window 131072 --vision
+tenaz run --project my-goal --engine generic
 ```
 
 ```bash
-tenaz run --project runs/my-goal --fx-bin /path/to/fx \
-  --comfyui http://127.0.0.1:8188 --workflow default=workflows/txt2img.json
+tenaz status --project my-goal
 ```
 
-```bash
-tenaz status --project runs/my-goal
-```
-
-- `init` copies the brief to `BRIEF.md`, the shared rules to `AGENTS.md`, the
-  role prompts to `.agent/prompts/`, pins the model, harness version and
-  parameters in `.agent/run.json`, and makes the first commit.
-- `run` checks the pins, probes the engine (reasoning, prefix cache, vision),
-  then loops: bootstrap, build, verify, review, split or block, replan, final
-  review. Ctrl-C pauses after the current session; `run` again continues.
-  `--resume` continues a BLOCKED run. `--set key=value` at `init` overrides
-  a parameter; `tenaz params` lists them.
+- `init` creates the project, copies the brief to `BRIEF.md`, adds the
+  agent rules (`AGENTS.md`) and role prompts (`.agent/prompts/`), pins the
+  model, the agent's version and the run parameters in `.agent/run.json`,
+  and makes the first commit. `--harness pi` uses Pi instead of fx and
+  reads the model's URL and context window from `~/.pi/agent/models.json`.
+  `--vision` says the model reads images. `--set key=value` overrides a
+  parameter; `tenaz params` lists them.
+- `run` probes the engine, then works until the goal is met or a task
+  blocks. `--resume` continues a blocked run after you have fixed what
+  blocked it.
 - `status` reads files only and is safe while a run works.
-- `--harness pi` at `init` pins `pi --version` and reads the model's base
-  URL, context window and inputs from `~/.pi/agent/models.json`, as the task
-  loop did; `run` then spawns `pi --mode rpc` per session (`--pi-bin` names
-  the executable). Pi talks to the engine directly, so `--no-proxy` is fine
-  there.
-- `--harness fake` at `init` runs the scripted harness end to end without a
-  model (what the tests do).
 
-State lives under `.agent/` in the project exactly as the task loop laid it
-out: `spec.md`, `map.md`, `tasks/`, `notes/`, `reviews/`, the `run.json`
-ledger, the `journal.jsonl` facts, and `private/` for raw session streams,
-prompts, per-request engine timings and memory samples.
+To let Tenaz swap models, give it the commands that start and stop your
+engine (`--engine-start`, `--engine-stop`). To give the agent an image tool,
+point it at ComfyUI and an API-format workflow:
 
-## Publication
+```bash
+tenaz run --project my-goal --comfyui http://127.0.0.1:8188 --workflow default=workflows/txt2img.json
+```
 
-Do not publish, push to a public remote or release anything from this
-repository without the owner's explicit approval for that specific
-publication.
+The prompts in `.agent/prompts/` and the rules in `AGENTS.md` are plain
+Markdown in your project; edit them to change how the agent works. Skill
+directories passed with `--skill` at `init` are pinned read-only into
+`.agent/skills/`.
+
+## How it compares
+
+Model swappers such as llama-swap, Ollama's `keep_alive` or LM Studio's JIT
+loading load models on demand, but know nothing of a goal or a task. Loop
+patterns such as Ralph keep an agent going, but assume the engine is always
+there and count an engine failure as a task failure. Tenaz combines a
+deterministic goal loop with one lease over every model the run uses.
+
+## Documentation
+
+- [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md): what is tested, known gaps.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): the crates and how they fit.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): building, testing, conventions.
 
 ## License
 

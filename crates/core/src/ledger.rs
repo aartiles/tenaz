@@ -1,6 +1,6 @@
 //! `run.json` (the ledger: where the run is) and `journal.jsonl` (append-only
-//! facts, one JSON object per line). Field names follow the task loop so the
-//! owner's `jq` habits keep working.
+//! facts, one JSON object per line). Field names are kept stable so
+//! scripts that read them (`jq` over the journal) keep working.
 
 use serde::{Deserialize, Serialize};
 

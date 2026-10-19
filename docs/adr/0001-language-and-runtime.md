@@ -4,25 +4,19 @@ Status: accepted, 2026-10-17.
 
 ## Context
 
-`docs/SINGLE-MODEL-RUNNER-HANDOFF.md` proposes Rust with the harness as a
-subprocess, for three reasons: fx cannot be embedded from Rust or Zig
-anyway, process isolation is wanted, and one static binary is the
-distribution the audience needs.
+Tenaz supervises a harness (fx, Pi or another ACP agent), proxies an
+engine, serves MCP tools and keeps a state machine on disk. Three
+constraints shape the choice:
 
-Facts about the development machine on 2026-10-17:
+- The harness must run as a subprocess: fx cannot be embedded, and the
+  runner has to be able to kill, restart and outlive a session.
+- The people it is for run llama.cpp, Ollama, LM Studio or similar. They
+  should not need a language runtime to install the runner.
+- The orchestration (phases, ledger, recovery ladder, lease) is a state
+  machine whose mistakes cost hours of model time.
 
-- No Rust toolchain is installed (no `cargo`, `rustc`, `rustup`, nothing
-  from Homebrew). Installing it is one `rustup` command, user-level and
-  reversible with `rustup self uninstall`.
-- Node 24.16 is installed. The code being ported (`task-loop.mjs`, its fake
-  Pi and its self-test) is JavaScript, and the owner's other repositories
-  are JavaScript and Python.
-- The fx 0.0.14 binary used by the spike is gone with the scratchpad. It
-  must be downloaded again from the official release for any ACP test.
-- Pi and Sushi 1.2.4 are installed; Sushi is serving
-  `Qwen3.8-Flash-Next-Sushi-2.6bpw` on port 12345.
-
-Both protocols the runner speaks have official SDKs in both languages:
+Both protocols the runner speaks have official SDKs in both candidate
+languages:
 
 | | Rust | TypeScript |
 |---|---|---|
@@ -34,31 +28,22 @@ Both protocols the runner speaks have official SDKs in both languages:
 
 ## Options
 
-### A. Rust (the handoff's choice)
+### A. Rust
 
-- One binary per platform; no runtime for users of llama.cpp, Ollama or LM
-  Studio to install.
-- The state machine (phases, ledger, recovery ladder, lease) is checked by
-  the compiler: exhaustive matches, no implicit nulls, `serde` for the
-  ledger and journal schemas.
-- Cost: a full rewrite with the JavaScript as the specification, slower
-  iteration, and a toolchain the owner does not have today.
+- One binary per platform; nothing else to install.
+- The state machine is checked by the compiler: exhaustive matches, no
+  implicit nulls, `serde` for the ledger and journal schemas.
+- Cost: slower iteration than a scripting language.
 
-### B. TypeScript on Node 24
+### B. TypeScript on Node
 
-- The port is a restructuring of code the owner already wrote and reads.
-- Faster iteration; the fake-harness end-to-end test is a direct
-  descendant of `run-fake.sh`.
+- Faster iteration.
 - Cost: distribution needs Node (or a Node single-executable build), which
-  weakens "plug and play" for the audience the handoff names.
+  weakens "plug and play".
 
 ## Decision
 
-**A, Rust.** The owner confirmed the handoff's choice on 2026-10-17. The
-reasons still hold, both protocols have first-party crates, and the
-toolchain gap was a one-minute install (`rustup` 1.99.1, user-level, with
-`--no-modify-path`; use `~/.cargo/bin` or `. ~/.cargo/env`). The
-architecture is:
+**A, Rust.** The architecture is:
 
 - a domain core with no I/O (task cards, scheduling, budgets, watchdog
   rules, recovery ladder, lease state), fully unit-tested;
@@ -67,13 +52,10 @@ architecture is:
 - adapters per port, each with a conformance test against a fake or a
   recorded fixture;
 - an end-to-end test that drives the whole loop with a scripted fake
-  harness, as `run-fake.sh` does today.
+  harness.
 
 ## Consequences
 
 - Edition 2024, stable toolchain pinned in `rust-toolchain.toml`.
 - A Cargo workspace with one crate per boundary (`docs/ARCHITECTURE.md`).
 - `unsafe_code = "forbid"` and clippy `pedantic` as warnings in CI.
-- The JavaScript in `docs/reference/` is the specification of the port;
-  every behaviour listed in the handoff gets a test before it is marked
-  carried over.

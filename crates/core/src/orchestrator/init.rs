@@ -104,7 +104,7 @@ pub fn init(
     if let Some(existing) = project.read_if("AGENTS.md")
         && existing != templates.agents_md
     {
-        return Err(RunError::Precondition("The project already has a different AGENTS.md. Move it away first; the task loop owns that file.".to_owned()));
+        return Err(RunError::Precondition("The project already has a different AGENTS.md. Move it away first; Tenaz owns that file.".to_owned()));
     }
     project.create_layout()?;
     templates.write_into(project)?;
@@ -128,7 +128,7 @@ pub fn init(
     );
     project.write(".agent/journal.jsonl", "")?;
     project.save_ledger(&ledger)?;
-    ledger.checkpoint = Some(vcs.commit_all("task-loop: init")?);
+    ledger.checkpoint = Some(vcs.commit_all("tenaz: init")?);
     project.save_ledger(&ledger)?;
     Ok(ledger)
 }
@@ -142,7 +142,7 @@ pub(crate) fn refresh_templates(
     templates.write_into(project)?;
     vcs.commit_paths(
         &["AGENTS.md", ".agent/prompts"],
-        "task-loop: refresh shared rules and prompts",
+        "tenaz: refresh shared rules and prompts",
     )?;
     Ok(())
 }

@@ -183,7 +183,7 @@ impl Runner {
     fn finish(&mut self, phase: Phase) -> Result<(), RunError> {
         self.ledger.phase = phase;
         self.ledger.ended_at = Some(self.now());
-        self.ledger.checkpoint = Some(self.deps.vcs.commit_all(&format!("task-loop: {phase}"))?);
+        self.ledger.checkpoint = Some(self.deps.vcs.commit_all(&format!("tenaz: {phase}"))?);
         self.save()?;
         self.journal(JournalRecord::Run {
             outcome: phase.to_string(),
