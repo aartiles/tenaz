@@ -122,6 +122,7 @@ async fn a_pause_after_a_long_wait_keeps_the_aborted_turn() {
     let templates =
         Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();
     let options = InitOptions {
+        launch: tenaz_core::ledger::Launch::default(),
         brief: Some(brief),
         config,
         params,

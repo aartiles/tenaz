@@ -2,6 +2,8 @@
 //! facts, one JSON object per line). Field names are kept stable so
 //! scripts that read them (`jq` over the journal) keep working.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::metrics::EngineSummary;
@@ -74,6 +76,52 @@ impl ModelConfig {
     }
 }
 
+/// The API Tenaz loads and unloads the model through.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EngineApi {
+    /// Sushi's `/v1/load-model` and `/v1/unload-model`.
+    #[default]
+    Sushi,
+    /// Any OpenAI-compatible engine, started and stopped by commands.
+    Generic,
+}
+
+/// How `run` starts the engine, the harness and the media tools. Pinned at
+/// `init` so that `run` needs no flags; a flag given to `run` replaces the
+/// pinned value and is saved. A `run.json` written before this existed
+/// reads as the defaults.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Launch {
+    pub engine: EngineApi,
+    /// Generic engine: the command line that starts it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_start: Option<String>,
+    /// Generic engine: the command line that stops it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_stop: Option<String>,
+    /// Talk to the engine directly instead of through the proxy.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_proxy: bool,
+    /// The harness executable (`fx`, `pi` or a path); `None` is the
+    /// harness's own name on `PATH`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness_bin: Option<String>,
+    /// Arguments that put fx in ACP mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fx_args: Option<Vec<String>>,
+    /// `ComfyUI` base URL; enables the image tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comfyui: Option<String>,
+    /// Image workflows by name: absolute paths to API-format workflow files.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub workflows: BTreeMap<String, String>,
+    /// Media job time limit, in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_timeout_sec: Option<u64>,
+}
+
 /// The engine preflight (reasoning, prefix cache, vision).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Preflight {
@@ -140,6 +188,8 @@ pub struct Ledger {
     pub templates_sha256: String,
     pub runner_version: String,
     pub config: ModelConfig,
+    #[serde(default)]
+    pub launch: Launch,
     pub params: RunParams,
     #[serde(default)]
     pub skills: Vec<SkillPin>,
@@ -192,6 +242,7 @@ impl Ledger {
             templates_sha256,
             runner_version,
             config,
+            launch: Launch::default(),
             params,
             skills,
             phase: Phase::Bootstrap,

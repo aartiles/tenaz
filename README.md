@@ -85,40 +85,54 @@ Then look at `demo/.agent/` and `git -C demo log --oneline`.
 
 ## Run it on a real goal
 
-Write what you want in a brief, then pin the model and the agent. With
-llama.cpp's server on its default port:
+Start your engine with a model loaded, then:
 
 ```bash
-tenaz init --project my-goal --brief brief.md --model my-model --provider llamacpp --base-url http://127.0.0.1:8080/v1 --context-window 65536
+tenaz init
+```
+
+It asks what to build, finds the coding agents on your `PATH`, the engines
+on their usual ports (Sushi 12345, llama.cpp 8080, LM Studio 1234, Ollama
+11434, vLLM 8000) with the models they serve and their context windows,
+and ComfyUI on 8188 when it runs. It shows what it found, prints the same
+setup as a `tenaz init` command line for next time, and creates the project.
+Then, from the project directory:
+
+```bash
+tenaz run
 ```
 
 ```bash
-tenaz run --project my-goal --engine generic
+tenaz status
 ```
 
-```bash
-tenaz status --project my-goal
-```
-
-- `init` creates the project, copies the brief to `BRIEF.md`, adds the
+- `init` creates the project, writes the goal to `BRIEF.md`, adds the
   agent rules (`AGENTS.md`) and role prompts (`.agent/prompts/`), pins the
-  model, the agent's version and the run parameters in `.agent/run.json`,
-  and makes the first commit. `--harness pi` uses Pi instead of fx and
-  reads the model's URL and context window from `~/.pi/agent/models.json`.
-  `--vision` says the model reads images. `--set key=value` overrides a
-  parameter; `tenaz params` lists them.
-- `run` probes the engine, then works until the goal is met or a task
-  blocks. `--resume` continues a blocked run after you have fixed what
+  model, the agent, how to start the engine and the run parameters in
+  `.agent/run.json`, and makes the first commit.
+- `run` reads all of that from `run.json`, probes the engine, then works
+  until the goal is met or a task blocks. A launch flag given to `run`
+  (`--comfyui`, `--engine-start`, ...) replaces the pinned value and is
+  saved. `--resume` continues a blocked run after you have fixed what
   blocked it.
 - `status` reads files only and is safe while a run works.
 
-To let Tenaz swap models, give it the commands that start and stop your
-engine (`--engine-start`, `--engine-stop`). To give the agent an image tool,
-point it at ComfyUI and an API-format workflow:
+### Without questions
+
+Every answer has a flag, and `init` with `--model` asks nothing, for
+scripts and CI. With llama.cpp's server on its default port:
 
 ```bash
-tenaz run --project my-goal --comfyui http://127.0.0.1:8188 --workflow default=workflows/txt2img.json
+tenaz init --project my-goal --brief brief.md --model my-model --base-url http://127.0.0.1:8080/v1 --context-window 65536
 ```
+
+`--harness pi` uses Pi instead of fx and reads the model's URL and context
+window from `~/.pi/agent/models.json`. `--vision` says the model reads
+images. `--set key=value` overrides a parameter; `tenaz params` lists them.
+To give the agent an image tool, point it at ComfyUI and an API-format
+workflow (`--comfyui http://127.0.0.1:8188 --workflow default=txt2img.json`);
+with an engine other than Sushi, `--engine-stop` and `--engine-start` let
+Tenaz free the memory while images render.
 
 The prompts in `.agent/prompts/` and the rules in `AGENTS.md` are plain
 Markdown in your project; edit them to change how the agent works. Skill

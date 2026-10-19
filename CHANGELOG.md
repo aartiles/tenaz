@@ -9,6 +9,17 @@ uses [Semantic Versioning](https://semver.org/).
 ### Added
 
 - `tenaz` binary with `init`, `run`, `status` and `params`.
+- Setup wizard: `tenaz init` without `--model`, in a terminal, finds the
+  coding agents on `PATH`, the engines on their usual ports with their
+  models, context windows and vision, and ComfyUI, then prints the
+  equivalent command line. `--interactive` forces it with a piped stdin.
+- `run.json` pins how to launch the run (`launch`: engine API and
+  start/stop commands, proxy, harness executable, ComfyUI and workflows,
+  media timeout), so `tenaz run` needs no flags; a flag given to `run`
+  replaces the pinned value and is saved. `run` and `status` default to
+  the current directory.
+- Without `--engine`, `init` asks the engine at `--base-url` which API it
+  speaks (Sushi or generic) and names the provider after it.
 - Orchestrator: bootstrap, build, verify, review,
   split or block, replan and final review, with pause and resume.
 - Lease manager keeping one engine resident at a time.

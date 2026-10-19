@@ -13,7 +13,7 @@ crates/
   acp/       tenaz-acp       HarnessAdapter over ACP (fx and any ACP agent), harness as a subprocess.
   pi/        tenaz-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
   mcp/       tenaz-mcp       MCP server (streamable HTTP) exposing media tools that take the lease.
-  cli/       tenaz           the `tenaz` binary: init, run, status, preflight.
+  cli/       tenaz           the `tenaz` binary: init (flags or the setup wizard), run, status.
 ```
 
 ## Core (`tenaz-core`)

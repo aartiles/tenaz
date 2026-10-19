@@ -6,7 +6,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ledger::{Ledger, ModelConfig, SkillPin};
+use crate::ledger::{Launch, Ledger, ModelConfig, SkillPin};
 use crate::params::RunParams;
 use crate::ports::{Clock, Vcs};
 use crate::project::Project;
@@ -74,6 +74,8 @@ pub struct InitOptions {
     /// Copied to `BRIEF.md`; without it the project must already have one.
     pub brief: Option<PathBuf>,
     pub config: ModelConfig,
+    /// How `run` starts the engine, harness and media tools.
+    pub launch: Launch,
     pub params: RunParams,
     /// Skill directories (each with a `SKILL.md`) to pin read-only.
     pub skills: Vec<PathBuf>,
@@ -126,6 +128,7 @@ pub fn init(
         options.params,
         skills,
     );
+    ledger.launch = options.launch;
     project.write(".agent/journal.jsonl", "")?;
     project.save_ledger(&ledger)?;
     ledger.checkpoint = Some(vcs.commit_all("tenaz: init")?);

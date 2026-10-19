@@ -2363,6 +2363,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "futures",
+ "reqwest",
  "serde_json",
  "tempfile",
  "tenaz-acp",

@@ -75,6 +75,7 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     let vcs = GitRepo::new(project.root());
     let clock = FastClock::new(100);
     let options = InitOptions {
+        launch: tenaz_core::ledger::Launch::default(),
         brief: Some(brief),
         config,
         params,
