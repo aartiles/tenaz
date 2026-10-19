@@ -268,6 +268,10 @@ pub struct SessionRecord {
     pub duration_ms: u64,
     pub engine: Option<EngineSummary>,
     pub memory: Option<crate::memory::MemoryWindow>,
+    /// The harness ended before the turn settled without being stopped:
+    /// exit code and stderr tail. Such a session is rerun, uncounted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_exit: Option<String>,
 }
 
 /// How a task ended.
@@ -324,6 +328,9 @@ pub enum JournalRecord {
         label: String,
         retry: u32,
         wait_s: u64,
+        /// `engine` (a provider error) or `harness` (the harness ended early).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause: Option<String>,
     },
     SkillChanged {
         skill: String,

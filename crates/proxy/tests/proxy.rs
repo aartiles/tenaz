@@ -21,10 +21,10 @@ async fn fake_engine() -> SocketAddr {
                 }
                 if body["stream"] == true {
                     assert_eq!(body["stream_options"]["include_usage"], true, "the proxy asks for usage in streams");
-                    let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":40}}}\n\ndata: [DONE]\n\n";
+                    let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":40}},\"timings\":{\"prompt_n\":50,\"cached_n\":40,\"prompt_ms\":12.5,\"predicted_ms\":30.0,\"draft_n\":8,\"draft_n_accepted\":6}}\n\ndata: [DONE]\n\n";
                     return ([("content-type", "text/event-stream")], sse).into_response();
                 }
-                axum::Json(serde_json::json!({"choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 3}})).into_response()
+                axum::Json(serde_json::json!({"choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 3}, "timings": {"prompt_n": 10, "prompt_ms": 4.0, "predicted_ms": 9.5}})).into_response()
             }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -110,6 +110,34 @@ async fn forwards_requests_and_records_usage_and_errors() {
     assert_eq!(error.status(), 400);
 
     let events = settle(&events, 5).await;
+    let timings: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            ProxyEvent::Completed { timings, .. } => Some(*timings),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(timings[0], None, "/v1/models carries no timings");
+    assert_eq!(
+        timings[1],
+        Some(smr_core::session::ServerTimings {
+            prompt_ms: Some(4.0),
+            decode_ms: Some(9.5),
+            ..Default::default()
+        }),
+        "timings from a JSON response"
+    );
+    assert_eq!(
+        timings[2],
+        Some(smr_core::session::ServerTimings {
+            prompt_ms: Some(12.5),
+            decode_ms: Some(30.0),
+            cached_tokens: Some(40),
+            drafted: Some(8),
+            accepted: Some(6)
+        }),
+        "timings, with drafts, from the last SSE chunk"
+    );
     let completed: Vec<_> = events
         .iter()
         .filter_map(|e| match e {

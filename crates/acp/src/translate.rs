@@ -103,12 +103,14 @@ impl Translator {
         usage: Usage,
         stop_reason: StopReason,
         error_message: Option<String>,
+        server: Option<smr_core::session::ServerTimings>,
     ) -> Vec<SessionEvent> {
         let text = std::mem::take(&mut self.text);
         let thinking_chars = std::mem::take(&mut self.thinking_chars);
         self.first_token_sent = false;
         vec![
             SessionEvent::MessageEnd {
+                server,
                 usage,
                 stop_reason,
                 error_message,
@@ -129,7 +131,7 @@ impl Translator {
                 input: self.last_used.unwrap_or(0),
                 ..Default::default()
             };
-            events.extend(self.request_end(usage, stop_reason(stop), None));
+            events.extend(self.request_end(usage, stop_reason(stop), None, None));
         }
         events.push(SessionEvent::Settled { aborted });
         events

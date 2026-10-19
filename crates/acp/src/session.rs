@@ -22,11 +22,13 @@ use crate::translate::{Translator, choose_option};
 
 /// What the engine proxy saw: one request's usage and why the engine
 /// stopped, or an engine error.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum EngineObservation {
     Completed {
         usage: Usage,
         stop_reason: StopReason,
+        /// The engine's own figures for the request, when it reported them.
+        server: Option<smr_core::session::ServerTimings>,
     },
     Error {
         message: String,
@@ -59,6 +61,7 @@ pub(crate) struct AcpSession {
     commands: mpsc::UnboundedSender<Command>,
     events: mpsc::UnboundedReceiver<SessionEvent>,
     raw_log: Option<std::path::PathBuf>,
+    stderr_log: Option<std::path::PathBuf>,
     task: Option<tokio::task::JoinHandle<Result<(), agent_client_protocol::Error>>>,
 }
 
@@ -145,16 +148,16 @@ impl AcpSession {
                                 Some(Command::Permission { id, allow }) => state.answer(&id, allow),
                             },
                             observation = recv_observation(&mut observations) => match observation {
-                                EngineObservation::Completed { usage, stop_reason } => {
+                                EngineObservation::Completed { usage, stop_reason, server } => {
                                     state.request_seen = true;
-                                    for event in state.translator.request_end(usage, stop_reason, None) {
+                                    for event in state.translator.request_end(usage, stop_reason, None, server) {
                                         state.emit(event);
                                     }
                                     state.emit(SessionEvent::TurnStart);
                                 }
                                 EngineObservation::Error { message } => {
                                     state.request_seen = true;
-                                    for event in state.translator.request_end(Usage::default(), StopReason::Error, Some(message)) {
+                                    for event in state.translator.request_end(Usage::default(), StopReason::Error, Some(message), None) {
                                         state.emit(event);
                                     }
                                     state.emit(SessionEvent::TurnStart);
@@ -199,6 +202,7 @@ impl AcpSession {
                 commands,
                 events,
                 raw_log: spec.raw_log,
+                stderr_log: spec.stderr_log,
                 task: Some(task),
             }),
             Ok(Err(message)) => Err(HarnessError::Spawn(message)),
@@ -371,7 +375,15 @@ impl Session for AcpSession {
         };
         match tokio::time::timeout(grace.max(Duration::from_millis(50)), task).await {
             Ok(Ok(Ok(()))) => SessionExit { code: Some(0) },
-            Ok(_) => SessionExit { code: Some(1) },
+            Ok(Ok(Err(error))) => {
+                // The connection ended with an error: usually the agent process
+                // exited, and the error carries its status and stderr tail.
+                if let Some(log) = &self.stderr_log {
+                    crate::append_line(log, &format!("[smr] the agent connection ended: {error}"));
+                }
+                SessionExit { code: Some(1) }
+            }
+            Ok(Err(_)) => SessionExit { code: Some(1) },
             Err(_) => SessionExit { code: None },
         }
     }

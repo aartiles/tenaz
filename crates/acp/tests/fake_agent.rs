@@ -165,7 +165,7 @@ fn harness_with(seen: Arc<Mutex<Seen>>, steering: bool) -> AcpHarness {
         name: "fake".into(),
         version: "1".into(),
     };
-    AcpHarness::new(info, Arc::new(move || fake_agent(seen.clone(), steering)))
+    AcpHarness::new(info, Arc::new(move |_| fake_agent(seen.clone(), steering)))
 }
 
 fn spec(dir: &Path) -> SessionSpec {
@@ -333,6 +333,13 @@ async fn proxy_observations_become_per_request_turns() {
             ..Default::default()
         },
         stop_reason: CoreStop::ToolUse,
+        server: Some(smr_core::session::ServerTimings {
+            prompt_ms: Some(120.5),
+            decode_ms: Some(866.1),
+            cached_tokens: Some(90),
+            drafted: Some(60),
+            accepted: Some(45),
+        }),
     })
     .unwrap();
     // A reasoning-only response that ended with `stop` and no tool call (seen
@@ -346,6 +353,7 @@ async fn proxy_observations_become_per_request_turns() {
             ..Default::default()
         },
         stop_reason: CoreStop::Stop,
+        server: None,
     })
     .unwrap();
     feed.send(EngineObservation::Error {
@@ -359,7 +367,7 @@ async fn proxy_observations_become_per_request_turns() {
         .collect();
     assert_eq!(ends.len(), 3, "{events:?}");
     assert!(
-        matches!(ends[0], SessionEvent::MessageEnd { usage, stop_reason: CoreStop::ToolUse, .. } if usage.cache_read == 90)
+        matches!(ends[0], SessionEvent::MessageEnd { usage, stop_reason: CoreStop::ToolUse, server: Some(s), .. } if usage.cache_read == 90 && s.drafted == Some(60) && s.accepted == Some(45))
     );
     assert!(
         matches!(ends[1], SessionEvent::MessageEnd { usage, stop_reason: CoreStop::Stop, .. } if usage.reasoning == 4848 && usage.output == 4848)

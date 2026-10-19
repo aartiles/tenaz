@@ -33,8 +33,9 @@ serving `Qwen3.8-Flash-Next-Sushi-2.6bpw`. The run is kept, uncommitted, in
 
 - **`fx acp` is the ACP server** (`fx acp [--model <id>] [--ultrafast|--no-ultrafast] [--log-file <path>]`;
   global flags go before `acp`). The default in `FxLaunch::new` was right.
-  The wiring now adds `--log-file .agent/private/fx-acp.log`, the only
-  place fx's diagnostics go in ACP mode.
+  The wiring adds `--log-file .agent/private/<label>.fx-acp.log`, one per
+  session (fx truncates the file it is given; a shared log kept only the
+  last session's), the only place fx's diagnostics go in ACP mode.
 - **The isolated `HOME` works.** With `HOME` pointed at
   `.agent/private/fx-home/`, `fx status` reads the provider, model and
   `permission_mode` from `.fx/settings.json`, and `fx mcp path` resolves to
@@ -240,6 +241,38 @@ uncommitted, in `local-runs/pi-smoke-20261018/` (its `README.md` lists them).
   from `~/.pi/agent/models.json`, so the proxy's hold, its request log and
   the lease do not cover it, and with `--no-mcp` it has no image tool.
 - **Linux and NVIDIA memory probe.** Not started; the probe port is where it goes.
+
+## Fixed after the Pocket Ledger run (2026-10-18)
+
+The run with smr, fx and Sushi on Pocket Ledger
+(`local-model-benchmarks`, report
+`benchmarks/reports/2026-10-18-qwen38-flash-next-sushi-v124-smr-pocket-ledger.md`)
+completed and reported three runner issues:
+
+- **A harness exit was charged as a task attempt.** fx exited with code 1
+  mid-turn while a `shell` call waited for permission. A session that ends
+  before its turn settles, without the runner stopping it, is now journaled
+  with `harness_exit` (exit code and the tail of its stderr), retried like an
+  engine failure (`engine-retry` with `cause: "harness"`), and not charged.
+  The ACP harness now appends the agent's stderr, and the error its
+  connection ended with, to `.agent/private/<label>.stderr.log`. Tested end
+  to end with the scripted harness (`crates/adapters/tests/harness_exit.rs`)
+  and with a real agent process that dies on the prompt
+  (`crates/acp/tests/subprocess_exit.rs`).
+- **fx's log was overwritten by every session.** Now one log per session (above).
+- **No draft counts in `requests.jsonl`.** Each row now has `server`, the
+  engine's own `timings` for that request when its response carries them:
+  `prompt_ms`, `decode_ms`, `cached_tokens`, and `drafted`/`accepted` in
+  llama.cpp's `draft_n`/`draft_n_accepted` layout. `status` prints the draft
+  acceptance when any were reported. **Sushi 1.2.4 does not report drafts
+  this way**: its `timings` object has prefill and decode figures only, and
+  its `/metrics` has no draft series; the MTP counts appear only in its log
+  (`[spec-stats] drafted=… accepts=…`). For Sushi, draft acceptance still
+  comes from the log until Sushi adds `draft_n` to `timings`.
+
+Not addressed: the preflight took 2 min 10 s in that run against 18.5 s
+here, with the engine idle. It is reported as an observation; no cause is
+known yet.
 
 ## Known limits
 

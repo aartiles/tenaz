@@ -93,6 +93,10 @@ pub enum SessionEvent {
         error_message: Option<String>,
         thinking_chars: usize,
         text: String,
+        /// What the engine reported about this request itself, when the
+        /// response carried it (seen by the engine proxy).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<ServerTimings>,
     },
     TurnEnd,
     CompactionStart {
@@ -113,6 +117,42 @@ pub enum SessionEvent {
     Exited {
         code: Option<i32>,
     },
+}
+
+/// The engine's own figures for one request, from the `timings` object an
+/// OpenAI-compatible engine may add to its last chunk (llama.cpp's layout,
+/// which Sushi follows): prefill and decode time, and speculative drafts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ServerTimings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u64>,
+    /// Draft tokens proposed (llama.cpp `draft_n`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drafted: Option<u64>,
+    /// Draft tokens accepted (llama.cpp `draft_n_accepted`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted: Option<u64>,
+}
+
+impl ServerTimings {
+    /// Reads a `timings` object; `None` when it holds none of the known fields.
+    pub fn from_json(timings: &serde_json::Value) -> Option<Self> {
+        let object = timings.as_object()?;
+        let float = |key: &str| object.get(key).and_then(serde_json::Value::as_f64);
+        let int = |key: &str| object.get(key).and_then(serde_json::Value::as_u64);
+        let parsed = Self {
+            prompt_ms: float("prompt_ms"),
+            decode_ms: float("predicted_ms"),
+            cached_tokens: int("cached_n"),
+            drafted: int("draft_n"),
+            accepted: int("draft_n_accepted"),
+        };
+        (parsed != Self::default()).then_some(parsed)
+    }
 }
 
 /// Tool names that change files, for the idle rule's quick count.
@@ -164,6 +204,9 @@ pub struct SessionMetrics {
     pub exit_code: Option<i32>,
     pub last_stop_reason: Option<StopReason>,
     pub duration_ms: u64,
+    /// The harness ended before the turn settled, without the runner
+    /// stopping it: what happened, with the tail of its stderr.
+    pub harness_exit: Option<String>,
 }
 
 impl SessionMetrics {
@@ -178,9 +221,16 @@ impl SessionMetrics {
             && self.last_stop_reason != Some(StopReason::Error)
     }
 
-    /// The session ended because of the engine, not the task.
+    /// The harness ended before its turn settled and nobody stopped it: a
+    /// crash of the harness process, or a connection lost to it.
+    pub fn ended_early(&self) -> bool {
+        !self.settled && !self.aborted && self.abort_reason.is_none()
+    }
+
+    /// The session ended because of the engine or the harness, not the task.
     pub fn engine_failed(&self) -> bool {
-        self.last_stop_reason == Some(StopReason::Error)
+        self.harness_exit.is_some()
+            || self.last_stop_reason == Some(StopReason::Error)
             || self
                 .abort_reason
                 .as_deref()
@@ -221,6 +271,65 @@ pub fn is_image_refusal(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_timings_follow_the_llama_cpp_layout() {
+        let sushi = serde_json::json!({"prompt_n": 24, "cached_n": 0, "prompt_ms": 192.964, "predicted_n": 69, "predicted_ms": 866.124});
+        assert_eq!(
+            ServerTimings::from_json(&sushi),
+            Some(ServerTimings {
+                prompt_ms: Some(192.964),
+                decode_ms: Some(866.124),
+                cached_tokens: Some(0),
+                drafted: None,
+                accepted: None
+            })
+        );
+        let llama = serde_json::json!({"prompt_ms": 1.0, "predicted_ms": 2.0, "draft_n": 30, "draft_n_accepted": 21});
+        let parsed = ServerTimings::from_json(&llama).unwrap();
+        assert_eq!((parsed.drafted, parsed.accepted), (Some(30), Some(21)));
+        assert_eq!(
+            ServerTimings::from_json(&serde_json::json!({"other": 1})),
+            None
+        );
+        assert_eq!(ServerTimings::from_json(&serde_json::json!(null)), None);
+        let json = serde_json::to_value(parsed).unwrap();
+        assert!(
+            json.get("cached_tokens").is_none(),
+            "absent figures are not written: {json}"
+        );
+    }
+
+    #[test]
+    fn a_harness_that_ended_early_is_an_engine_side_failure() {
+        let early = SessionMetrics {
+            exit_code: Some(1),
+            ..Default::default()
+        };
+        assert!(early.ended_early());
+        assert!(
+            !early.engine_failed(),
+            "only the runner's note makes it one"
+        );
+        let noted = SessionMetrics {
+            harness_exit: Some("the harness ended".into()),
+            ..early
+        };
+        assert!(noted.engine_failed());
+        let aborted = SessionMetrics {
+            abort_reason: Some("same bash call 5 times in a row".into()),
+            ..Default::default()
+        };
+        assert!(
+            !aborted.ended_early(),
+            "a session the runner stopped did not end early"
+        );
+        let settled = SessionMetrics {
+            settled: true,
+            ..Default::default()
+        };
+        assert!(!settled.ended_early());
+    }
 
     #[test]
     fn capacity_limit_is_read_from_the_engine_message() {

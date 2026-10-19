@@ -88,6 +88,7 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     let slow = ScriptedHarness {
         slow_task: Some("T002".into()),
         slow_for: Duration::from_secs(3),
+        ..Default::default()
     };
     let stop = CancellationToken::new();
     let watcher = {

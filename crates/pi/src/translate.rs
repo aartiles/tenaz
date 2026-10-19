@@ -144,6 +144,7 @@ fn message_end(record: &Value) -> Vec<SessionEvent> {
         .map(|t| t.chars().count())
         .sum();
     vec![SessionEvent::MessageEnd {
+        server: None,
         usage: message.usage,
         stop_reason: stop_reason(message.stop_reason.as_deref()),
         error_message: message.error_message,
@@ -244,6 +245,7 @@ mod tests {
                     is_error: false
                 },
                 SessionEvent::MessageEnd {
+                    server: None,
                     usage: Usage {
                         input: 1010,
                         output: 20,
@@ -321,6 +323,7 @@ mod tests {
             got,
             vec![
                 SessionEvent::MessageEnd {
+                    server: None,
                     usage: Usage::default(),
                     stop_reason: StopReason::Aborted,
                     error_message: Some("Request was aborted".into()),

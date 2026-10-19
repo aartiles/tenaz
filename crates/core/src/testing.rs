@@ -61,6 +61,9 @@ pub struct ScriptedHarness {
     /// A builder session for this task waits before acting, so a test can pause the run.
     pub slow_task: Option<String>,
     pub slow_for: Duration,
+    /// The first builder session for this task dies mid-turn, as fx did while
+    /// waiting for a permission: it writes to stderr and exits with code 1.
+    pub crash_task: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -84,6 +87,8 @@ impl Harness for ScriptedHarness {
         Ok(Box::new(ScriptedSession {
             cwd: spec.cwd,
             raw_log: spec.raw_log,
+            stderr_log: spec.stderr_log,
+            exit_code: Some(0),
             tx,
             rx,
             aborted: Arc::new(AtomicBool::new(false)),
@@ -97,6 +102,8 @@ impl Harness for ScriptedHarness {
 struct ScriptedSession {
     cwd: PathBuf,
     raw_log: Option<PathBuf>,
+    stderr_log: Option<PathBuf>,
+    exit_code: Option<i32>,
     tx: mpsc::UnboundedSender<SessionEvent>,
     rx: mpsc::UnboundedReceiver<SessionEvent>,
     aborted: Arc<AtomicBool>,
@@ -111,6 +118,7 @@ impl Session for ScriptedSession {
         self.prompts += 1;
         let player = Player {
             cwd: self.cwd.clone(),
+            stderr_log: self.stderr_log.clone(),
             tx: self.tx.clone(),
             aborted: self.aborted.clone(),
             prompts: self.prompts,
@@ -124,6 +132,9 @@ impl Session for ScriptedSession {
 
     async fn next_event(&mut self) -> Option<SessionEvent> {
         let event = self.rx.recv().await?;
+        if let SessionEvent::Exited { code } = event {
+            self.exit_code = code;
+        }
         if let Some(log) = &self.raw_log
             && let Ok(line) = serde_json::to_string(&event)
         {
@@ -159,12 +170,15 @@ impl Session for ScriptedSession {
         if let Some(play) = self.play.take() {
             let _ = play.await;
         }
-        SessionExit { code: Some(0) }
+        SessionExit {
+            code: self.exit_code,
+        }
     }
 }
 
 struct Player {
     cwd: PathBuf,
+    stderr_log: Option<PathBuf>,
     tx: mpsc::UnboundedSender<SessionEvent>,
     aborted: Arc<AtomicBool>,
     prompts: u32,
@@ -270,6 +284,7 @@ impl Player {
             is_error: false,
         });
         self.emit(SessionEvent::MessageEnd {
+            server: None,
             usage: Usage {
                 input,
                 output: 20,
@@ -299,6 +314,7 @@ impl Player {
     fn finish(&self, text: &str) {
         let aborted = self.aborted();
         self.emit(SessionEvent::MessageEnd {
+            server: None,
             usage: Usage {
                 input: 1200,
                 output: 10,
@@ -320,6 +336,7 @@ impl Player {
 
     fn engine_error(&self, message: &str) {
         self.emit(SessionEvent::MessageEnd {
+            server: None,
             usage: Usage::default(),
             stop_reason: StopReason::Error,
             error_message: Some(message.to_owned()),
@@ -398,6 +415,30 @@ impl Player {
         }
     }
 
+    /// Dies mid-turn while a shell call waits for permission: stderr, then exit 1.
+    async fn crash(&mut self) {
+        self.call += 1;
+        let id = format!("call_{}", self.call);
+        self.emit(SessionEvent::TurnStart);
+        let args = serde_json::json!({ "command": "./verify --all" });
+        self.emit(SessionEvent::ToolCallStart {
+            id: id.clone(),
+            name: "shell".to_owned(),
+            args: args.clone(),
+        });
+        self.emit(SessionEvent::PermissionRequest {
+            id,
+            tool: "shell".to_owned(),
+            args,
+            options: Vec::new(),
+        });
+        if let Some(log) = &self.stderr_log {
+            let _ = std::fs::write(log, "fake harness: panic: reached unreachable code\n");
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        self.emit(SessionEvent::Exited { code: Some(1) });
+    }
+
     async fn bootstrap(&mut self) {
         let boot = self.bump("bootstrap");
         if boot == 1 || boot == 2 {
@@ -466,6 +507,11 @@ impl Player {
     async fn builder(&mut self, task: &str, attempt: u32) {
         if self.script.slow_task.as_deref() == Some(task) {
             tokio::time::sleep(self.script.slow_for).await; // gives the test time to pause the run
+        }
+        if self.script.crash_task.as_deref() == Some(task)
+            && self.bump(&format!("crash-{task}")) == 1
+        {
+            return self.crash().await;
         }
         if task == "T002" && attempt == 1 {
             while !self.aborted() {

@@ -272,6 +272,7 @@ async fn start_proxy(
             ProxyEvent::Completed {
                 usage: Some(u),
                 finish_reason,
+                timings,
                 ..
             } => {
                 let _ = feed.send(EngineObservation::Completed {
@@ -283,6 +284,7 @@ async fn start_proxy(
                         reasoning: u.reasoning_tokens,
                     },
                     stop_reason: stop_reason_for_finish(finish_reason.as_deref()),
+                    server: timings,
                 });
             }
             ProxyEvent::EngineError { message, .. } => {
@@ -368,7 +370,7 @@ fn build_harness(
             write_profile(&home, &settings, &profile_mcp).context("cannot write the fx profile")?;
             let mut launch = FxLaunch::new(&options.fx_bin, &home);
             launch.args.clone_from(&options.fx_args);
-            launch.log_file = Some(project.private_dir().join("fx-acp.log"));
+            launch.log_dir = Some(project.private_dir());
             let mut acp = launch
                 .harness(config.harness_version.clone())
                 .with_observations(feed.clone());

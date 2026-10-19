@@ -103,6 +103,10 @@ pub struct RequestRecord {
     pub engine: Option<EngineCounters>,
     /// Exactly one engine request finished and its counts agree with the harness's.
     pub engine_matched: bool,
+    /// The engine's own `timings` for this request, when its response
+    /// carried them (prefill and decode time, speculative drafts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<crate::session::ServerTimings>,
 }
 
 impl RequestRecord {
@@ -132,6 +136,14 @@ pub struct EngineSummary {
     pub decode_tps_weighted: Option<f64>,
     pub ttft_s_total: f64,
     pub decode_s_total: f64,
+    /// Draft tokens proposed and accepted, summed over the requests whose
+    /// response reported them.
+    #[serde(default)]
+    pub drafted: u64,
+    #[serde(default)]
+    pub draft_accepted: u64,
+    #[serde(default)]
+    pub draft_acceptance: Option<f64>,
 }
 
 fn median(mut values: Vec<f64>) -> Option<f64> {
@@ -162,6 +174,15 @@ pub fn engine_summary(requests: &[RequestRecord]) -> Option<EngineSummary> {
     let get = |e: &EngineCounters, k: &str| e.get(k).copied().unwrap_or(0.0);
     let decode_s: f64 = matched.iter().map(|e| get(e, "decode_s")).sum();
     let output: f64 = matched.iter().map(|e| get(e, "output_tokens")).sum();
+    let drafts: Vec<(u64, u64)> = requests
+        .iter()
+        .filter_map(|r| r.server.and_then(|s| s.drafted.zip(s.accepted)))
+        .collect();
+    let drafted: u64 = drafts.iter().map(|(d, _)| d).sum();
+    let draft_accepted: u64 = drafts.iter().map(|(_, a)| a).sum();
+    #[allow(clippy::cast_precision_loss)]
+    let draft_acceptance =
+        (drafted > 0).then(|| (draft_accepted as f64 / drafted as f64 * 1000.0).round() / 1000.0);
     Some(EngineSummary {
         requests: requests.len(),
         engine_matched: matched.len(),
@@ -177,6 +198,9 @@ pub fn engine_summary(requests: &[RequestRecord]) -> Option<EngineSummary> {
         ttft_s_total: (matched.iter().map(|e| get(e, "ttft_s")).sum::<f64>() * 1000.0).round()
             / 1000.0,
         decode_s_total: (decode_s * 1000.0).round() / 1000.0,
+        drafted,
+        draft_accepted,
+        draft_acceptance,
     })
 }
 
@@ -199,6 +223,15 @@ pub fn engine_line(requests: &[RequestRecord]) -> String {
             ", TTFT median {} s, decode {} tok/s (output-weighted)",
             fmt(e.ttft_median_s),
             fmt(e.decode_tps_weighted)
+        );
+    }
+    if let Some(rate) = e.draft_acceptance {
+        let _ = write!(
+            line,
+            ", drafts {:.1}% accepted ({} of {})",
+            rate * 100.0,
+            e.draft_accepted,
+            e.drafted
         );
     }
     line
@@ -253,6 +286,7 @@ mod tests {
             client_total_s: None,
             engine: None,
             engine_matched: false,
+            server: None,
         }
         .with_engine(Some(d.clone()));
         assert!(record.engine_matched);
@@ -262,6 +296,58 @@ mod tests {
         }
         .with_engine(Some(d));
         assert!(!other.engine_matched);
+    }
+
+    #[test]
+    fn drafts_are_summed_from_the_server_timings() {
+        let mk = |server: Option<crate::session::ServerTimings>| RequestRecord {
+            session: "s".into(),
+            sequence: 1,
+            stop_reason: None,
+            prompt_tokens: 10,
+            cached_tokens: 5,
+            output_tokens: 1,
+            reasoning_tokens: 0,
+            client_first_token_s: None,
+            client_total_s: None,
+            engine: None,
+            engine_matched: false,
+            server,
+        };
+        let drafts = |d, a| {
+            Some(crate::session::ServerTimings {
+                drafted: Some(d),
+                accepted: Some(a),
+                ..Default::default()
+            })
+        };
+        let requests = vec![
+            mk(drafts(60, 45)),
+            mk(None),
+            mk(drafts(40, 21)),
+            mk(Some(crate::session::ServerTimings {
+                prompt_ms: Some(1.0),
+                ..Default::default()
+            })),
+        ];
+        let s = engine_summary(&requests).unwrap();
+        assert_eq!(
+            (s.drafted, s.draft_accepted, s.draft_acceptance),
+            (100, 66, Some(0.66))
+        );
+        assert!(
+            engine_line(&requests).ends_with(", drafts 66.0% accepted (66 of 100)"),
+            "{}",
+            engine_line(&requests)
+        );
+        let none = engine_summary(&[mk(None)]).unwrap();
+        assert_eq!((none.drafted, none.draft_acceptance), (0, None));
+        assert!(!engine_line(&[mk(None)]).contains("drafts"));
+        let old: EngineSummary = serde_json::from_value(serde_json::json!({"requests": 1, "engine_matched": 0, "ttft_median_s": null, "decode_tps_median": null, "decode_tps_weighted": null, "ttft_s_total": 0.0, "decode_s_total": 0.0})).unwrap();
+        assert_eq!(
+            old.drafted, 0,
+            "summaries written before drafts existed still load"
+        );
     }
 
     #[test]
@@ -282,6 +368,7 @@ mod tests {
                 ("output_tokens".to_owned(), out),
             ])),
             engine_matched: matched,
+            server: None,
         };
         let requests = vec![
             mk(0.5, 1.0, 50.0, true),

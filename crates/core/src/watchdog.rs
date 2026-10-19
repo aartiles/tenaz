@@ -120,6 +120,7 @@ impl Watchdog {
                 error_message,
                 thinking_chars,
                 text,
+                ..
             } => {
                 self.message_end(
                     usage,
@@ -565,6 +566,7 @@ mod tests {
     fn message(w: &mut Watchdog, input: u64, stop: StopReason, error: Option<&str>) -> Vec<Action> {
         w.handle(
             &SessionEvent::MessageEnd {
+                server: None,
                 usage: Usage {
                     input,
                     output: 10,

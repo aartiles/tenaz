@@ -66,6 +66,7 @@ impl Runner {
             raw_log: persist.then(|| private.join(format!("{label}.rpc.jsonl"))),
             stderr_log: persist.then(|| private.join(format!("{label}.stderr.log"))),
         };
+        let stderr_log = spec.stderr_log.clone();
         let mut session = self.deps.harness.open(spec).await?;
         let mut watchdog = Watchdog::new(self.params.clone(), watch);
         if watch.is_some_and(|w| w.idle) {
@@ -154,14 +155,17 @@ impl Runner {
                     first_token.get_or_insert(now);
                 }
                 SessionEvent::MessageEnd {
-                    usage, stop_reason, ..
+                    usage,
+                    stop_reason,
+                    server,
+                    ..
                 } => {
                     let timing = ClientTiming {
                         turn_started,
                         first_token,
                         now,
                     };
-                    recorder.record(*usage, stop_reason.clone(), timing);
+                    recorder.record(*usage, stop_reason.clone(), *server, timing);
                 }
                 _ => {}
             }
@@ -194,7 +198,14 @@ impl Runner {
         let exit = session.close(grace).await;
         watchdog.finish(exit.code, clock.monotonic_ms().saturating_sub(started));
         let requests = recorder.finish().await;
-        Ok((watchdog.into_metrics(), requests))
+        let mut metrics = watchdog.into_metrics();
+        // The harness went away before its turn settled and nobody stopped it:
+        // that says nothing about the task, so it is handled like an engine
+        // failure (rerun, uncounted), and its stderr is kept for diagnosis.
+        if metrics.ended_early() && !self.stopping() {
+            metrics.harness_exit = Some(harness_exit_note(exit.code, stderr_log.as_deref()));
+        }
+        Ok((metrics, requests))
     }
 
     /// Sends steers and aborts to the session; an abort starts the kill timer.
@@ -323,6 +334,7 @@ impl Runner {
             duration_ms: metrics.duration_ms,
             engine: engine_summary(&requests),
             memory,
+            harness_exit: metrics.harness_exit.clone(),
         };
         self.journal(JournalRecord::Session(record.clone()));
         self.ledger.inflight = None;
@@ -433,7 +445,12 @@ impl Runner {
                     retry + 1
                 )));
             }
-            self.engine_backoff(&label, retry).await;
+            let cause = if result.metrics.harness_exit.is_some() {
+                "harness"
+            } else {
+                "engine"
+            };
+            self.engine_backoff(&label, retry, cause).await;
             retry += 1;
             if self.stopping() {
                 return Err(self.pause(&label, role, ctx)?);
@@ -481,15 +498,21 @@ impl Runner {
 
     /// Waits before rerunning a session the engine failed: the base backoff,
     /// doubling per retry up to 15 minutes, cut short by a pause.
-    async fn engine_backoff(&mut self, label: &str, retry: u32) {
+    async fn engine_backoff(&mut self, label: &str, retry: u32, cause: &str) {
         let wait = (self.params.engine_retry_base_sec * 2u64.pow(retry)).min(900);
         self.journal(JournalRecord::EngineRetry {
             label: label.to_owned(),
             retry: retry + 1,
             wait_s: wait,
+            cause: Some(cause.to_owned()),
         });
-        self.log(&format!("  {label}: engine error; retrying the same session in {wait} s ({}/{}, not counted as an attempt)", retry + 1, self.params.engine_retries));
-        if retry == 0 {
+        let what = if cause == "harness" {
+            "the harness ended before the turn settled"
+        } else {
+            "engine error"
+        };
+        self.log(&format!("  {label}: {what}; retrying the same session in {wait} s ({}/{}, not counted as an attempt)", retry + 1, self.params.engine_retries));
+        if retry == 0 && cause == "engine" {
             self.notify("The engine is failing (often memory). Free memory; the run retries the same session.");
         }
         tokio::select! {
@@ -503,6 +526,7 @@ impl Runner {
 struct RequestInput {
     usage: crate::session::Usage,
     stop_reason: crate::session::StopReason,
+    server: Option<crate::session::ServerTimings>,
     timing: ClientTiming,
 }
 
@@ -542,7 +566,7 @@ impl RequestRecorder {
                     _ => None,
                 };
                 let sequence = u32::try_from(requests.len() + 1).unwrap_or(u32::MAX);
-                let record = request_record(
+                let mut record = request_record(
                     &label,
                     sequence,
                     &input.usage,
@@ -550,6 +574,7 @@ impl RequestRecorder {
                     input.timing,
                 )
                 .with_engine(engine);
+                record.server = input.server;
                 matched_once |= record.engine_matched;
                 if let Some(project) = &project
                     && let Ok(line) = serde_json::to_string(&record)
@@ -567,12 +592,14 @@ impl RequestRecorder {
         &self,
         usage: crate::session::Usage,
         stop_reason: crate::session::StopReason,
+        server: Option<crate::session::ServerTimings>,
         timing: ClientTiming,
     ) {
         if let Some(tx) = &self.tx {
             let _ = tx.send(RequestInput {
                 usage,
                 stop_reason,
+                server,
                 timing,
             });
         }
@@ -610,6 +637,27 @@ async fn engine_delta(
     Some(change)
 }
 
+/// How much of the harness's stderr a harness-exit note quotes.
+const STDERR_TAIL_BYTES: usize = 2000;
+
+/// What the journal says when the harness ended before its turn settled.
+fn harness_exit_note(code: Option<i32>, stderr_log: Option<&std::path::Path>) -> String {
+    let code = code.map_or_else(|| "no exit code".to_owned(), |c| format!("exit code {c}"));
+    let tail = stderr_log
+        .and_then(|path| std::fs::read(path).ok())
+        .map(|bytes| {
+            let start = bytes.len().saturating_sub(STDERR_TAIL_BYTES);
+            String::from_utf8_lossy(&bytes[start..]).trim().to_owned()
+        })
+        .filter(|t| !t.is_empty());
+    match tail {
+        Some(tail) => {
+            format!("the harness ended before the turn settled ({code}); stderr tail:\n{tail}")
+        }
+        None => format!("the harness ended before the turn settled ({code}); its stderr was empty"),
+    }
+}
+
 /// Client-side timings of one turn, in monotonic milliseconds.
 #[derive(Clone, Copy, Debug)]
 struct ClientTiming {
@@ -645,6 +693,7 @@ fn request_record(
         client_total_s: timing.turn_started.map(|t| seconds_between(t, timing.now)),
         engine: None,
         engine_matched: false,
+        server: None,
     }
 }
 

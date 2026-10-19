@@ -46,6 +46,11 @@ pub enum ProxyEvent {
         /// The engine's `finish_reason` (`stop`, `tool_calls`, `length`, …)
         /// when the response named one.
         finish_reason: Option<String>,
+        /// The engine's own `timings` object, when the response carried one
+        /// (prefill and decode time; speculative drafts when the engine
+        /// reports them there).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timings: Option<smr_core::session::ServerTimings>,
         first_byte_ms: Option<u64>,
         total_ms: u64,
     },

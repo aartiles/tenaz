@@ -10,7 +10,7 @@ mod translate;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{HttpHeader, McpServer, McpServerHttp};
-use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, DynConnectTo};
+use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, DynConnectTo, LineDirection};
 use async_trait::async_trait;
 use smr_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
 
@@ -18,7 +18,10 @@ pub use session::{EngineObservation, ObservationFeed, stop_reason_for_finish};
 pub use translate::Translator;
 
 /// Builds a fresh transport to the agent for every session.
-pub type Connector = Arc<dyn Fn() -> DynConnectTo<Client> + Send + Sync>;
+pub type Connector = Arc<dyn Fn(&SessionSpec) -> DynConnectTo<Client> + Send + Sync>;
+
+/// The command-line arguments of one session's agent process.
+pub type ArgsFor = Arc<dyn Fn(&SessionSpec) -> Vec<String> + Send + Sync>;
 
 /// An MCP server the runner hosts and offers to every session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,12 +68,33 @@ impl AcpHarness {
         args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> Self {
+        Self::subprocess_with(info, command, Arc::new(move |_| args.clone()), env)
+    }
+
+    /// A harness that spawns `command` with per-session arguments. The
+    /// agent's stderr is appended to the session's stderr log, so a crash
+    /// leaves its diagnostics behind.
+    pub fn subprocess_with(
+        info: HarnessInfo,
+        command: impl Into<std::path::PathBuf>,
+        args_for: ArgsFor,
+        env: Vec<(String, String)>,
+    ) -> Self {
         let command = command.into();
-        let connector: Connector = Arc::new(move || {
+        let connector: Connector = Arc::new(move |spec: &SessionSpec| {
             let config = AcpAgentConfig::new(command.clone())
-                .args(args.clone())
+                .args(args_for(spec))
                 .envs(env.clone());
-            DynConnectTo::new(AcpAgent::new(config))
+            let agent = AcpAgent::new(config);
+            let agent = match spec.stderr_log.clone() {
+                Some(log) => agent.with_debug(move |line, direction| {
+                    if direction == LineDirection::Stderr {
+                        append_line(&log, line);
+                    }
+                }),
+                None => agent,
+            };
+            DynConnectTo::new(agent)
         });
         Self::new(info, connector)
     }
@@ -111,6 +135,19 @@ impl AcpHarness {
     }
 }
 
+/// Appends one line to a log file, creating it; errors are ignored (a lost
+/// diagnostic line must never stop a session).
+pub(crate) fn append_line(path: &std::path::Path, line: &str) {
+    use std::io::Write as _;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 #[async_trait]
 impl Harness for AcpHarness {
     fn info(&self) -> HarnessInfo {
@@ -118,7 +155,7 @@ impl Harness for AcpHarness {
     }
 
     async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
-        let transport = (self.connector)();
+        let transport = (self.connector)(&spec);
         let session = session::AcpSession::open(
             transport,
             spec,

@@ -28,6 +28,7 @@ pub(crate) struct Tap {
     body: Vec<u8>,
     usage: Option<crate::ProxyUsage>,
     finish_reason: Option<String>,
+    timings: Option<smr_core::session::ServerTimings>,
     done: bool,
 }
 
@@ -56,6 +57,7 @@ impl Tap {
             body: Vec::new(),
             usage: None,
             finish_reason: None,
+            timings: None,
             done: false,
         }
     }
@@ -95,6 +97,12 @@ impl Tap {
                 if let Some(reason) = finish_reason_from_json(&json) {
                     self.finish_reason = Some(reason);
                 }
+                if let Some(timings) = json
+                    .get("timings")
+                    .and_then(smr_core::session::ServerTimings::from_json)
+                {
+                    self.timings = Some(timings);
+                }
             }
         }
     }
@@ -122,6 +130,9 @@ impl Tap {
         {
             self.usage = usage_from_json(&json);
             self.finish_reason = finish_reason_from_json(&json);
+            self.timings = json
+                .get("timings")
+                .and_then(smr_core::session::ServerTimings::from_json);
         }
         self.proxy.observe(ProxyEvent::Completed {
             request: self.id,
@@ -130,6 +141,7 @@ impl Tap {
             stream: self.stream,
             usage: self.usage,
             finish_reason: self.finish_reason.take(),
+            timings: self.timings.take(),
             first_byte_ms: self.first_byte.map(|t| {
                 u64::try_from(t.duration_since(self.started).as_millis()).unwrap_or(u64::MAX)
             }),

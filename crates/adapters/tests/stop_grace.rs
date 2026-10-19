@@ -71,6 +71,7 @@ impl Session for Thinking {
             tokio::time::sleep(Duration::from_millis(10)).await;
             for event in [
                 SessionEvent::MessageEnd {
+                    server: None,
                     usage: Usage::default(),
                     stop_reason: StopReason::Aborted,
                     error_message: Some("Request was aborted".into()),

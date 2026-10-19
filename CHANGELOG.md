@@ -18,3 +18,14 @@ uses [Semantic Versioning](https://semver.org/).
 - Engine adapters for Sushi and generic OpenAI-compatible engines; ComfyUI
   media adapter; MCP server exposing `generate_image`.
 - CI on macOS and Linux and a tagged release workflow.
+- `requests.jsonl` rows carry the engine's own `timings` per request
+  (`server`: prefill and decode milliseconds, cached tokens, and draft
+  counts when the engine reports them), and `status` prints the draft
+  acceptance.
+
+### Fixed
+
+- A harness that ends before its turn settles is retried like an engine
+  failure instead of being charged as a task attempt, and its exit code and
+  stderr tail are journaled (`harness_exit`).
+- fx writes one ACP log per session instead of overwriting a shared one.

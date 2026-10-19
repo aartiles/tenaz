@@ -122,9 +122,11 @@ pub struct FxLaunch {
     /// Arguments that put fx in ACP mode. Pinned per fx version: `fx acp`
     /// (fx 0.0.14, build `1a070af32cdf`), global flags before `acp`.
     pub args: Vec<String>,
-    /// Where fx writes its ACP log (`fx acp --log-file`); stdout is the
-    /// protocol, so this is the only place its diagnostics go.
-    pub log_file: Option<PathBuf>,
+    /// The folder for fx's ACP logs (`fx acp --log-file`): one file per
+    /// session, `<label>.fx-acp.log`, because fx truncates the file it is
+    /// given and a shared log keeps only the last session. Stdout is the
+    /// protocol, so this is where fx's own diagnostics go.
+    pub log_dir: Option<PathBuf>,
 }
 
 impl FxLaunch {
@@ -133,21 +135,23 @@ impl FxLaunch {
             binary: binary.into(),
             home: home.into(),
             args: vec!["acp".to_owned()],
-            log_file: None,
+            log_dir: None,
         }
     }
 
-    /// The command line: the pinned arguments, plus `--log-file` when a log
-    /// is wanted and the arguments do not already name one. The log path is
-    /// made absolute: fx 0.0.14 aborts at startup (`panic: reached
-    /// unreachable code`) when it cannot open the log, and a relative path
-    /// resolves against fx's own working directory.
-    pub fn command_args(&self) -> Vec<String> {
+    /// The command line for one session: the pinned arguments, plus
+    /// `--log-file <log_dir>/<label>.fx-acp.log` when a log folder is set and
+    /// the arguments do not already name a log. The path is made absolute:
+    /// fx 0.0.14 aborts at startup (`panic: reached unreachable code`) when
+    /// it cannot open the log, and a relative path resolves against fx's own
+    /// working directory.
+    pub fn command_args(&self, label: &str) -> Vec<String> {
         let mut args = self.args.clone();
-        if let Some(log) = &self.log_file
+        if let Some(dir) = &self.log_dir
             && !args.iter().any(|a| a == "--log-file")
         {
-            let log = std::path::absolute(log).unwrap_or_else(|_| log.clone());
+            let log = dir.join(format!("{label}.fx-acp.log"));
+            let log = std::path::absolute(&log).unwrap_or(log);
             args.push("--log-file".to_owned());
             args.push(log.display().to_string());
         }
@@ -161,10 +165,11 @@ impl FxLaunch {
             name: "fx".to_owned(),
             version,
         };
-        AcpHarness::subprocess(
+        let launch = self.clone();
+        AcpHarness::subprocess_with(
             info,
             self.binary.clone(),
-            self.command_args(),
+            std::sync::Arc::new(move |spec| launch.command_args(&spec.label)),
             vec![
                 ("HOME".to_owned(), self.home.display().to_string()),
                 ("FX_AUTO_UPGRADE".to_owned(), "0".to_owned()),
@@ -225,19 +230,32 @@ mod tests {
     fn version_of_a_missing_binary_is_an_error() {
         assert!(fx_version(Path::new("/nonexistent/fx")).is_err());
         let mut launch = FxLaunch::new("/usr/local/bin/fx", "/tmp/home");
-        assert_eq!(launch.command_args(), vec!["acp"]);
-        launch.log_file = Some("/tmp/fx.log".into());
+        assert_eq!(launch.command_args("001-bootstrap"), vec!["acp"]);
+        launch.log_dir = Some("/tmp/run/private".into());
         assert_eq!(
-            launch.command_args(),
-            vec!["acp", "--log-file", "/tmp/fx.log"]
+            launch.command_args("001-bootstrap"),
+            vec![
+                "acp",
+                "--log-file",
+                "/tmp/run/private/001-bootstrap.fx-acp.log"
+            ]
+        );
+        assert_eq!(
+            launch.command_args("002-builder-T001")[2],
+            "/tmp/run/private/002-builder-T001.fx-acp.log",
+            "each session gets its own log"
         );
         launch.args = vec!["acp".into(), "--log-file".into(), "/x".into()];
-        assert_eq!(launch.command_args(), vec!["acp", "--log-file", "/x"]);
+        assert_eq!(
+            launch.command_args("003-reviewer-T001"),
+            vec!["acp", "--log-file", "/x"]
+        );
         launch.args = vec!["acp".into()];
-        launch.log_file = Some("rel/fx.log".into());
-        let args = launch.command_args();
+        launch.log_dir = Some("rel".into());
+        let args = launch.command_args("004-builder-T002");
         assert!(
-            std::path::Path::new(&args[2]).is_absolute() && args[2].ends_with("rel/fx.log"),
+            std::path::Path::new(&args[2]).is_absolute()
+                && args[2].ends_with("rel/004-builder-T002.fx-acp.log"),
             "{args:?}"
         );
         assert_eq!(launch.harness("0.0.14".into()).info().version, "0.0.14");
