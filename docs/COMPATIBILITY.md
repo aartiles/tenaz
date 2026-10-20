@@ -65,6 +65,18 @@ above), so a 32k context is the practical floor (`contextFloor`).
   `--resume` does not reset the count: a run blocked in bootstrap needs
   `maxBootstrapAttempts` raised in `.tenaz/run.json`.
 - Ctrl-C during the preflight ends the run instead of pausing it.
+- **Existing projects.** `init` refuses a project directory that is a
+  subdirectory of a larger repository (a monorepo package, for example):
+  point it at the repository root, or pass `--in-place` to make the
+  directory a nested repository of its own. `tenaz finish` authors the
+  delivered commit as Tenaz rather than as you (amend it with
+  `git commit --amend --reset-author` if needed), and with
+  `--remove-worktree` it removes the run's worktree without asking for
+  confirmation. The existing-project mode (`.tenaz/verify` and
+  the bootstrap section) has only been exercised with the scripted harness,
+  not yet with a real model.
+- Whether fx loads the project's `AGENTS.md` by itself has not been
+  checked; Pi does. The Tenaz protocol is in every prompt either way.
 
 ## Model and engine behaviour seen in testing
 
