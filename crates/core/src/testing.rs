@@ -64,6 +64,8 @@ pub struct ScriptedHarness {
     /// The first builder session for this task dies mid-turn, as fx did while
     /// waiting for a permission: it writes to stderr and exits with code 1.
     pub crash_task: Option<String>,
+    /// Where bootstrap writes `verify`; `None` is `verify` at the root.
+    pub verify_path: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -471,7 +473,12 @@ impl Player {
             false,
         )
         .await;
-        self.write_tool("verify", VERIFY, true).await;
+        let verify = self
+            .script
+            .verify_path
+            .clone()
+            .unwrap_or_else(|| "verify".to_owned());
+        self.write_tool(&verify, VERIFY, true).await;
         self.write_tool("checks/T000.smoke.sh", "exit 0\n", false)
             .await;
         self.write_tool(

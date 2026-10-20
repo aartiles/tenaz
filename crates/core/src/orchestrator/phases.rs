@@ -11,7 +11,7 @@ use crate::role::Role;
 use crate::spec::coverage;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
-use crate::verify::{VerifyOutcome, interpret};
+use crate::verify::{VerifyOutcome, interpret, retarget};
 
 use super::session::SessionCtx;
 use super::{RunError, Runner};
@@ -93,7 +93,10 @@ impl Runner {
             card,
             extra,
         };
-        Ok(briefing::build(role, &b))
+        Ok(retarget(
+            &briefing::build(role, &b),
+            self.params.verify_path(),
+        ))
     }
 
     async fn validate_bootstrap(&self) -> (Vec<String>, Backlog) {
@@ -153,6 +156,12 @@ impl Runner {
         }
         self.ledger.bootstrap_attempts += 1;
         let mut extra = vec![(format!("Original brief ({BRIEF})"), self.project.brief()?)];
+        if self.params.existing_project == Some(true) {
+            extra.push((
+                "Existing project".to_owned(),
+                briefing::EXISTING_PROJECT.to_owned(),
+            ));
+        }
         if let Some(errors) = &self.ledger.last_errors
             && !errors.is_empty()
         {

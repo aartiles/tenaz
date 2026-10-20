@@ -160,6 +160,21 @@ edit either file. Skill
 directories passed with `--skill` at `init` are pinned read-only into
 `.tenaz/skills/`.
 
+### In an existing project
+
+Pointed at a repository that already has commits, `init` sets
+`existingProject=true` (override it with `--set existingProject=false`).
+The run then treats the brief as a change to that project:
+
+- `verify` is `.tenaz/verify`, a thin wrapper that runs the project's own
+  tests and reports them under the contract, so nothing is added at the
+  root and the wrapper is not part of the change.
+- Checks for new behaviour go into the project's own test suite, written
+  like its existing tests, so they ship with the change; its existing tests
+  are the `T000.` checks and must keep passing.
+- Bootstrap maps only what the change touches and plans as few tasks as the
+  change needs, instead of a skeleton and 6 to 40 tasks.
+
 ## How it compares
 
 Model swappers such as llama-swap, Ollama's `keep_alive` or LM Studio's JIT

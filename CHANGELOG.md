@@ -31,6 +31,10 @@ uses [Semantic Versioning](https://semver.org/).
   `AGENTS.md` or `CLAUDE.md`. A run started with `BRIEF.md` at the root is
   not run: `run` and `status` say how to move it (`git mv`,
   `--refresh-templates`).
+- `existingProject` parameter. `init` sets it when the repository already
+  has commits: `verify` is then `.tenaz/verify`, a wrapper around the
+  project's own tests, new checks go into the project's test suite, and
+  bootstrap plans only the change instead of a skeleton.
 - Without `--engine`, `init` asks the engine at `--base-url` which API it
   speaks (Sushi or generic) and names the provider after it.
 - Orchestrator: bootstrap, build, verify, review,

@@ -15,6 +15,7 @@ use crate::ports::{PermissionDecision, SessionSpec};
 use crate::role::Role;
 use crate::session::{SessionEvent, SessionMetrics};
 use crate::task::TaskId;
+use crate::verify::retarget;
 use crate::watchdog::{Action, WatchConfig, Watchdog};
 
 use super::{RunError, Runner};
@@ -220,6 +221,7 @@ impl Runner {
         for action in actions {
             match action {
                 Action::Steer { message, .. } => {
+                    let message = retarget(&message, self.params.verify_path());
                     let _ = session.steer(&message).await;
                 }
                 Action::Abort { .. } => {

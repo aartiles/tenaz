@@ -46,12 +46,17 @@ fn agent_rule(role: Role, agent_path: &str, task: Option<&TaskId>, repo: &dyn Re
     let task_id = task.map_or("", TaskId::as_str);
     match role {
         Role::Bootstrap => {
-            agent_path == "spec.md"
+            agent_path == "verify"
+                || agent_path == "spec.md"
                 || agent_path == "map.md"
                 || agent_path.starts_with("tasks/")
                 || agent_path.starts_with("notes/")
         }
-        Role::Builder => agent_path == "map.md" || agent_path == format!("notes/{task_id}.md"),
+        Role::Builder => {
+            agent_path == "verify"
+                || agent_path == "map.md"
+                || agent_path == format!("notes/{task_id}.md")
+        }
         Role::Reviewer => agent_path == format!("reviews/{task_id}.md"),
         Role::Split | Role::Replan => {
             agent_path.starts_with("tasks/") || agent_path == "notes/PLANNER.md"
@@ -81,7 +86,7 @@ pub fn partition<'a>(
 /// The explanation the next session gets when files were reverted.
 pub fn reverted_note(role: Role, paths: &[String]) -> String {
     format!(
-        "The orchestrator reverted your changes to {}, because a {role} session may not write there. Under .tenaz/ a bootstrap session writes only spec.md, map.md, tasks/ and notes/; .tenaz/brief.md, .tenaz/protocol.md, .tenaz/prompts/ and the project's AGENTS.md and CLAUDE.md are never edited. Put verify and any code it runs in the project itself (for example a checks/ or scripts/ folder at the root), not under .tenaz/.",
+        "The orchestrator reverted your changes to {}, because a {role} session may not write there. Under .tenaz/ a bootstrap session writes only verify (in an existing project), spec.md, map.md, tasks/ and notes/; .tenaz/brief.md, .tenaz/protocol.md, .tenaz/prompts/ and the project's AGENTS.md and CLAUDE.md are never edited. Put verify and any code it runs in the project itself (for example a checks/ or scripts/ folder at the root), not under .tenaz/.",
         paths.join(", ")
     )
 }

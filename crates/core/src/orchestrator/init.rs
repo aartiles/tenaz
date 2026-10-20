@@ -99,6 +99,10 @@ pub fn init(
             ".tenaz/run.json already exists; this project is already initialized".to_owned(),
         ));
     }
+    let mut params = options.params;
+    params
+        .existing_project
+        .get_or_insert_with(|| project.exists(".git") && vcs.head().is_ok());
     project.create_layout()?;
     if let Some(brief) = &options.brief
         && !same_file(brief, &project.path(BRIEF))
@@ -124,7 +128,7 @@ pub fn init(
         templates.sha256(),
         options.runner_version,
         options.config,
-        options.params,
+        params,
         skills,
     );
     ledger.launch = options.launch;

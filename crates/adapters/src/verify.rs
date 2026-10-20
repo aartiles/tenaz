@@ -10,22 +10,34 @@ use tenaz_core::ports::VerifyRunner;
 use tenaz_core::verify::RawVerifyOutput;
 use tokio::io::AsyncReadExt;
 
-/// `./verify` at the project root, run with `CI=1`.
+/// The project's `verify` (`./verify` unless set with [`Self::at`]), run
+/// from the project root with `CI=1`.
 #[derive(Clone, Debug)]
 pub struct VerifyProcess {
     root: PathBuf,
+    path: String,
 }
 
 impl VerifyProcess {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            path: "verify".to_owned(),
+        }
+    }
+
+    /// Runs the executable at `path`, relative to the root, instead.
+    #[must_use]
+    pub fn at(mut self, path: &str) -> Self {
+        path.clone_into(&mut self.path);
+        self
     }
 }
 
 #[async_trait]
 impl VerifyRunner for VerifyProcess {
     async fn run(&self, args: &[&str], timeout: Duration) -> RawVerifyOutput {
-        let path = self.root.join("verify");
+        let path = self.root.join(&self.path);
         if !path.exists() {
             return RawVerifyOutput {
                 missing: true,
@@ -37,9 +49,9 @@ impl VerifyRunner for VerifyProcess {
             permissions.set_mode(permissions.mode() | 0o111);
             let _ = std::fs::set_permissions(&path, permissions);
         }
-        // `./verify` in the root, as the contract names it: a relative root
+        // `./verify` from the root, as the contract names it: a relative root
         // joined into the program path would be resolved from the root again.
-        let spawned = tokio::process::Command::new("./verify")
+        let spawned = tokio::process::Command::new(format!("./{}", self.path))
             .args(args)
             .current_dir(&self.root)
             .env("CI", "1")
