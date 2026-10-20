@@ -132,6 +132,99 @@ fn the_wizard_pins_everything_run_needs() {
     assert_eq!(ledger["launch"]["comfyui"], origin);
 }
 
+/// A stand-in for the pi executable: only `--version` is needed at init.
+fn stand_in_pi(dir: &std::path::Path) -> std::path::PathBuf {
+    let pi = dir.join("pi");
+    std::fs::write(
+        &pi,
+        "#!/bin/sh\n[ \"$1\" = --version ] && echo 9.9.9-test && exit 0\nexit 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    pi
+}
+
+/// Pi needs nothing in `~/.pi/agent`: with no `models.json` the wizard finds
+/// the engine and its models as it does for fx. With one, its models are
+/// offered first, and the last choice goes to the engine instead.
+#[test]
+fn the_wizard_sets_up_pi_without_its_models_json() {
+    let origin = stand_in_server();
+    let work = tempfile::tempdir().unwrap();
+    let pi = stand_in_pi(work.path());
+    let home = work.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let init = |project: &str, answers: &[&str]| {
+        let mut child = tenaz()
+            .current_dir(work.path())
+            .env("HOME", &home)
+            .args(["init", "--interactive", "--harness", "pi"])
+            .arg("--pi-bin")
+            .arg(&pi)
+            .args(["--base-url", &format!("{origin}/v1"), "--project", project])
+            .args(["--set", "notify=false"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(format!("{}\n", answers.join("\n")).as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "{stderr}");
+        let ledger: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.path().join(project).join(".tenaz/run.json")).unwrap(),
+        )
+        .unwrap();
+        (stderr, ledger)
+    };
+    let answers = [
+        "Build four trivial files.", // goal
+        "1",                         // model: alpha, 65536 tokens reported
+        "n",                         // reads images
+        "",                          // create: yes
+    ];
+
+    let (stderr, ledger) = init("fresh", &answers);
+    assert!(stderr.contains("Which model?"), "{stderr}");
+    assert!(stderr.contains("Context window: 65536 tokens"), "{stderr}");
+    assert_eq!(ledger["config"]["harness"], "pi");
+    assert_eq!(ledger["config"]["model"], "local/alpha");
+    assert_eq!(ledger["config"]["baseUrl"], format!("{origin}/v1"));
+    assert_eq!(ledger["config"]["contextWindow"], 65536);
+
+    std::fs::create_dir_all(home.join(".pi/agent")).unwrap();
+    std::fs::write(
+        home.join(".pi/agent/models.json"),
+        format!(
+            r#"{{"providers": {{
+                "mine": {{"baseUrl": "{origin}/v1", "models": [{{"id": "beta", "contextWindow": 50000}}]}},
+                "elsewhere": {{"baseUrl": "http://127.0.0.1:9/v1", "models": [{{"id": "far"}}]}}
+            }}}}"#
+        ),
+    )
+    .unwrap();
+    let (stderr, ledger) = init("listed", &["Build four trivial files.", "", ""]);
+    assert!(stderr.contains("mine/beta, 50000 tokens"), "{stderr}");
+    assert!(!stderr.contains("elsewhere/far"), "{stderr}");
+    assert_eq!(ledger["config"]["model"], "mine/beta");
+    assert_eq!(ledger["config"]["contextWindow"], 50000);
+
+    let mut answers = answers.to_vec();
+    answers.insert(1, "2"); // another model, from the engine
+    let (_, ledger) = init("engine", &answers);
+    assert_eq!(ledger["config"]["model"], "local/alpha");
+}
+
 #[test]
 fn without_a_terminal_init_needs_the_model() {
     let work = tempfile::tempdir().unwrap();

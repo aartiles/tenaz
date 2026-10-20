@@ -158,7 +158,7 @@ struct Cli {
 enum HarnessKind {
     /// fx over ACP (default).
     Fx,
-    /// Pi in RPC mode; the model's provider comes from ~/.pi/agent/models.json.
+    /// Pi in RPC mode, with a models.json Tenaz writes for the run.
     Pi,
     /// The scripted fake harness: exercises the runner without a model.
     Fake,
@@ -421,7 +421,6 @@ async fn plan_from_flags(args: InitArgs) -> anyhow::Result<InitPlan> {
         args.provider
             .clone()
             .unwrap_or_else(|| match (&detected, args.base_url.as_deref()) {
-                _ if harness == HarnessKind::Pi => "sushi".to_owned(),
                 (Some(engine), _) => engine.provider.clone(),
                 (None, Some(url)) => detect::provider_by_port(url).unwrap_or("local").to_owned(),
                 (None, None) => "sushi".to_owned(),
@@ -972,7 +971,7 @@ fn run_exit_code(ledger: &tenaz_core::ledger::Ledger) -> ExitCode {
 }
 
 /// The harness name and version to pin and, with Pi, the model's entry in
-/// `~/.pi/agent/models.json`.
+/// `~/.pi/agent/models.json` when that file lists it.
 fn pin_harness(
     harness: HarnessKind,
     bin: Option<&Path>,

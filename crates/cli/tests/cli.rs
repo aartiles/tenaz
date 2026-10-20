@@ -169,7 +169,8 @@ fn status_json(project: &std::path::Path) -> serde_json::Value {
 }
 
 /// `init --harness pi` pins `pi --version` and reads the provider's base URL,
-/// context window and inputs from `~/.pi/agent/models.json`.
+/// context window and inputs from `~/.pi/agent/models.json` when it lists
+/// the model; a model it does not list takes them from the flags.
 #[test]
 fn init_with_the_pi_harness_reads_models_json() {
     let work = tempfile::tempdir().unwrap();
@@ -197,10 +198,10 @@ fn init_with_the_pi_harness_reads_models_json() {
     std::fs::write(&brief, "# Brief\n").unwrap();
     let project = work.path().join("project");
 
-    let unknown = tenaz()
+    let unlisted = tenaz()
         .env("HOME", &home)
         .args(["init", "--project"])
-        .arg(&project)
+        .arg(work.path().join("unlisted"))
         .arg("--brief")
         .arg(&brief)
         .arg("--pi-bin")
@@ -213,15 +214,26 @@ fn init_with_the_pi_harness_reads_models_json() {
             "--provider",
             "sushi",
         ])
+        .args([
+            "--base-url",
+            "http://127.0.0.1:9/v1",
+            "--context-window",
+            "40000",
+        ])
         .output()
         .unwrap();
-    assert!(!unknown.status.success());
     assert!(
-        String::from_utf8_lossy(&unknown.stderr)
-            .contains("Model Missing is not listed under provider sushi"),
+        unlisted.status.success(),
         "{}",
-        String::from_utf8_lossy(&unknown.stderr)
+        String::from_utf8_lossy(&unlisted.stderr)
     );
+    let ledger: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(work.path().join("unlisted/.tenaz/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(ledger["config"]["model"], "sushi/Missing");
+    assert_eq!(ledger["config"]["baseUrl"], "http://127.0.0.1:9/v1");
+    assert_eq!(ledger["config"]["contextWindow"], 40000);
 
     let init = tenaz()
         .env("HOME", &home)

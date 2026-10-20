@@ -6,7 +6,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, bail};
+use anyhow::bail;
 use tenaz_core::ledger::EngineApi;
 
 use crate::detect::{self, Engine};
@@ -328,22 +328,33 @@ fn ask_agent<R: BufRead, W: Write>(
     }
 }
 
-/// With Pi, the model comes from its `models.json`.
+/// With Pi, a model its own `models.json` lists (at `--base-url`, when
+/// given), or one found the way fx finds it: Tenaz writes Pi's model
+/// settings for the run either way.
 async fn pi_model<R: BufRead, W: Write>(
     args: &InitArgs,
     client: &reqwest::Client,
     p: &mut Prompter<R, W>,
 ) -> anyhow::Result<ModelChoice> {
-    let path = tenaz_pi::models::default_models_path()
-        .context("HOME is not set, so Pi's models.json cannot be found")?;
-    let listed = tenaz_pi::models::list_models(&path)?;
+    let listed = match tenaz_pi::models::default_models_path() {
+        Some(path) => tenaz_pi::models::list_models(&path).unwrap_or_else(|error| {
+            tracing::warn!(%error, "ignoring Pi's models.json");
+            Vec::new()
+        }),
+        None => Vec::new(),
+    };
+    let listed: Vec<_> = listed
+        .into_iter()
+        .filter(|m| {
+            args.base_url.is_none()
+                || m.entry.base_url.as_deref().map(detect::normalize_base_url)
+                    == args.base_url.as_deref().map(detect::normalize_base_url)
+        })
+        .collect();
     if listed.is_empty() {
-        bail!(
-            "Pi lists no models in {}. Add your engine and model there first, then run tenaz init again.",
-            path.display()
-        );
+        return engine_model(args, client, p).await;
     }
-    let options: Vec<String> = listed
+    let mut options: Vec<String> = listed
         .iter()
         .map(|m| {
             let ctx = m
@@ -354,11 +365,16 @@ async fn pi_model<R: BufRead, W: Write>(
             format!("{}/{}{ctx}", m.provider, m.id)
         })
         .collect();
-    let chosen = &listed[p.choose("Which model, from Pi's models.json?", &options, 0)?];
-    let base_url = args
+    options.push("Another model, from a running engine".to_owned());
+    let i = p.choose("Which model? These are in Pi's models.json.", &options, 0)?;
+    let Some(chosen) = listed.get(i) else {
+        return engine_model(args, client, p).await;
+    };
+    let base_url = chosen
+        .entry
         .base_url
         .clone()
-        .or_else(|| chosen.entry.base_url.clone());
+        .or_else(|| args.base_url.clone());
     let engine = match &base_url {
         Some(url) => detect::engine_at(client, url).await,
         None => None,
@@ -373,7 +389,7 @@ async fn pi_model<R: BufRead, W: Write>(
     })
 }
 
-/// With fx, the engine is found (or given) first, then its model chosen.
+/// The engine is found (or given) first, then its model chosen.
 async fn engine_model<R: BufRead, W: Write>(
     args: &InitArgs,
     client: &reqwest::Client,

@@ -159,8 +159,11 @@ scripts and CI. With llama.cpp's server on its default port:
 tenaz init --project my-goal --brief brief.md --model my-model --base-url http://127.0.0.1:8080/v1 --context-window 65536
 ```
 
-`--harness pi` uses Pi instead of fx and reads the model's URL and context
-window from `~/.pi/agent/models.json`. `--vision` says the model reads
+`--harness pi` uses Pi instead of fx. Pi needs no setup of its own: like
+fx, it runs with a configuration Tenaz writes for the run, so the engine
+and model are the same answers or flags. When your `~/.pi/agent/models.json`
+lists the model, the wizard offers it and the run keeps its settings there
+(API key, thinking map); the file is only read. `--vision` says the model reads
 images. `--set key=value` overrides a parameter; `tenaz params` lists them.
 To give the agent an image tool, point it at ComfyUI and an API-format
 workflow (`--comfyui http://127.0.0.1:8188 --workflow default=txt2img.json`);

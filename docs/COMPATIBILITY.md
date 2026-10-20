@@ -12,7 +12,7 @@ below; this page is about the real ones.
 | | Linux x86_64 | Builds and passes the test suite in CI. Not run against a real engine yet; no memory sampling (the probe is macOS only). |
 | | Windows | Not supported. |
 | Harness | [fx](https://github.com/vercel-labs/fx) 0.0.14 over ACP | Tested end to end: preflight, bootstrap, build, review, steering, pause and resume. |
-| | [Pi](https://github.com/earendil-works/pi) 1.1.0 in RPC mode | Tested end to end to a COMPLETE run. Talks to the engine directly, so no proxy and no media tools (see below). |
+| | [Pi](https://github.com/earendil-works/pi) 1.1.0 in RPC mode | Tested end to end to a COMPLETE run with the user's own `models.json`. The generated configuration, through the proxy, is tested against a mock engine only. No media tools (see below). |
 | | Other ACP agents | Should work through the same adapter; fx-specific settings are only applied to fx. Untested. |
 | Engine | Sushi 1.2.4 (`--engine sushi`) | Tested for inference. Load and unload through its API are tested against a mock only. |
 | | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock only. |
@@ -48,13 +48,25 @@ above), so a 32k context is the practical floor (`contextFloor`).
   `/props`, LM Studio's `/api/v0/models`); Ollama does not, so the wizard
   asks. Detection is tested against recorded answers, not live engines.
 - fx runs with an isolated `HOME` under `.tenaz/private/fx-home/`, so your
-  own fx settings and MCP servers are not touched. Pi uses your
-  `~/.pi/agent/models.json` for the provider.
+  own fx settings and MCP servers are not touched. Pi runs with its own
+  agent directory, `.tenaz/private/pi-agent/` (`PI_CODING_AGENT_DIR`),
+  holding a `models.json` with the run's one model, pointed at the proxy,
+  and a `settings.json` with a 15-minute HTTP idle timeout and install
+  telemetry off. A model your `~/.pi/agent/models.json` lists is copied
+  from there with its provider settings; one it does not list is
+  described as an OpenAI-compatible endpoint with `system` rather than
+  `developer` messages, no `store` and `max_tokens`. Your own Pi
+  settings, credentials (`auth.json`), extensions and context files are
+  not used: a provider you signed in to with `/login` needs its `apiKey`
+  in `models.json` instead.
 
 ## Known gaps
 
-- **Pi bypasses the proxy.** The engine hold while a media job runs, the
-  per-request log and the media tools cover fx only.
+- **Pi and the proxy.** Pi's requests go through the proxy, so the engine
+  hold covers them, but the media tools are fx only (Pi runs with
+  `--no-mcp`), and Pi's request records take their usage from Pi rather
+  than the proxy, so they carry no server timings (draft acceptance).
+  `--no-proxy` points Pi straight at the engine.
 - **Media through fx with long jobs.** Which route fx takes for a
   10-minute tool call has not been measured.
 - **Linux and NVIDIA memory.** Memory pressure, swap and the engine's

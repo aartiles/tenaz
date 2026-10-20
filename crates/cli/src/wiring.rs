@@ -331,10 +331,25 @@ fn build_harness(
             ..ScriptedHarness::default()
         })),
         "pi" => {
-            // Pi reaches the engine through its provider config (models.json),
-            // so the runner's proxy and media MCP server are not on its path.
-            tracing::info!("pi talks to the engine directly; the proxy is not on its path");
-            let launch = PiLaunch::new(&options.pi_bin, config.model.clone())
+            // Pi gets an agent directory of its own pointing it at the proxy
+            // (or the engine); the media MCP server is not on its path.
+            let agent_dir = project.private_dir().join("pi-agent");
+            let provider = config
+                .provider
+                .clone()
+                .or_else(|| config.model.split_once('/').map(|(p, _)| p.to_owned()))
+                .unwrap_or_else(|| "engine".to_owned());
+            let model = tenaz_pi::models::AgentModel {
+                provider: provider.clone(),
+                id: config.id.clone(),
+                base_url: harness_base_url,
+                context_window: config.context_window,
+                input: config.input.clone(),
+                reasoning: reasoning_effort(config.thinking.as_deref()).is_some(),
+            };
+            tenaz_pi::write_agent_dir(&agent_dir, &model, pi_template(&provider, &config.id))
+                .context("cannot write Pi's agent directory")?;
+            let launch = PiLaunch::new(&options.pi_bin, format!("{provider}/{}", config.id))
                 .thinking(
                     config
                         .thinking
@@ -346,7 +361,8 @@ fn build_harness(
                         .iter()
                         .map(|s| project.tenaz_dir().join("skills").join(&s.name))
                         .collect(),
-                );
+                )
+                .agent_dir(&agent_dir);
             Ok(Arc::new(launch.harness(config.harness_version.clone())))
         }
         "fx" => {
@@ -393,6 +409,16 @@ fn build_harness(
         }
         other => bail!("unknown harness {other} in the ledger"),
     }
+}
+
+/// The user's own settings for the model, when `~/.pi/agent/models.json`
+/// lists it; the file is optional, so a broken one is only logged.
+fn pi_template(provider: &str, id: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let path = tenaz_pi::models::default_models_path()?;
+    tenaz_pi::models::provider_template(&path, provider, id)
+        .inspect_err(|error| tracing::warn!(%error, "ignoring Pi's models.json"))
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]

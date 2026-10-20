@@ -1,8 +1,8 @@
 //! The Pi harness adapter: runs `pi --mode rpc` as a subprocess per session
 //! and turns its JSON event stream into the runner's session events. Pi
-//! talks to the engine through its own provider configuration
-//! (`~/.pi/agent/models.json`), so the engine proxy is optional with this
-//! harness.
+//! runs with an agent directory of its own ([`write_agent_dir`],
+//! `PI_CODING_AGENT_DIR`) whose `models.json` points it at the engine proxy
+//! or the engine, so the user's `~/.pi/agent` is neither needed nor touched.
 
 pub mod models;
 mod session;
@@ -16,6 +16,33 @@ use async_trait::async_trait;
 use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
 
 pub use translate::Translator;
+
+/// Pi's agent directory: settings, models, credentials (Pi 1.1.0).
+pub const AGENT_DIR_ENV: &str = "PI_CODING_AGENT_DIR";
+
+/// Writes the run's agent directory: `models.json` with the one model (see
+/// [`models::agent_models_json`]) and a `settings.json` with an HTTP idle
+/// timeout long enough for a local engine's prefill and install telemetry
+/// off. Pi keeps its own `auth.json` and catalog cache there too.
+pub fn write_agent_dir(
+    dir: &Path,
+    model: &models::AgentModel,
+    template: Option<serde_json::Map<String, serde_json::Value>>,
+) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(
+        dir.join("models.json"),
+        serde_json::to_string_pretty(&models::agent_models_json(model, template))?,
+    )?;
+    std::fs::write(
+        dir.join("settings.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "httpIdleTimeoutMs": 900_000,
+            "enableInstallTelemetry": false
+        }))?,
+    )?;
+    Ok(())
+}
 
 /// The built-in tools a session may use, as the task loop allowed them.
 pub const PI_TOOLS: &str = "read,bash,write,edit,grep,find,ls";
@@ -71,6 +98,15 @@ impl PiLaunch {
     #[must_use]
     pub fn env(mut self, env: Vec<(String, String)>) -> Self {
         self.env = env;
+        self
+    }
+
+    /// Runs Pi with `dir` as its agent directory (made absolute: Pi runs in
+    /// the project).
+    #[must_use]
+    pub fn agent_dir(mut self, dir: &Path) -> Self {
+        self.env.retain(|(key, _)| key != AGENT_DIR_ENV);
+        self.env.push((AGENT_DIR_ENV.to_owned(), absolute(dir)));
         self
     }
 
@@ -229,6 +265,46 @@ mod tests {
             cwd.join("proj/.tenaz/private/sessions")
         );
         assert_eq!(after("--skill"), cwd.join("proj/.tenaz/skills/rust"));
+    }
+
+    #[test]
+    fn the_agent_directory_holds_the_model_and_the_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = dir.path().join("pi-agent");
+        let model = models::AgentModel {
+            provider: "ollama".into(),
+            id: "qwen3.8:27b".into(),
+            base_url: "http://127.0.0.1:4001/v1".into(),
+            context_window: 32768,
+            input: vec!["text".into(), "image".into()],
+            reasoning: true,
+        };
+        write_agent_dir(&agent, &model, None).unwrap();
+        let read = |name: &str| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(agent.join(name)).unwrap()).unwrap()
+        };
+        let models = read("models.json");
+        assert_eq!(
+            models["providers"]["ollama"]["models"][0]["id"],
+            "qwen3.8:27b"
+        );
+        assert_eq!(
+            models["providers"]["ollama"]["baseUrl"],
+            "http://127.0.0.1:4001/v1"
+        );
+        assert_eq!(read("settings.json")["httpIdleTimeoutMs"], 900_000);
+
+        let launch = PiLaunch::new("pi", "ollama/qwen3.8:27b")
+            .env(vec![("A".into(), "1".into())])
+            .agent_dir(Path::new("rel/pi-agent"))
+            .agent_dir(&agent);
+        assert_eq!(
+            launch.env,
+            [
+                ("A".to_owned(), "1".to_owned()),
+                (AGENT_DIR_ENV.to_owned(), agent.display().to_string()),
+            ]
+        );
     }
 
     #[test]
