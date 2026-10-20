@@ -9,6 +9,14 @@ uses [Semantic Versioning](https://semver.org/).
 ### Added
 
 - `tenaz` binary with `init`, `run`, `status`, `finish` and `params`.
+- `--help` describes the workflow with a non-interactive example; `run --help`
+  lists the exit codes and `status --help` what each phase means.
+- `tenaz run` exits with 0 when the goal is met, 3 when it completes with
+  gaps, 4 when it is blocked and 5 when it pauses; 1 is an error and 2 a
+  usage error.
+- `tenaz status --json` prints the status as one JSON object (`phase`,
+  `state`, `blocked_reason`, `last_error`, task counts, current task,
+  session in progress, `origin`).
 - Setup wizard: `tenaz init` without `--model`, in a terminal, finds the
   coding agents on `PATH`, the engines on their usual ports with their
   models, context windows and vision, and ComfyUI, then prints the

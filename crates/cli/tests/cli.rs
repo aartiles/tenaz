@@ -96,6 +96,59 @@ fn init_run_and_status_with_the_fake_harness() {
         .unwrap();
     assert!(again.status.success());
     assert!(String::from_utf8_lossy(&again.stderr).contains("Run is COMPLETE"));
+
+    let json = status_json(&project);
+    assert_eq!(json["initialized"], true);
+    assert_eq!(json["phase"], "COMPLETE");
+    assert_eq!(json["state"], "complete");
+    assert_eq!(json["tasks"]["done"], 5);
+    assert_eq!(json["tasks"]["split"], 1);
+    assert_eq!(json["current"], serde_json::Value::Null);
+    assert_eq!(json["model"], "fake/fake");
+    assert_eq!(status_json(work.path())["initialized"], false);
+
+    // Each way a run stops short has its own exit code, also when it had
+    // stopped before this call.
+    let ledger_path = project.join(".tenaz/run.json");
+    let ledger = std::fs::read_to_string(&ledger_path).unwrap();
+    for (phase, reason, code, state) in [
+        ("COMPLETE_WITH_GAPS", None, 3, "complete_with_gaps"),
+        ("BLOCKED", Some("engine unavailable"), 4, "blocked"),
+    ] {
+        let mut value: serde_json::Value = serde_json::from_str(&ledger).unwrap();
+        value["phase"] = phase.into();
+        if let Some(reason) = reason {
+            value["blocked_reason"] = reason.into();
+        }
+        std::fs::write(&ledger_path, value.to_string()).unwrap();
+        let run = tenaz()
+            .args(["run", "--project"])
+            .arg(&project)
+            .output()
+            .unwrap();
+        assert_eq!(
+            run.status.code(),
+            Some(code),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let json = status_json(&project);
+        assert_eq!(json["state"], state);
+        assert_eq!(
+            json["blocked_reason"],
+            reason.map_or(serde_json::Value::Null, Into::into)
+        );
+    }
+}
+
+fn status_json(project: &std::path::Path) -> serde_json::Value {
+    let out = tenaz()
+        .args(["status", "--json", "--project"])
+        .arg(project)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    serde_json::from_slice(&out.stdout).unwrap()
 }
 
 /// `init --harness pi` pins `pi --version` and reads the provider's base URL,

@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 pub use init::{InitOptions, Templates, init};
 pub use sampler::Sampler;
-pub use status::status_text;
+pub use status::{status_json, status_text};
 
 use crate::ledger::{JournalRecord, Ledger, Phase};
 use crate::params::RunParams;

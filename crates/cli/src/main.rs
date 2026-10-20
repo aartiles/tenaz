@@ -9,11 +9,15 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
+use tenaz_core::ledger::Phase;
 use tenaz_core::ledger::{EngineApi, Launch, ModelConfig};
-use tenaz_core::orchestrator::{InitOptions, RunOptions, Runner, Templates, init, status_text};
+use tenaz_core::orchestrator::{
+    InitOptions, RunOptions, Runner, Templates, init, status_json, status_text,
+};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
 use tenaz_pi::models::ModelEntry;
@@ -62,11 +66,78 @@ fn templates() -> Templates {
     }
 }
 
+/// How the commands fit together, after `tenaz --help`.
+const WORKFLOW_HELP: &str = "\
+Workflow:
+  1. Start the engine with the model loaded.
+  2. tenaz init       writes the brief and pins the setup. In a repository with
+                      commits it works on a new branch in a worktree next to it
+                      and prints that directory; use it as --project from here on.
+  3. tenaz run        works until the goal is met or a task blocks. It can take
+                      hours: run it in the background and poll tenaz status.
+                      Its exit code says how it ended (tenaz run --help).
+  4. tenaz status     shows the phase; safe to call while run works. --json
+                      prints the same as one JSON object.
+  5. tenaz finish     puts the result in one commit on a new branch of the
+                      original repository. Nothing is pushed.
+
+Without questions (scripts and agents), with llama.cpp on its default port:
+  tenaz init --project my-goal --brief brief.md --model my-model \\
+    --base-url http://127.0.0.1:8080/v1 --context-window 65536
+  tenaz run --project my-goal
+  tenaz status --project my-goal --json
+  tenaz finish --project my-goal
+
+Without --model, in a terminal, init asks for everything instead.";
+
+/// How a run ends, after `tenaz run --help`.
+const RUN_HELP: &str = "\
+Exit codes (also when the run had already ended before this call):
+  0  COMPLETE: the goal is met; tenaz finish takes the result.
+  1  error: a precondition (no project, failed engine preflight, a changed
+     brief or harness version) or a failure mid-run, also saved as last_error
+     in .tenaz/run.json. The message says what failed; run again once fixed.
+  2  the command line is wrong.
+  3  COMPLETE_WITH_GAPS: the final review cycles ran out with work missing.
+  4  BLOCKED: tenaz status gives the reason. Fix it, then tenaz run --resume.
+  5  paused after Ctrl-C or SIGTERM. Run again, without --resume.";
+
+/// What the phases mean, after `tenaz status --help`.
+const STATUS_HELP: &str = "\
+Phases:
+  BOOTSTRAP            planning: the spec, the verify script and the task cards.
+  LOOP                 building tasks one at a time, each verified and reviewed.
+  FINAL                the final review of the whole goal.
+  COMPLETE             the final review accepted the result and verify passes.
+  COMPLETE_WITH_GAPS   the final review cycles ran out with work still missing.
+  BLOCKED              the run stopped; the reason follows on the same line.
+
+A run in BOOTSTRAP, LOOP or FINAL is working, or paused if no tenaz run
+is active for it; then run again to continue it. The details are in .tenaz/:
+run.json, journal.jsonl, the task cards in tasks/ and the session notes in
+notes/.
+
+--json fields:
+  initialized      false when there is no run here; runs_elsewhere then lists
+                   the runs in worktrees of this repository.
+  phase            one of the phases above.
+  state            complete, complete_with_gaps, blocked, paused or running
+                   (working, or killed without pausing: run continues it).
+  blocked_reason, last_error, paused_at, ended_at   null when not set.
+  tasks            the number of task cards per status (todo, active, done,
+                   blocked, split, dropped).
+  current          the task being built and its failed attempts, or null.
+  inflight         the session in progress, or null.
+  sessions, sessions_failed, model, harness
+  origin           the repository, branches and worktree of a run on an
+                   existing repository, or null.";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "tenaz",
     version,
-    about = "Tenaz, a single-model runner: one resident model, a goal, a verified result."
+    about = "Tenaz, a single-model runner: one resident model, a goal, a verified result.",
+    after_help = WORKFLOW_HELP
 )]
 struct Cli {
     #[command(subcommand)]
@@ -538,6 +609,7 @@ fn init_at(
 /// in run.json is used; with it, the new value is used and saved there.
 #[derive(clap::Args, Debug)]
 struct RunArgs {
+    /// The run's directory: the one init printed (a worktree for an existing repository).
     #[arg(long, default_value = ".")]
     project: PathBuf,
     /// Continue a BLOCKED run.
@@ -549,13 +621,16 @@ struct RunArgs {
     /// Copy the binary's templates into a started run.
     #[arg(long)]
     refresh_templates: bool,
+    /// The fx executable (default: the one pinned at init, else fx on PATH).
     #[arg(long)]
     fx_bin: Option<PathBuf>,
     /// Arguments that put fx in ACP mode (default: acp).
     #[arg(long, value_delimiter = ' ')]
     fx_args: Option<Vec<String>>,
+    /// The pi executable (default: the one pinned at init, else pi on PATH).
     #[arg(long)]
     pi_bin: Option<PathBuf>,
+    /// The engine API (default: the one pinned at init).
     #[arg(long, value_enum)]
     engine: Option<EngineKind>,
     /// Generic engine: the command that starts it (the whole command line).
@@ -622,21 +697,31 @@ enum Command {
     /// are pinned in .tenaz/run.json. Without --model, in a terminal, a setup
     /// wizard asks for them.
     Init(Box<InitArgs>),
-    /// Run (resumable). Ctrl-C pauses; run again to continue.
+    /// Work on the goal until it is met or a task blocks; can take hours.
+    /// Ctrl-C pauses; run again to continue.
+    #[command(after_help = RUN_HELP)]
     Run(RunArgs),
-    /// Where the run is (reads files only).
+    /// Where the run is: phase, tasks, current task (reads files only, safe
+    /// while a run works).
+    #[command(after_help = STATUS_HELP)]
     Status {
+        /// Print one JSON object instead of text (fields described below).
+        #[arg(long)]
+        json: bool,
+        /// The run's directory: the one init printed (a worktree for an existing repository).
         #[arg(long, default_value = ".")]
         project: PathBuf,
     },
-    /// A branch with the result in the original repository: one commit on
-    /// top of the commit the run started from, with the project's changes
+    /// Put the result on a new branch of the original repository, in one
+    /// commit. Nothing is pushed.
+    ///
+    /// The commit sits on top of the commit the run started from, with the project's changes
     /// and none of Tenaz's files (.tenaz/; for runs from older layouts also
     /// the root BRIEF.md, AGENTS.md and .gitignore lines its first commit
     /// added). One commit rather than the
     /// run's series because that series interleaves bookkeeping commits and
     /// steps that later ones rework; the run branch (tenaz/<slug>) keeps it
-    /// all. Nothing is pushed.
+    /// all.
     Finish(FinishArgs),
     /// The tunable parameters and their defaults.
     Params,
@@ -645,6 +730,7 @@ enum Command {
 /// `tenaz finish`.
 #[derive(clap::Args, Debug)]
 struct FinishArgs {
+    /// The run's directory: the one init printed (a worktree for an existing repository).
     #[arg(long, default_value = ".")]
     project: PathBuf,
     /// The branch to create (default: the run branch's slug, without tenaz/).
@@ -727,7 +813,7 @@ fn execute_finish(args: FinishArgs) -> anyhow::Result<()> {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> anyhow::Result<ExitCode> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -746,7 +832,8 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 plan_from_flags(*args).await?
             };
-            execute_init(plan)
+            execute_init(plan)?;
+            Ok(ExitCode::SUCCESS)
         }
         Command::Run(args) => {
             let project = initialized(args.project.clone())?;
@@ -800,7 +887,7 @@ async fn main() -> anyhow::Result<()> {
                 pi_bin: bin("pi"),
             };
             let wired = wiring::wire(&project, &engine, &harness, &media).await?;
-            let mut runner = Runner::open(project, wired.deps, stop)?;
+            let mut runner = Runner::open(project.clone(), wired.deps, stop)?;
             let options = RunOptions {
                 resume: args.resume,
                 allow_weak_engine: args.allow_weak_engine,
@@ -810,10 +897,18 @@ async fn main() -> anyhow::Result<()> {
             let outcome = runner.run(options).await;
             wired.services.stop().await;
             outcome?;
-            Ok(())
+            Ok(run_exit_code(&project.load_ledger()?))
         }
-        Command::Status { project } => {
+        Command::Status { project, json } => {
             let project = Project::new(project);
+            if json {
+                let mut value = status_json(&project);
+                if value["initialized"] == false {
+                    value["runs_elsewhere"] = worktree::runs_elsewhere(project.root()).into();
+                }
+                println!("{}", serde_json::to_string_pretty(&value)?);
+                return Ok(ExitCode::SUCCESS);
+            }
             print!("{}", status_text(&project));
             match project.load_ledger() {
                 Ok(ledger) => {
@@ -827,9 +922,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
-        Command::Finish(args) => execute_finish(args),
+        Command::Finish(args) => {
+            execute_finish(args)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Params => {
             let json = serde_json::to_value(RunParams::default())?;
             if let Some(map) = json.as_object() {
@@ -837,8 +935,21 @@ async fn main() -> anyhow::Result<()> {
                     println!("{key}={value}");
                 }
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
+    }
+}
+
+/// `run`'s exit code once it returns without an error: 0 when the goal is
+/// met, then one code per way it can stop short. 1 is any error and 2 a
+/// usage error.
+fn run_exit_code(ledger: &tenaz_core::ledger::Ledger) -> ExitCode {
+    match ledger.phase {
+        Phase::Complete => ExitCode::SUCCESS,
+        Phase::CompleteWithGaps => ExitCode::from(3),
+        Phase::Blocked => ExitCode::from(4),
+        // A run that returns without an error and still runs paused.
+        _ => ExitCode::from(5),
     }
 }
 

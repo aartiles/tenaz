@@ -1,6 +1,8 @@
 //! `status`: where a run is, from files only, safe while the run works.
 
-use crate::ledger::JournalRecord;
+use serde_json::{Value, json};
+
+use crate::ledger::{JournalRecord, Ledger, Phase, SessionRecord};
 use crate::memory::{MemorySample, memory_line};
 use crate::metrics::{RequestRecord, engine_line};
 use crate::project::Project;
@@ -13,23 +15,8 @@ pub fn status_text(project: &Project) -> String {
     let Ok(ledger) = project.load_ledger() else {
         return "Not initialized.\n".to_owned();
     };
-    let backlog = project.load_backlog().backlog;
-    let mut counts: Vec<(String, usize)> = Vec::new();
-    for card in backlog.cards() {
-        let key = card.status.to_string();
-        match counts.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, n)) => *n += 1,
-            None => counts.push((key, 1)),
-        }
-    }
-    let sessions: Vec<_> = project
-        .journal()
-        .into_iter()
-        .filter_map(|e| match e.record {
-            JournalRecord::Session(s) => Some(s),
-            _ => None,
-        })
-        .collect();
+    let counts = task_counts(project);
+    let sessions = sessions(project);
     let requests: Vec<RequestRecord> = project
         .read_if(".tenaz/private/requests.jsonl")
         .unwrap_or_default()
@@ -123,4 +110,77 @@ pub fn status_text(project: &Project) -> String {
         memory_line(&samples),
     ];
     format!("{}\n", lines.join("\n"))
+}
+
+/// Tasks per status, in the order the backlog first shows each status.
+fn task_counts(project: &Project) -> Vec<(String, usize)> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for card in project.load_backlog().backlog.cards() {
+        let key = card.status.to_string();
+        match counts.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((key, 1)),
+        }
+    }
+    counts
+}
+
+fn sessions(project: &Project) -> Vec<SessionRecord> {
+    project
+        .journal()
+        .into_iter()
+        .filter_map(|e| match e.record {
+            JournalRecord::Session(s) => Some(s),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Where the run stands, in one word: `complete`, `complete_with_gaps`,
+/// `blocked`, `paused`, or `running` (a run is working, or one was killed
+/// without pausing; `run` continues it either way).
+pub fn run_state(ledger: &Ledger) -> &'static str {
+    match ledger.phase {
+        Phase::Complete => "complete",
+        Phase::CompleteWithGaps => "complete_with_gaps",
+        Phase::Blocked => "blocked",
+        _ if ledger.paused_at.is_some() => "paused",
+        _ => "running",
+    }
+}
+
+/// The status as one JSON object, for scripts and agents. Its field names
+/// stay stable across versions.
+pub fn status_json(project: &Project) -> Value {
+    if let Some(note) = project.legacy_layout_note() {
+        return json!({"initialized": false, "note": note});
+    }
+    let Ok(ledger) = project.load_ledger() else {
+        return json!({"initialized": false});
+    };
+    let tasks: serde_json::Map<String, Value> = task_counts(project)
+        .into_iter()
+        .map(|(k, n)| (k, json!(n)))
+        .collect();
+    let sessions = sessions(project);
+    json!({
+        "initialized": true,
+        "phase": ledger.phase.as_str(),
+        "state": run_state(&ledger),
+        "blocked_reason": ledger.blocked_reason,
+        "last_error": ledger.last_error,
+        "paused_at": ledger.paused_at,
+        "ended_at": ledger.ended_at,
+        "tasks": tasks,
+        "current": ledger.current.as_ref().map(|c| json!({
+            "task": c.task,
+            "failed_attempts": c.history.len(),
+        })),
+        "inflight": ledger.inflight,
+        "sessions": sessions.len(),
+        "sessions_failed": sessions.iter().filter(|s| !s.ok).count(),
+        "model": ledger.config.model,
+        "harness": ledger.config.harness,
+        "origin": ledger.origin,
+    })
 }
