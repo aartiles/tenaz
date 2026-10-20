@@ -81,6 +81,9 @@ Workflow:
   5. tenaz finish     puts the result in one commit on a new branch of the
                       original repository. Nothing is pushed.
 
+Agents delegating a goal: tenaz guide prints a skill with when to delegate,
+how to write the brief and how to check the result.
+
 Without questions (scripts and agents), with llama.cpp on its default port:
   tenaz init --project my-goal --brief brief.md --model my-model \\
     --base-url http://127.0.0.1:8080/v1 --context-window 65536
@@ -94,9 +97,10 @@ Without --model, in a terminal, init asks for everything instead.";
 const RUN_HELP: &str = "\
 Exit codes (also when the run had already ended before this call):
   0  COMPLETE: the goal is met; tenaz finish takes the result.
-  1  error: a precondition (no project, failed engine preflight, a changed
-     brief or harness version) or a failure mid-run, also saved as last_error
-     in .tenaz/run.json. The message says what failed; run again once fixed.
+  1  error: a precondition (no project, another tenaz run already working on
+     it, failed engine preflight, a changed brief or harness version) or a
+     failure mid-run, also saved as last_error in .tenaz/run.json. The
+     message says what failed; run again once fixed.
   2  the command line is wrong.
   3  COMPLETE_WITH_GAPS: the final review cycles ran out with work missing.
   4  BLOCKED: tenaz status gives the reason. Fix it, then tenaz run --resume.
@@ -112,17 +116,22 @@ Phases:
   COMPLETE_WITH_GAPS   the final review cycles ran out with work still missing.
   BLOCKED              the run stopped; the reason follows on the same line.
 
-A run in BOOTSTRAP, LOOP or FINAL is working, or paused if no tenaz run
-is active for it; then run again to continue it. The details are in .tenaz/:
-run.json, journal.jsonl, the task cards in tasks/ and the session notes in
-notes/.
+States (the State line):
+  running              a tenaz run is working on it now (its pid follows).
+  paused               stopped with Ctrl-C or SIGTERM; run again to continue.
+  interrupted          the last run ended without pausing: killed, or failed
+                       with an error (see last_error); run again to continue.
+  blocked, complete, complete_with_gaps   as the phase of that name.
+
+The details are in .tenaz/: run.json, journal.jsonl, the task cards in tasks/
+and the session notes in notes/.
 
 --json fields:
   initialized      false when there is no run here; runs_elsewhere then lists
                    the runs in worktrees of this repository.
   phase            one of the phases above.
-  state            complete, complete_with_gaps, blocked, paused or running
-                   (working, or killed without pausing: run continues it).
+  state            one of the states above.
+  pid              the process id of the run working on it, or null.
   blocked_reason, last_error, paused_at, ended_at   null when not set.
   tasks            the number of task cards per status (todo, active, done,
                    blocked, split, dropped).
@@ -725,6 +734,11 @@ enum Command {
     Finish(FinishArgs),
     /// The tunable parameters and their defaults.
     Params,
+    /// Print the agent skill for delegating goals to Tenaz (a SKILL.md).
+    ///
+    /// It matches this binary's version. To install it for Claude Code:
+    /// mkdir -p ~/.claude/skills/tenaz && tenaz guide > ~/.claude/skills/tenaz/SKILL.md
+    Guide,
 }
 
 /// `tenaz finish`.
@@ -926,6 +940,10 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
         Command::Finish(args) => {
             execute_finish(args)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Guide => {
+            print!("{}", include_str!("../skill/SKILL.md"));
             Ok(ExitCode::SUCCESS)
         }
         Command::Params => {

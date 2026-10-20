@@ -305,3 +305,76 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     assert!(status.starts_with("Phase: COMPLETE\n"), "{status}");
     assert!(status.contains("Tasks: done 5, split 1"), "{status}");
 }
+
+/// Ctrl-C during the preflight pauses the run instead of failing it, and
+/// the next run measures the engine again.
+#[tokio::test]
+async fn a_stop_during_the_preflight_pauses_the_run() {
+    let work = tempfile::tempdir().unwrap();
+    let brief = work.path().join("brief.md");
+    std::fs::write(&brief, "# Fake brief\n\nBuild four trivial files.\n").unwrap();
+    let project = Project::new(work.path().join("project"));
+    let mut params = RunParams::default();
+    params.apply_override("notify=false").unwrap();
+    let config = ModelConfig {
+        harness: "fake".into(),
+        harness_version: "fake-pi 0.0.1".into(),
+        model: "fake/fake".into(),
+        provider: Some("fake".into()),
+        id: "fake".into(),
+        base_url: None,
+        context_window: 131072,
+        input: vec!["text".into()],
+        thinking: Some("medium".into()),
+    };
+    let options = InitOptions {
+        launch: tenaz_core::ledger::Launch::default(),
+        brief: Some(brief),
+        config,
+        params,
+        skills: vec![],
+        runner_version: "test".into(),
+    };
+    init(
+        &project,
+        &GitRepo::new(project.root()),
+        &FastClock::new(100),
+        &templates(),
+        options,
+    )
+    .unwrap();
+    let run_options = RunOptions {
+        runner_version: "test".into(),
+        ..Default::default()
+    };
+
+    let stop = CancellationToken::new();
+    stop.cancel();
+    let mut runner = Runner::open(
+        project.clone(),
+        deps(&project, ScriptedHarness::default()),
+        stop,
+    )
+    .unwrap();
+    runner.run(run_options.clone()).await.unwrap();
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    assert!(log.contains("PAUSED during the preflight"), "{log}");
+    let ledger = project.load_ledger().unwrap();
+    assert!(ledger.paused_at.is_some());
+    assert!(
+        ledger.preflight.is_none(),
+        "an interrupted preflight was saved"
+    );
+    assert_eq!(ledger.phase, Phase::Bootstrap);
+
+    let mut runner = Runner::open(
+        project.clone(),
+        deps(&project, ScriptedHarness::default()),
+        CancellationToken::new(),
+    )
+    .unwrap();
+    runner.run(run_options).await.unwrap();
+    let ledger = project.load_ledger().unwrap();
+    assert!(ledger.preflight.is_some_and(|p| p.ok));
+    assert_eq!(ledger.phase, Phase::Complete);
+}

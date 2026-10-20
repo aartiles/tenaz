@@ -20,6 +20,12 @@ pub const PROTOCOL: &str = ".tenaz/protocol.md";
 /// own `.gitignore`.
 pub const GITIGNORE: &str = ".tenaz/.gitignore";
 
+/// Held by a run while it works; dropping it releases the lock.
+#[derive(Debug)]
+pub struct RunLock {
+    _file: fs::File,
+}
+
 /// Paths and file access for one project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
@@ -83,6 +89,55 @@ impl Project {
 
     pub fn private_dir(&self) -> PathBuf {
         self.tenaz_dir().join("private")
+    }
+
+    fn run_lock_path(&self) -> PathBuf {
+        self.private_dir().join("run.lock")
+    }
+
+    /// Takes the lock a run holds while it works on the project, or `None`
+    /// when another process holds it. The OS releases it when the process
+    /// ends, however it ends.
+    pub fn lock_run(&self) -> io::Result<Option<RunLock>> {
+        fs::create_dir_all(self.private_dir())?;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(self.run_lock_path())?;
+        // `active_run` holds a shared lock for an instant: retry past it.
+        for attempt in 0..10 {
+            match file.try_lock() {
+                Ok(()) => {
+                    use std::io::Write as _;
+                    file.set_len(0)?;
+                    write!(file, "{}", std::process::id())?;
+                    return Ok(Some(RunLock { _file: file }));
+                }
+                Err(fs::TryLockError::WouldBlock) if attempt < 9 => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(fs::TryLockError::WouldBlock) => return Ok(None),
+                Err(fs::TryLockError::Error(e)) => return Err(e),
+            }
+        }
+        Ok(None)
+    }
+
+    /// The process id of the run working on the project, or `None` when no
+    /// run holds the lock.
+    pub fn active_run(&self) -> Option<u32> {
+        let file = fs::File::open(self.run_lock_path()).ok()?;
+        match file.try_lock_shared() {
+            Err(fs::TryLockError::WouldBlock) => Some(
+                fs::read_to_string(self.run_lock_path())
+                    .ok()
+                    .and_then(|t| t.trim().parse().ok())
+                    .unwrap_or(0),
+            ),
+            _ => None,
+        }
     }
 
     pub fn ledger_path(&self) -> PathBuf {
@@ -420,5 +475,17 @@ mod tests {
         p.write_atomic(".tenaz/run.json", "{\"a\":1}\n").unwrap();
         assert_eq!(p.read(".tenaz/run.json").unwrap(), "{\"a\":1}\n");
         assert!(!p.exists(&format!(".tenaz/run.{}.tmp", std::process::id())));
+    }
+
+    #[test]
+    fn the_run_lock_is_held_once_and_names_its_process() {
+        let (_dir, p) = project();
+        assert_eq!(p.active_run(), None);
+        let lock = p.lock_run().unwrap().expect("the first run takes the lock");
+        assert_eq!(p.active_run(), Some(std::process::id()));
+        assert!(p.lock_run().unwrap().is_none(), "a second run got the lock");
+        drop(lock);
+        assert_eq!(p.active_run(), None);
+        assert!(p.lock_run().unwrap().is_some());
     }
 }

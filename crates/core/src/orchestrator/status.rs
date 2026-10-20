@@ -16,6 +16,7 @@ pub fn status_text(project: &Project) -> String {
         return "Not initialized.\n".to_owned();
     };
     let counts = task_counts(project);
+    let active = project.active_run();
     let sessions = sessions(project);
     let requests: Vec<RequestRecord> = project
         .read_if(".tenaz/private/requests.jsonl")
@@ -72,6 +73,14 @@ pub fn status_text(project: &Project) -> String {
                 .blocked_reason
                 .as_ref()
                 .map(|r| format!(" ({r})"))
+                .unwrap_or_default()
+        ),
+        format!(
+            "State: {}{}",
+            run_state(&ledger, active.is_some()),
+            active
+                .filter(|p| *p > 0)
+                .map(|p| format!(" (pid {p})"))
                 .unwrap_or_default()
         ),
         format!(
@@ -136,16 +145,18 @@ fn sessions(project: &Project) -> Vec<SessionRecord> {
         .collect()
 }
 
-/// Where the run stands, in one word: `complete`, `complete_with_gaps`,
-/// `blocked`, `paused`, or `running` (a run is working, or one was killed
-/// without pausing; `run` continues it either way).
-pub fn run_state(ledger: &Ledger) -> &'static str {
+/// Where the run stands, in one word: `running` while a `tenaz run` works
+/// on it, else `complete`, `complete_with_gaps`, `blocked`, `paused`, or
+/// `interrupted` (the last run ended without pausing, killed or failed;
+/// `tenaz run` continues it).
+pub fn run_state(ledger: &Ledger, active: bool) -> &'static str {
     match ledger.phase {
+        _ if active => "running",
         Phase::Complete => "complete",
         Phase::CompleteWithGaps => "complete_with_gaps",
         Phase::Blocked => "blocked",
         _ if ledger.paused_at.is_some() => "paused",
-        _ => "running",
+        _ => "interrupted",
     }
 }
 
@@ -163,10 +174,12 @@ pub fn status_json(project: &Project) -> Value {
         .map(|(k, n)| (k, json!(n)))
         .collect();
     let sessions = sessions(project);
+    let pid = project.active_run();
     json!({
         "initialized": true,
         "phase": ledger.phase.as_str(),
-        "state": run_state(&ledger),
+        "state": run_state(&ledger, pid.is_some()),
+        "pid": pid.filter(|p| *p > 0),
         "blocked_reason": ledger.blocked_reason,
         "last_error": ledger.last_error,
         "paused_at": ledger.paused_at,

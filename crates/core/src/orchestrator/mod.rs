@@ -24,7 +24,7 @@ use crate::ports::{
     Clock, EngineAdapter, EngineMetricsSource, Harness, HarnessError, MemoryProbe, Notifier, Vcs,
     VcsError, VerifyRunner,
 };
-use crate::project::{BRIEF, PROTOCOL, Project};
+use crate::project::{BRIEF, PROTOCOL, Project, RunLock};
 use crate::util::sha256_hex;
 
 /// The ports a run needs.
@@ -283,11 +283,53 @@ impl Runner {
         Ok(())
     }
 
+    /// Runs the engine preflight unless an earlier one passed. `false` when
+    /// a stop interrupted it and the run paused.
+    async fn ensure_preflight(&mut self, allow_weak_engine: bool) -> Result<bool, RunError> {
+        if self.ledger.preflight.as_ref().is_some_and(|p| p.ok) {
+            return Ok(true);
+        }
+        let preflight = self.preflight().await?;
+        if self.stopping() {
+            // An interrupted preflight says nothing about the engine:
+            // not saved, so the next run measures it again.
+            self.ledger.paused_at = Some(self.now());
+            self.save()?;
+            self.journal(JournalRecord::Paused {
+                label: Some("preflight".to_owned()),
+                role: None,
+                task: None,
+                attempt: None,
+            });
+            self.log("PAUSED during the preflight. Run again (no --resume needed) to continue.");
+            return Ok(false);
+        }
+        self.log(&format!(
+            "Preflight: reasoning={} cache={}",
+            preflight.reasoning, preflight.cache
+        ));
+        let ok = preflight.ok;
+        self.ledger.preflight = Some(preflight);
+        self.save()?;
+        if !ok {
+            if !allow_weak_engine {
+                return Err(RunError::Precondition("Engine preflight failed (see .tenaz/run.json \"preflight\"). Fix thinking/prefix cache, or pass --allow-weak-engine to record the run anyway.".to_owned()));
+            }
+            if let Some(p) = &mut self.ledger.preflight {
+                p.accepted_weak = true;
+                p.ok = true;
+            }
+            self.save()?;
+        }
+        Ok(true)
+    }
+
     /// The whole run: preconditions, preflight, then the phases until the run
     /// ends, blocks or pauses.
     pub async fn run(&mut self, options: RunOptions) -> Result<(), RunError> {
         let project = self.project.clone();
         project.create_layout()?;
+        let _lock = take_run_lock(&project)?;
         let brief = project
             .brief()
             .map_err(|_| RunError::Precondition(format!("{BRIEF} is missing")))?;
@@ -331,25 +373,8 @@ impl Runner {
             return Ok(());
         }
         self.engine_serving().await?;
-        if !self.ledger.preflight.as_ref().is_some_and(|p| p.ok) {
-            let preflight = self.preflight().await?;
-            self.log(&format!(
-                "Preflight: reasoning={} cache={}",
-                preflight.reasoning, preflight.cache
-            ));
-            let ok = preflight.ok;
-            self.ledger.preflight = Some(preflight);
-            self.save()?;
-            if !ok {
-                if !options.allow_weak_engine {
-                    return Err(RunError::Precondition("Engine preflight failed (see .tenaz/run.json \"preflight\"). Fix thinking/prefix cache, or pass --allow-weak-engine to record the run anyway.".to_owned()));
-                }
-                if let Some(p) = &mut self.ledger.preflight {
-                    p.accepted_weak = true;
-                    p.ok = true;
-                }
-                self.save()?;
-            }
+        if !self.ensure_preflight(options.allow_weak_engine).await? {
+            return Ok(());
         }
         if let Some(inflight) = self.ledger.inflight.take() {
             self.journal(JournalRecord::Interrupted {
@@ -434,4 +459,18 @@ impl Runner {
         }
         Ok(())
     }
+}
+
+/// The project's run lock, or the error that names the run holding it.
+fn take_run_lock(project: &Project) -> Result<RunLock, RunError> {
+    project.lock_run()?.ok_or_else(|| {
+        let pid = project
+            .active_run()
+            .filter(|p| *p > 0)
+            .map(|p| format!(" (pid {p})"))
+            .unwrap_or_default();
+        RunError::Precondition(format!(
+            "Another tenaz run is working on this project{pid}; stop it with Ctrl-C or wait for it to end"
+        ))
+    })
 }

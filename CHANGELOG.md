@@ -15,8 +15,13 @@ uses [Semantic Versioning](https://semver.org/).
   gaps, 4 when it is blocked and 5 when it pauses; 1 is an error and 2 a
   usage error.
 - `tenaz status --json` prints the status as one JSON object (`phase`,
-  `state`, `blocked_reason`, `last_error`, task counts, current task,
-  session in progress, `origin`).
+  `state`, `pid`, `blocked_reason`, `last_error`, task counts, current task,
+  session in progress, `origin`); the text status gains a `State:` line.
+- `tenaz run` holds a lock on the project while it works: a second run on
+  the same project is refused, and `status` tells a working run (`running`)
+  from one that was killed or failed (`interrupted`).
+- `tenaz guide` prints an Agent Skill for delegating goals to Tenaz from
+  another agent.
 - Setup wizard: `tenaz init` without `--model`, in a terminal, finds the
   coding agents on `PATH`, the engines on their usual ports with their
   models, context windows and vision, and ComfyUI, then prints the
@@ -73,6 +78,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Ctrl-C during the engine preflight pauses the run instead of ending it
+  with a failed preflight.
 - A harness that ends before its turn settles is retried like an engine
   failure instead of being charged as a task attempt, and its exit code and
   stderr tail are journaled (`harness_exit`).

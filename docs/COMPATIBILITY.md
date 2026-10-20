@@ -64,7 +64,6 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - A pause during a bootstrap session counts as one of its attempts, and
   `--resume` does not reset the count: a run blocked in bootstrap needs
   `maxBootstrapAttempts` raised in `.tenaz/run.json`.
-- Ctrl-C during the preflight ends the run instead of pausing it.
 - **Existing projects.** `init` refuses a project directory that is a
   subdirectory of a larger repository (a monorepo package, for example):
   point it at the repository root, or pass `--in-place` to make the

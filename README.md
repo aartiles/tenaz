@@ -196,6 +196,27 @@ The run then treats the brief as a change to that project:
   `tenaz finish` puts the change on a branch of your repository as one
   commit, without `.tenaz/`.
 
+## From a script or another agent
+
+A frontier agent (Claude Code, Codex and the like) can hand a long goal to
+Tenaz and check the result afterwards. Everything it needs is in the binary:
+
+- `tenaz --help` gives the workflow and a non-interactive example.
+- `tenaz run` exits with 0 when the goal is met, 3 when it completes with
+  gaps, 4 when it is blocked and 5 when it pauses; 1 is an error.
+- `tenaz status --json` prints the phase, the state (`running`, `paused`,
+  `blocked`, `interrupted`, `complete`, `complete_with_gaps`), the block
+  reason and the tasks as one JSON object.
+- `tenaz guide` prints an [Agent Skill](crates/cli/skill/SKILL.md): when to
+  delegate, how to write the brief, how to check what comes back. To install
+  it for Claude Code:
+
+```bash
+mkdir -p ~/.claude/skills/tenaz && tenaz guide > ~/.claude/skills/tenaz/SKILL.md
+```
+
+A second `tenaz run` on a project that is already running is refused.
+
 ## How it compares
 
 Model swappers such as llama-swap, Ollama's `keep_alive` or LM Studio's JIT

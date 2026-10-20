@@ -16,6 +16,19 @@ fn params_lists_the_defaults() {
     assert!(text.contains("contextFloor=32768\n"));
 }
 
+/// `guide` prints the skill shipped with the binary, frontmatter first.
+#[test]
+fn guide_prints_the_skill() {
+    let out = tenaz().arg("guide").output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.starts_with("---\nname: tenaz\ndescription: "),
+        "{text}"
+    );
+    assert_eq!(text, include_str!("../skill/SKILL.md"));
+}
+
 #[test]
 fn init_run_and_status_with_the_fake_harness() {
     let work = tempfile::tempdir().unwrap();
@@ -82,7 +95,10 @@ fn init_run_and_status_with_the_fake_harness() {
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&status.stdout);
-    assert!(text.starts_with("Phase: COMPLETE\n"), "{text}");
+    assert!(
+        text.starts_with("Phase: COMPLETE\nState: complete\n"),
+        "{text}"
+    );
     assert!(text.contains("Tasks: done 5, split 1"), "{text}");
     assert!(
         text.contains("Model: fake/fake (thinking medium), fake fake-pi 0.0.1"),
@@ -101,6 +117,7 @@ fn init_run_and_status_with_the_fake_harness() {
     assert_eq!(json["initialized"], true);
     assert_eq!(json["phase"], "COMPLETE");
     assert_eq!(json["state"], "complete");
+    assert_eq!(json["pid"], serde_json::Value::Null);
     assert_eq!(json["tasks"]["done"], 5);
     assert_eq!(json["tasks"]["split"], 1);
     assert_eq!(json["current"], serde_json::Value::Null);
