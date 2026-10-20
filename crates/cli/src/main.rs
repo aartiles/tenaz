@@ -3,8 +3,10 @@
 mod detect;
 mod wiring;
 mod wizard;
+mod worktree;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
@@ -192,6 +194,17 @@ struct InitArgs {
     /// Ask for what is missing even when stdin is not a terminal.
     #[arg(long)]
     interactive: bool,
+    /// In a repository with commits, work on its current branch, in this
+    /// checkout, instead of on a new branch in a worktree; uncommitted
+    /// changes go into Tenaz's first commit.
+    #[arg(long)]
+    in_place: bool,
+    /// The worktree directory (default: ../<repo>-tenaz-<slug>).
+    #[arg(long, conflicts_with = "in_place")]
+    worktree: Option<PathBuf>,
+    /// The slug of the run branch tenaz/<slug> (default: from the goal).
+    #[arg(long, conflicts_with = "in_place")]
+    name: Option<String>,
 }
 
 impl InitArgs {
@@ -247,6 +260,17 @@ impl InitArgs {
         if self.no_proxy {
             words.push("--no-proxy".to_owned());
         }
+        if self.in_place {
+            words.push("--in-place".to_owned());
+        }
+        let mut flag = |name: &str, value: Option<String>| {
+            if let Some(value) = value {
+                words.push(format!("--{name}"));
+                words.push(shell_quote(&value));
+            }
+        };
+        flag("worktree", path(&self.worktree));
+        flag("name", self.name.clone());
         words.join(" ")
     }
 }
@@ -280,7 +304,10 @@ struct InitPlan {
     engine_stop: Option<String>,
     comfyui: Option<String>,
     workflows: Vec<String>,
-    /// For what neither path changes: thinking, params, skills, proxy, timeout.
+    /// The goal typed in the wizard, written as the brief.
+    brief_text: Option<String>,
+    /// For what neither path changes: thinking, params, skills, proxy,
+    /// timeout, where the run goes.
     args: InitArgs,
 }
 
@@ -338,6 +365,7 @@ async fn plan_from_flags(args: InitArgs) -> anyhow::Result<InitPlan> {
         engine_stop: args.engine_stop.clone(),
         comfyui: args.comfyui.clone(),
         workflows: args.workflows.clone(),
+        brief_text: None,
         args,
     })
 }
@@ -366,8 +394,52 @@ fn pinned_workflows(specs: &[String]) -> anyhow::Result<BTreeMap<String, String>
         .collect()
 }
 
+/// The brief's text and the file `init` copies it from: `--brief`, the
+/// wizard's goal (through a scratch file), or none (`BRIEF.md` in place).
+fn brief_source(plan: &InitPlan) -> anyhow::Result<(Option<String>, Option<PathBuf>)> {
+    if let Some(path) = &plan.brief {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("cannot read the brief {}", path.display()))?;
+        return Ok((Some(text), Some(path.clone())));
+    }
+    if let Some(goal) = &plan.brief_text {
+        let text = format!("# Goal\n\n{goal}\n");
+        let path = std::env::temp_dir().join(format!("tenaz-brief-{}.md", std::process::id()));
+        std::fs::write(&path, &text)?;
+        return Ok((Some(text), Some(path)));
+    }
+    Ok((None, None))
+}
+
 fn execute_init(plan: InitPlan) -> anyhow::Result<()> {
-    let project = Project::new(absolute(plan.project));
+    let given = absolute(plan.project.clone());
+    let (brief_text, brief) = brief_source(&plan)?;
+    let request = worktree::PlaceRequest {
+        in_place: plan.args.in_place,
+        worktree: plan.args.worktree.clone().map(absolute),
+        name: plan.args.name.clone(),
+    };
+    let placement = worktree::place(&given, &request, brief_text.as_deref(), brief.as_deref())?;
+    let scratch = plan.brief.is_none().then(|| brief.clone()).flatten();
+    let result = init_at(plan, &given, &placement, brief);
+    if let Some(path) = scratch {
+        let _ = std::fs::remove_file(path);
+    }
+    if result.is_err()
+        && let worktree::Placement::Worktree(wt) = &placement
+    {
+        wt.discard();
+    }
+    result
+}
+
+fn init_at(
+    plan: InitPlan,
+    given: &Path,
+    placement: &worktree::Placement,
+    brief: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    let project = Project::new(placement.project_dir(given));
     let mut params = RunParams::default();
     for pair in &plan.args.sets {
         params.apply_override(pair)?;
@@ -406,17 +478,48 @@ fn execute_init(plan: InitPlan) -> anyhow::Result<()> {
         workflows: pinned_workflows(&plan.workflows)?,
         media_timeout_sec: plan.args.media_timeout,
     };
+    let brief = match placement {
+        worktree::Placement::Worktree(wt) => brief.or_else(|| wt.untracked_brief.clone()),
+        _ => brief,
+    };
+    match placement {
+        worktree::Placement::Worktree(wt) => {
+            wt.create()?;
+            eprintln!(
+                "Created branch {} in the worktree {} (from {}); your checkout stays as it is.",
+                wt.branch,
+                wt.path.display(),
+                wt.base_branch.as_deref().unwrap_or(&wt.base_commit)
+            );
+        }
+        worktree::Placement::InPlace { origin } => eprintln!(
+            "--in-place: Tenaz commits on {} in {}, starting with everything uncommitted there.",
+            origin.branch.as_deref().unwrap_or("the detached HEAD"),
+            origin.repo
+        ),
+        worktree::Placement::Fresh => {}
+    }
     let vcs = tenaz_adapters::git::GitRepo::new(project.root());
     let clock = tenaz_adapters::clock::SystemClock::new();
     let options = InitOptions {
-        brief: plan.brief,
+        brief,
         config,
         launch,
         params,
         skills: plan.args.skills,
         runner_version: runner_version(),
     };
-    let ledger = init(&project, &vcs, &clock, &templates(), options)?;
+    let mut ledger = init(&project, &vcs, &clock, &templates(), options)?;
+    let origin = match placement {
+        worktree::Placement::Worktree(wt) => Some(wt.origin()),
+        worktree::Placement::InPlace { origin } => Some(origin.clone()),
+        worktree::Placement::Fresh => None,
+    };
+    if let Some(mut origin) = origin {
+        origin.init_commit.clone_from(&ledger.checkpoint);
+        ledger.origin = Some(origin);
+        project.save_ledger(&ledger)?;
+    }
     println!(
         "Initialized {} for {} ({} {})",
         project.root().display(),
@@ -518,7 +621,7 @@ enum Command {
     /// A new project from a brief; the model, harness and how to launch them
     /// are pinned in .tenaz/run.json. Without --model, in a terminal, a setup
     /// wizard asks for them.
-    Init(InitArgs),
+    Init(Box<InitArgs>),
     /// Run (resumable). Ctrl-C pauses; run again to continue.
     Run(RunArgs),
     /// Where the run is (reads files only).
@@ -526,8 +629,100 @@ enum Command {
         #[arg(long, default_value = ".")]
         project: PathBuf,
     },
+    /// A branch with the result in the original repository: one commit on
+    /// top of the commit the run started from, with the project's changes
+    /// and none of Tenaz's files (.tenaz/, and the BRIEF.md, AGENTS.md and
+    /// .gitignore lines its first commit added). One commit rather than the
+    /// run's series because that series interleaves bookkeeping commits and
+    /// steps that later ones rework; the run branch (tenaz/<slug>) keeps it
+    /// all. Nothing is pushed.
+    Finish(FinishArgs),
     /// The tunable parameters and their defaults.
     Params,
+}
+
+/// `tenaz finish`.
+#[derive(clap::Args, Debug)]
+struct FinishArgs {
+    #[arg(long, default_value = ".")]
+    project: PathBuf,
+    /// The branch to create (default: the run branch's slug, without tenaz/).
+    #[arg(long)]
+    branch: Option<String>,
+    /// Move the branch when it already exists.
+    #[arg(long)]
+    force: bool,
+    /// Then remove the run's worktree. Its run.json and journal are not
+    /// committed and go with it; the committed history stays on the run
+    /// branch.
+    #[arg(long)]
+    remove_worktree: bool,
+    /// With --remove-worktree, delete the run branch too.
+    #[arg(long, requires = "remove_worktree")]
+    delete_run_branch: bool,
+}
+
+/// The project at `dir`, or an error that points at the runs in worktrees
+/// of the repository there.
+fn initialized(dir: PathBuf) -> anyhow::Result<Project> {
+    let project = Project::new(absolute(dir));
+    if let Some(note) = project.legacy_layout_note() {
+        anyhow::bail!(note);
+    }
+    if !project.exists(".tenaz/run.json") {
+        let mut message = format!(
+            "{} has no .tenaz/run.json; run tenaz init first",
+            project.root().display()
+        );
+        for line in worktree::runs_elsewhere(project.root()) {
+            let _ = write!(message, "\n{line}");
+        }
+        anyhow::bail!(message);
+    }
+    Ok(project)
+}
+
+fn execute_finish(args: FinishArgs) -> anyhow::Result<()> {
+    let project = initialized(args.project)?;
+    let request = worktree::FinishRequest {
+        branch: args.branch,
+        force: args.force,
+        remove_worktree: args.remove_worktree,
+        delete_run_branch: args.delete_run_branch,
+    };
+    let ledger = project.load_ledger()?;
+    let done = worktree::finish(&project, &request)?;
+    println!(
+        "Created branch {} ({}): one commit on {}.",
+        done.branch,
+        &done.commit[..done.commit.len().min(7)],
+        done.base.as_deref().map_or_else(
+            || "no parent".to_owned(),
+            |b| b[..b.len().min(7)].to_owned()
+        )
+    );
+    if !done.stat.trim().is_empty() {
+        print!("{}", done.stat);
+    }
+    for note in &done.notes {
+        println!("{note}");
+    }
+    if let Some(origin) = &ledger.origin {
+        if let Some(branch) = &origin.branch {
+            println!("The run's full history stays on {branch}.");
+        }
+        if let Some(path) = &origin.worktree
+            && !request.remove_worktree
+        {
+            println!(
+                "To remove the worktree: git -C {} worktree remove {}",
+                shell_quote(&origin.repo),
+                shell_quote(path)
+            );
+        }
+    }
+    println!("Nothing was pushed: git show {} to review it.", done.branch);
+    Ok(())
 }
 
 #[tokio::main]
@@ -548,22 +743,16 @@ async fn main() -> anyhow::Result<()> {
                 let mut prompter = wizard::Prompter::new(stdin.lock(), std::io::stderr());
                 wizard::run(&args, &mut prompter).await?
             } else {
-                plan_from_flags(args).await?
+                plan_from_flags(*args).await?
             };
             execute_init(plan)
         }
         Command::Run(args) => {
-            let project = Project::new(absolute(args.project.clone()));
-            if let Some(note) = project.legacy_layout_note() {
-                anyhow::bail!(note);
-            }
-            if !project.exists(".tenaz/run.json") {
-                anyhow::bail!(
-                    "{} has no .tenaz/run.json; run tenaz init first",
-                    project.root().display()
-                );
-            }
+            let project = initialized(args.project.clone())?;
             let mut ledger = project.load_ledger()?;
+            if let Some(origin) = &ledger.origin {
+                tracing::info!("{}", worktree::describe(origin));
+            }
             let launch = args.apply(&ledger.launch, &ledger.config.harness)?;
             if launch != ledger.launch {
                 ledger.launch = launch.clone();
@@ -623,9 +812,23 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Status { project } => {
-            print!("{}", status_text(&Project::new(project)));
+            let project = Project::new(project);
+            print!("{}", status_text(&project));
+            match project.load_ledger() {
+                Ok(ledger) => {
+                    if let Some(origin) = &ledger.origin {
+                        println!("{}", worktree::describe(origin));
+                    }
+                }
+                Err(_) => {
+                    for line in worktree::runs_elsewhere(project.root()) {
+                        println!("{line}");
+                    }
+                }
+            }
             Ok(())
         }
+        Command::Finish(args) => execute_finish(args),
         Command::Params => {
             let json = serde_json::to_value(RunParams::default())?;
             if let Some(map) = json.as_object() {

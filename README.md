@@ -117,17 +117,35 @@ tenaz status
   blocked it.
 - `status` reads files only and is safe while a run works.
 
-> **Tenaz commits to the project's repository.** `init` uses an existing
-> `.git` if there is one, and its first commit stages everything
-> (`git add -A`), including changes you had not committed. During `run`,
-> every step is a commit on the current branch, and a failed attempt is
-> undone with `git reset --hard` and `git clean -fd`, which deletes
-> untracked files that are not ignored. To point Tenaz at an existing
-> project, start from a clean tree on its own branch or worktree:
->
-> ```bash
-> git worktree add ../my-project-tenaz -b tenaz/my-goal
-> ```
+> **Tenaz commits to the project's repository.** Every step of a run is a
+> commit, and a failed attempt is undone with `git reset --hard` and
+> `git clean -fd`, which deletes untracked files that are not ignored. So
+> on a repository that already has commits, `init` leaves your checkout
+> alone: it creates a branch `tenaz/<goal>` from your HEAD, checks it out in
+> a worktree next to the repository (`../<repo>-tenaz-<goal>`; `--worktree`
+> and `--name` change them), records the starting branch and commit in
+> `.tenaz/run.json`, and the run works there. `run` and `status` say where,
+> and point to the worktree when started from your checkout. `init` refuses
+> a tree with uncommitted changes (an untracked `BRIEF.md` is taken as the
+> brief) rather than leave them behind. `--in-place` keeps the old
+> behaviour: the run commits on your current branch, and its first commit
+> takes everything uncommitted (`git add -A`). A new or empty directory
+> becomes a new repository, as before.
+
+When the run is done (or stopped), turn it into something to review:
+
+```bash
+tenaz finish
+```
+
+`finish` creates a branch in your repository (named after the goal, or
+`--branch`) with one commit on top of the commit the run started from: the
+project's changes, without `.tenaz/` and without the files and
+`.gitignore` lines Tenaz's first commit added. One commit, because the
+run's own history interleaves bookkeeping with steps that later steps
+rework; that history stays on `tenaz/<goal>`. `--remove-worktree` then
+removes the worktree (its uncommitted `run.json` and journal go with it).
+Nothing is pushed.
 
 ### Without questions
 

@@ -10,7 +10,7 @@ use anyhow::{Context as _, bail};
 use tenaz_core::ledger::EngineApi;
 
 use crate::detect::{self, Engine};
-use crate::{HarnessKind, InitArgs, InitPlan};
+use crate::{HarnessKind, InitArgs, InitPlan, worktree};
 
 /// Numbered choices, free text and yes/no over a line-based terminal.
 pub struct Prompter<R, W> {
@@ -131,6 +131,7 @@ pub async fn run<R: BufRead, W: Write>(
     let client = detect::client();
     let goal = ask_goal(args, p)?;
     let project = ask_project(args, &goal, p)?;
+    let args = &ask_placement(args, &goal, &project, p)?;
     let harness = ask_agent(args, p)?;
     let choice = if harness == HarnessKind::Pi && args.model.is_none() {
         pi_model(args, &client, p).await?
@@ -189,17 +190,71 @@ pub async fn run<R: BufRead, W: Write>(
         engine_stop: media.engine_stop,
         comfyui: media.comfyui,
         workflows: media.workflows,
+        brief_text: match &goal {
+            Goal::Text(text) => Some(text.clone()),
+            Goal::InProject | Goal::File(_) => None,
+        },
         args: args.clone(),
     };
     show(&plan, &goal, choice.engine.as_ref(), p)?;
     if !p.confirm("Create the project?", true)? {
         bail!("Nothing was created.");
     }
-    if let Goal::Text(text) = &goal {
-        std::fs::create_dir_all(&plan.project)?;
-        std::fs::write(plan.project.join("BRIEF.md"), format!("# Goal\n\n{text}\n"))?;
-    }
     Ok(plan)
+}
+
+/// In a repository with commits: a new branch in a worktree (the default)
+/// or the current branch in place. Checks the worktree can be made before
+/// the other questions.
+fn ask_placement<R: BufRead, W: Write>(
+    args: &InitArgs,
+    goal: &Goal,
+    project: &Path,
+    p: &mut Prompter<R, W>,
+) -> anyhow::Result<InitArgs> {
+    let mut args = args.clone();
+    if args.in_place || !worktree::is_existing_repo(project) {
+        return Ok(args);
+    }
+    if args.worktree.is_none() && args.name.is_none() {
+        let options = [
+            "On a new branch tenaz/<goal>, in a worktree next to it (your checkout stays as it is)"
+                .to_owned(),
+            "In place, on the current branch (every step is a commit there)".to_owned(),
+        ];
+        let question = format!(
+            "{} is a git repository. Where should Tenaz work?",
+            project.display()
+        );
+        args.in_place = p.choose(&question, &options, 0)? == 1;
+    }
+    let brief = match goal {
+        Goal::Text(text) => Some(format!("# Goal\n\n{text}\n")),
+        Goal::File(path) => std::fs::read_to_string(path).ok(),
+        Goal::InProject => None,
+    };
+    let request = worktree::PlaceRequest {
+        in_place: args.in_place,
+        worktree: args.worktree.clone(),
+        name: args.name.clone(),
+    };
+    let placement = worktree::place(
+        &crate::absolute(project.to_path_buf()),
+        &request,
+        brief.as_deref(),
+        match goal {
+            Goal::File(path) => Some(path.as_path()),
+            Goal::Text(_) | Goal::InProject => None,
+        },
+    )?;
+    if let worktree::Placement::Worktree(wt) = &placement {
+        p.say(&format!(
+            "  Tenaz will work on {} in {}.",
+            wt.branch,
+            wt.path.display()
+        ))?;
+    }
+    Ok(args)
 }
 
 fn ask_goal<R: BufRead, W: Write>(args: &InitArgs, p: &mut Prompter<R, W>) -> anyhow::Result<Goal> {

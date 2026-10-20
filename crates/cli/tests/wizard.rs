@@ -148,3 +148,89 @@ fn without_a_terminal_init_needs_the_model() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// On a repository with commits the wizard asks where to work, and the
+/// default is a new branch in a worktree next to it.
+#[test]
+fn the_wizard_offers_a_worktree_on_an_existing_repository() {
+    let origin = stand_in_server();
+    let work = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(work.path()).unwrap();
+    let repo = root.join("app");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .current_dir(&repo)
+            .args([
+                "-c",
+                "user.name=Someone",
+                "-c",
+                "user.email=someone@localhost",
+            ])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("README.md"), "# App\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+    let workflow = root.join("txt2img.json");
+    std::fs::write(&workflow, r#"{"1": {"inputs": {"text": "{{prompt}}"}}}"#).unwrap();
+
+    let mut child = tenaz()
+        .args(["init", "--interactive", "--harness", "fake", "--project"])
+        .arg(&repo)
+        .args(["--base-url", &format!("{origin}/v1")])
+        .args(["--comfyui", &origin])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let answers = [
+        "Add a login page.",        // goal
+        "",                         // where: a worktree
+        "2",                        // model: beta
+        "40000",                    // context window
+        "n",                        // reads images
+        workflow.to_str().unwrap(), // workflow
+        "",                         // stop command
+        "",                         // start command
+        "",                         // create: yes
+    ];
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{}\n", answers.join("\n")).as_bytes())
+        .unwrap();
+    let init = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&init.stderr);
+    assert!(init.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("is a git repository. Where should Tenaz work?"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Tenaz will work on tenaz/add-a-login-page"),
+        "{stderr}"
+    );
+    let worktree = root.join("app-tenaz-add-a-login-page");
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("BRIEF.md")).unwrap(),
+        "# Goal\n\nAdd a login page.\n"
+    );
+    assert!(!repo.join("BRIEF.md").exists());
+    assert!(!repo.join(".tenaz").exists());
+    assert_eq!(git(&["status", "--porcelain"]), "");
+    let stdout = String::from_utf8_lossy(&init.stdout);
+    assert!(stdout.contains("app-tenaz-add-a-login-page"), "{stdout}");
+}

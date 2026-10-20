@@ -8,7 +8,7 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `tenaz` binary with `init`, `run`, `status` and `params`.
+- `tenaz` binary with `init`, `run`, `status`, `finish` and `params`.
 - Setup wizard: `tenaz init` without `--model`, in a terminal, finds the
   coding agents on `PATH`, the engines on their usual ports with their
   models, context windows and vision, and ComfyUI, then prints the
@@ -18,6 +18,17 @@ uses [Semantic Versioning](https://semver.org/).
   media timeout), so `tenaz run` needs no flags; a flag given to `run`
   replaces the pinned value and is saved. `run` and `status` default to
   the current directory.
+- On a repository that already has commits, `init` works on a new branch
+  `tenaz/<goal>` in a worktree next to the repository instead of on the
+  current branch, refuses a tree with uncommitted changes, and records the
+  starting branch and commit in `run.json` (`origin`). `--in-place` keeps
+  the old behaviour; `--worktree` and `--name` choose the directory and
+  branch. The setup wizard asks which, `run` and `status` say where the
+  run works, and both point to the worktree from the original checkout.
+- `tenaz finish`: a branch in the original repository with the run's
+  result as one commit on the starting commit, without `.tenaz/` or the
+  files and `.gitignore` lines Tenaz added; the run branch keeps the full
+  history, `--remove-worktree` removes the worktree. Nothing is pushed.
 - The run's state lives in `.tenaz/` (it was `.agent/`). A project still
   in the old layout is not run: `init`, `run` and `status` say how to move
   it (`mv .agent .tenaz`, the `.gitignore` lines, `--refresh-templates`).

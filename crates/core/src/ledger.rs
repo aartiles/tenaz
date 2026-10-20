@@ -179,6 +179,29 @@ pub struct Inflight {
     pub started_at: String,
 }
 
+/// Where a run on an existing repository started, so `finish` can put the
+/// result on top of it. Absent for new projects and for runs made before
+/// it was recorded.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Origin {
+    /// The working tree `init` was pointed at.
+    pub repo: String,
+    /// The branch checked out there; `None` when HEAD was detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// The commit the run started from.
+    pub base_commit: String,
+    /// The branch the run commits to; `None` on a detached HEAD in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The worktree the run works in; `None` with `--in-place`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
+    /// The commit `init` made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub init_commit: Option<String>,
+}
+
 /// `run.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ledger {
@@ -220,6 +243,8 @@ pub struct Ledger {
     pub blocked_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 impl Ledger {
@@ -263,6 +288,7 @@ impl Ledger {
             phase_before_block: None,
             blocked_reason: None,
             last_error: None,
+            origin: None,
         }
     }
 
