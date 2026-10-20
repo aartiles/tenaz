@@ -872,18 +872,36 @@ impl Runner {
                 Some((&input.card.file, input.card_text)),
                 extra,
             )?;
-            self.session(
-                Role::Reviewer,
-                &prompt,
-                &SessionCtx {
-                    task: Some(task.clone()),
-                    attempt: Some(input.attempt),
-                    turns: Some(25),
-                    context_tokens: None,
-                },
-            )
-            .await?;
-            let (v, t) = self.project.verdict(&review_path);
+            let s = self
+                .session(
+                    Role::Reviewer,
+                    &prompt,
+                    &SessionCtx {
+                        task: Some(task.clone()),
+                        attempt: Some(input.attempt),
+                        turns: Some(25),
+                        context_tokens: None,
+                    },
+                )
+                .await?;
+            let (mut v, mut t) = self.project.verdict(&review_path);
+            // A reviewer that gave its verdict in its last message but did
+            // not write it (or wrote it to the wrong path) is taken at its word.
+            if v.is_none()
+                && let Some(said) = s
+                    .metrics
+                    .texts
+                    .iter()
+                    .rev()
+                    .find(|text| crate::project::verdict_in(text).is_some())
+            {
+                self.project.write(&review_path, said)?;
+                self.log(&format!(
+                    "  {task}: the reviewer wrote no review file; its verdict is taken from its last message"
+                ));
+                v = crate::project::verdict_in(said);
+                t = Some(said.clone());
+            }
             verdict = v;
             text = t;
             self.journal(JournalRecord::Review {

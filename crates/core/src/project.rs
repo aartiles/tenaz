@@ -335,18 +335,7 @@ impl Project {
     /// `(verdict, text)` of a review file: the first `Verdict: ACCEPT|CHANGES` line.
     pub fn verdict(&self, relative: &str) -> (Option<String>, Option<String>) {
         let text = self.read_if(relative);
-        let verdict = text.as_deref().and_then(|t| {
-            t.lines().find_map(|line| {
-                let rest = line.trim_start().strip_prefix("Verdict:")?.trim_start();
-                ["ACCEPT", "CHANGES"]
-                    .into_iter()
-                    .find(|v| {
-                        rest.starts_with(v)
-                            && !rest[v.len()..].starts_with(|c: char| c.is_alphanumeric())
-                    })
-                    .map(str::to_owned)
-            })
-        });
+        let verdict = text.as_deref().and_then(verdict_in);
         (verdict, text)
     }
 
@@ -370,6 +359,21 @@ impl Project {
         text.push('\n');
         self.write(GITIGNORE, &text)
     }
+}
+
+/// The first `Verdict: ACCEPT` or `Verdict: CHANGES` line of `text`, also
+/// in Markdown bold (`**Verdict:** ACCEPT`, `**Verdict: ACCEPT**`).
+pub fn verdict_in(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let plain: String = line.chars().filter(|c| *c != '*' && *c != '_').collect();
+        let rest = plain.trim_start().strip_prefix("Verdict:")?.trim_start();
+        ["ACCEPT", "CHANGES"]
+            .into_iter()
+            .find(|v| {
+                rest.starts_with(v) && !rest[v.len()..].starts_with(|c: char| c.is_alphanumeric())
+            })
+            .map(str::to_owned)
+    })
 }
 
 #[cfg(test)]
@@ -462,6 +466,15 @@ mod tests {
             .unwrap();
         assert_eq!(p.verdict(".tenaz/reviews/T001.md").0, None);
         assert_eq!(p.verdict(".tenaz/reviews/none.md"), (None, None));
+        assert_eq!(
+            verdict_in("**Verdict:** ACCEPT — fine").as_deref(),
+            Some("ACCEPT")
+        );
+        assert_eq!(verdict_in("so **Verdict: CHANGES**").as_deref(), None);
+        assert_eq!(
+            verdict_in("**Verdict: CHANGES**").as_deref(),
+            Some("CHANGES")
+        );
     }
 
     #[test]
