@@ -96,9 +96,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   footprint are sampled on macOS only.
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
-- A pause during a bootstrap session counts as one of its attempts, and
-  `--resume` does not reset the count: a run blocked in bootstrap needs
-  `maxBootstrapAttempts` raised in `.tenaz/run.json`.
+- A pause during a bootstrap session counts as one of its attempts.
+  `--resume` on a run blocked in bootstrap starts the count again.
 - **Existing projects.** `init` refuses a project directory that is a
   subdirectory of a larger repository (a monorepo package, for example):
   point it at the repository root, or pass `--in-place` to make the

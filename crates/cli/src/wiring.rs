@@ -268,7 +268,7 @@ pub async fn wire(
 /// Appends one repair to `log`, as a JSON line.
 fn log_repair(log: &Path, request: u64, tool: &str, fields: &[String]) {
     use tenaz_core::ports::Clock as _;
-    tracing::info!(
+    tracing::debug!(
         tool,
         ?fields,
         "repaired tool-call arguments the engine sent as text"
@@ -300,6 +300,7 @@ async fn start_proxy(
     repairs: Option<PathBuf>,
 ) -> anyhow::Result<tenaz_proxy::ProxyHandle> {
     let repair_log = repairs.clone();
+    let first_repair = std::sync::atomic::AtomicBool::new(true);
     let mut proxy = Proxy::new(
         origin(base_url)?,
         gate,
@@ -331,6 +332,13 @@ async fn start_proxy(
                 fields,
             } => {
                 if let Some(log) = &repair_log {
+                    if first_repair.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::info!(
+                            "the engine sends some tool-call arguments as text; the proxy repairs them \
+                             (each one in {}, the count in tenaz status)",
+                            log.display()
+                        );
+                    }
                     log_repair(log, request, &tool, &fields);
                 }
             }
@@ -446,6 +454,9 @@ fn build_harness(
             let mut launch = FxLaunch::new(&options.fx_bin, &home);
             launch.args.clone_from(&options.fx_args);
             launch.log_dir = Some(project.private_dir());
+            // fx is started through this binary, which puts right what fx
+            // says outside the protocol (see tenaz_acp::fx::normalize_line).
+            launch.shim = std::env::current_exe().ok();
             let mut acp = launch
                 .harness(config.harness_version.clone())
                 .with_observations(feed.clone());

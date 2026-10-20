@@ -738,6 +738,38 @@ enum Command {
     /// It matches this binary's version. To install it for Claude Code:
     /// mkdir -p ~/.claude/skills/tenaz && tenaz guide > ~/.claude/skills/tenaz/SKILL.md
     Guide,
+    /// Runs fx with the given arguments and passes its stdout through,
+    /// putting right what it says outside the ACP protocol. Used by `run`.
+    #[command(name = "fx-shim", hide = true)]
+    FxShim {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
+    },
+}
+
+/// `tenaz fx-shim <fx> <args>`: fx with stdin and stderr inherited and its
+/// stdout normalized line by line; exits with fx's code.
+fn fx_shim(command: &[String]) -> anyhow::Result<ExitCode> {
+    use std::io::{BufRead as _, Write as _};
+    let (program, args) = command
+        .split_first()
+        .context("fx-shim needs the fx binary")?;
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("cannot start {program}"))?;
+    let stdout = child.stdout.take().context("no stdout from fx")?;
+    let mut out = std::io::stdout().lock();
+    for line in std::io::BufReader::new(stdout).lines() {
+        let line = line?;
+        writeln!(out, "{}", tenaz_acp::fx::normalize_line(&line))?;
+        out.flush()?;
+    }
+    let status = child.wait()?;
+    Ok(ExitCode::from(
+        u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
+    ))
 }
 
 /// `tenaz finish`.
@@ -972,6 +1004,7 @@ async fn main() -> anyhow::Result<ExitCode> {
             execute_finish(args)?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::FxShim { command } => fx_shim(&command),
         Command::Guide => {
             print!("{}", include_str!("../skill/SKILL.md"));
             Ok(ExitCode::SUCCESS)

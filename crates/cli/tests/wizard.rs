@@ -383,3 +383,22 @@ fn the_wizard_offers_the_folder_it_runs_in() {
     let tracked = String::from_utf8_lossy(&tracked.stdout);
     assert!(tracked.lines().any(|l| l == "extracto.csv"), "{tracked}");
 }
+
+/// Started in a folder that already has a run, the wizard says how to
+/// continue it instead of setting up another project somewhere else.
+#[test]
+fn the_wizard_stops_in_a_folder_that_has_a_run() {
+    let work = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(work.path().join(".tenaz")).unwrap();
+    std::fs::write(work.path().join(".tenaz/run.json"), "{}").unwrap();
+    let out = tenaz()
+        .current_dir(work.path())
+        .args(["init", "--interactive", "--harness", "fake"])
+        .stdin(Stdio::piped())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("already has a Tenaz run"), "{stderr}");
+    assert!(stderr.contains("tenaz run --resume"), "{stderr}");
+}

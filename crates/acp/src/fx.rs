@@ -140,6 +140,31 @@ pub struct FxLaunch {
     /// given and a shared log keeps only the last session. Stdout is the
     /// protocol, so this is where fx's own diagnostics go.
     pub log_dir: Option<PathBuf>,
+    /// A program that starts fx and normalizes its stdout (see [`harness`](Self::harness)).
+    pub shim: Option<PathBuf>,
+}
+
+/// The subcommand of the shim program that runs fx.
+pub const SHIM_COMMAND: &str = "fx-shim";
+
+/// One line of fx's ACP output, with what fx 0.0.14 says outside the
+/// protocol put right: it ends a turn it refuses with the stop reason
+/// `refused`, which the protocol calls `refusal`, and the client library
+/// drops the connection on the unknown value.
+pub fn normalize_line(line: &str) -> std::borrow::Cow<'_, str> {
+    if !line.contains("\"refused\"") {
+        return std::borrow::Cow::Borrowed(line);
+    }
+    let Ok(mut json) = serde_json::from_str::<serde_json::Value>(line) else {
+        return std::borrow::Cow::Borrowed(line);
+    };
+    match json.pointer_mut("/result/stopReason") {
+        Some(reason) if reason == "refused" => {
+            *reason = serde_json::Value::String("refusal".to_owned());
+            std::borrow::Cow::Owned(json.to_string())
+        }
+        _ => std::borrow::Cow::Borrowed(line),
+    }
 }
 
 impl FxLaunch {
@@ -149,6 +174,7 @@ impl FxLaunch {
             home: home.into(),
             args: vec!["acp".to_owned()],
             log_dir: None,
+            shim: None,
         }
     }
 
@@ -172,17 +198,30 @@ impl FxLaunch {
     }
 
     /// The harness: fx as a subprocess with `HOME` set to the profile and
-    /// its upgrade check off (no network beyond the engine).
+    /// its upgrade check off (no network beyond the engine). With a `shim`
+    /// (a program that runs `shim fx-shim <fx> <args>` and passes fx's
+    /// stdout through [`normalize_line`]), fx is started through it.
     pub fn harness(&self, version: String) -> AcpHarness {
         let info = HarnessInfo {
             name: "fx".to_owned(),
             version,
         };
         let launch = self.clone();
+        let program = self.shim.clone().unwrap_or_else(|| self.binary.clone());
         AcpHarness::subprocess_with(
             info,
-            self.binary.clone(),
-            std::sync::Arc::new(move |spec| launch.command_args(&spec.label)),
+            program,
+            std::sync::Arc::new(move |spec| {
+                let args = launch.command_args(&spec.label);
+                match &launch.shim {
+                    Some(_) => [
+                        vec![SHIM_COMMAND.to_owned(), launch.binary.display().to_string()],
+                        args,
+                    ]
+                    .concat(),
+                    None => args,
+                }
+            }),
             vec![
                 ("HOME".to_owned(), self.home.display().to_string()),
                 ("FX_AUTO_UPGRADE".to_owned(), "0".to_owned()),
@@ -244,6 +283,21 @@ mod tests {
         .unwrap();
         assert_eq!(servers["mcp"]["lease"]["operation_timeout_ms"], 600_000);
         assert_eq!(servers["mcp"]["lease"]["type"], "http");
+    }
+
+    #[test]
+    fn a_refused_turn_becomes_a_refusal_and_nothing_else_changes() {
+        let refused = r#"{"jsonrpc":"2.0","id":7,"result":{"stopReason":"refused","usage":{"inputTokens":1}}}"#;
+        let fixed: serde_json::Value = serde_json::from_str(&normalize_line(refused)).unwrap();
+        assert_eq!(fixed["result"]["stopReason"], "refusal");
+        assert_eq!(fixed["result"]["usage"]["inputTokens"], 1);
+        for line in [
+            r#"{"jsonrpc":"2.0","id":7,"result":{"stopReason":"end_turn"}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"text":""refused""}}"#,
+            "not json \"refused\"",
+        ] {
+            assert_eq!(normalize_line(line), line);
+        }
     }
 
     #[test]

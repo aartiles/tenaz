@@ -127,6 +127,18 @@ pub async fn run<R: BufRead, W: Write>(
     args: &InitArgs,
     p: &mut Prompter<R, W>,
 ) -> anyhow::Result<InitPlan> {
+    if args.project.is_none()
+        && let Ok(here) = std::env::current_dir()
+        && here.join(".tenaz/run.json").exists()
+    {
+        bail!(
+            "{} already has a Tenaz run. `tenaz status` shows where it is; `tenaz run` \
+             continues it (`tenaz run --resume` after a block). To start over here, \
+             remove .tenaz/ first; to start another project, run tenaz init in another \
+             folder or pass --project.",
+            here.display()
+        );
+    }
     p.say("Tenaz setup. Press Enter to take the [default].\n")?;
     let client = detect::client();
     let goal = ask_goal(args, p)?;

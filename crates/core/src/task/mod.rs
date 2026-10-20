@@ -194,7 +194,7 @@ impl TaskCard {
             id,
             title: text_of("title"),
             status,
-            requires: list_of("requires"),
+            requires: expand_ranges(list_of("requires")),
             depends,
             files: list_of("files"),
             parent,
@@ -235,6 +235,25 @@ pub fn set_card_fields(text: &str, fields: &[(&str, String)]) -> String {
     frontmatter::set_fields(text, fields)
 }
 
+/// Requirement ranges written as `R1-R9` (or with an en dash) become the
+/// ids they span; anything else stays as written. A range of more than 500
+/// ids is left alone.
+fn expand_ranges(items: Vec<String>) -> Vec<String> {
+    let number = |s: &str| s.trim().strip_prefix('R')?.parse::<u32>().ok();
+    let mut out = Vec::new();
+    for item in items {
+        let span = item
+            .split_once(['-', '\u{2013}'])
+            .and_then(|(a, b)| Some((number(a)?, number(b)?)))
+            .filter(|(a, b)| a <= b && b - a < 500);
+        match span {
+            Some((a, b)) => out.extend((a..=b).map(|n| format!("R{n}"))),
+            None => out.push(item),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +267,15 @@ mod tests {
         assert_eq!(card.title, "Import CSV");
         assert_eq!(card.status, TaskStatus::Todo);
         assert_eq!(card.requires, vec!["R4", "R9"]);
+        assert_eq!(
+            expand_ranges(vec![
+                "R1-R3".into(),
+                "R7".into(),
+                "R5\u{2013}R6".into(),
+                "R9-R2".into()
+            ]),
+            ["R1", "R2", "R3", "R7", "R5", "R6", "R9-R2"]
+        );
         assert_eq!(card.depends, vec![TaskId::parse("T003").unwrap()]);
         assert_eq!(card.files, vec!["src/import.js", "verify"]);
         assert_eq!(

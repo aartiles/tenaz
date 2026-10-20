@@ -78,6 +78,17 @@ impl Runner {
         card: Option<(&str, &str)>,
         extra: Vec<(String, String)>,
     ) -> Result<String, RunError> {
+        let mut fields = fields;
+        let root = self.project.root().display().to_string();
+        if root.chars().any(char::is_whitespace) {
+            // Models write unquoted paths; a space splits them in the shell.
+            fields.push((
+                "Project folder".to_owned(),
+                format!(
+                    "{root} (it contains spaces: quote it in shell commands, or use relative paths)"
+                ),
+            ));
+        }
         let protocol = self.project.protocol()?;
         let role_prompt = self.project.role_prompt(role)?;
         let spec = self.project.read_if(".tenaz/spec.md");

@@ -65,6 +65,29 @@ impl VerifyOutcome {
     }
 }
 
+/// The JSON object that ends `stdout`: its last line, or, when a model
+/// printed it indented, the object that starts on a line of its own and runs
+/// to the end.
+fn final_json(stdout: &str) -> Option<serde_json::Value> {
+    let text = stdout.trim_end();
+    let object = |s: &str| {
+        serde_json::from_str::<serde_json::Value>(s)
+            .ok()
+            .filter(serde_json::Value::is_object)
+    };
+    if let Some(json) = object(text.lines().last().unwrap_or("")) {
+        return Some(json);
+    }
+    text.match_indices('\n')
+        .map(|(i, _)| i + 1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .chain(std::iter::once(0))
+        .filter(|&i| text[i..].starts_with('{'))
+        .find_map(|i| object(&text[i..]))
+}
+
 /// Interprets a `verify` run as the task loop did.
 pub fn interpret(
     args: &[&str],
@@ -81,10 +104,7 @@ pub fn interpret(
             summary: "verify does not exist at the project root".to_owned(),
         };
     }
-    let last_line = raw.stdout.trim().lines().last().unwrap_or("");
-    let parsed: Option<serde_json::Value> = serde_json::from_str(last_line)
-        .ok()
-        .filter(serde_json::Value::is_object);
+    let parsed = final_json(&raw.stdout);
     let ok = raw.status == Some(0)
         && parsed
             .as_ref()
@@ -234,6 +254,16 @@ mod tests {
             "verify --all exited 2 without a JSON last line.\nstdout tail:\nboom\nstderr tail:\ntrace"
         );
         assert_eq!(text.json, None);
+    }
+
+    #[test]
+    fn an_indented_final_object_counts_as_the_report() {
+        let stdout = "checking\n{\"id\": \"T001.a\", \"status\": \"ok\"}\n{\n  \"ok\": true,\n  \"passed\": 4,\n  \"failed\": []\n}\n";
+        let out = interpret(&["--all"], &raw(0, stdout), 120, 4000);
+        assert!(out.ok, "{}", out.summary);
+        assert_eq!(out.json.unwrap()["passed"], 4);
+        let broken = interpret(&["--all"], &raw(0, "{\n  \"ok\": true,\n"), 120, 4000);
+        assert!(!broken.ok);
     }
 
     #[test]

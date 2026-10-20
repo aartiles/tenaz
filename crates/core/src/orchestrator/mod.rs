@@ -287,7 +287,13 @@ impl Runner {
     /// Runs the engine preflight unless an earlier one passed. `false` when
     /// a stop interrupted it and the run paused.
     async fn ensure_preflight(&mut self, allow_weak_engine: bool) -> Result<bool, RunError> {
-        if self.ledger.preflight.as_ref().is_some_and(|p| p.ok) {
+        // A preflight from before the tool check is measured again.
+        if self
+            .ledger
+            .preflight
+            .as_ref()
+            .is_some_and(|p| p.ok && (p.tools.is_some() || p.accepted_weak))
+        {
             return Ok(true);
         }
         let preflight = self.preflight().await?;
@@ -358,6 +364,11 @@ impl Runner {
         if self.ledger.phase == Phase::Blocked && options.resume {
             self.ledger.phase = self.ledger.phase_before_block.take().unwrap_or(Phase::Loop);
             self.ledger.blocked_reason = None;
+            if self.ledger.phase == Phase::Bootstrap {
+                // A resumed bootstrap gets its attempts again.
+                self.ledger.bootstrap_attempts = 0;
+                self.ledger.bootstrap_tool_failures = 0;
+            }
             self.save()?;
         }
         self.refresh_templates(options.refresh_templates.as_ref())?;
@@ -379,6 +390,11 @@ impl Runner {
                 .map(|r| format!(": {r}"))
                 .unwrap_or_default();
             self.log(&format!("Run is {}{reason}", self.ledger.phase));
+            if self.ledger.phase == Phase::Blocked {
+                self.log(
+                    "Fix the cause, then `tenaz run --resume` tries again from where it blocked.",
+                );
+            }
             return Ok(());
         }
         self.engine_serving().await?;
