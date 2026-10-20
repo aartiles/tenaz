@@ -117,6 +117,18 @@ tenaz status
   blocked it.
 - `status` reads files only and is safe while a run works.
 
+> **Tenaz commits to the project's repository.** `init` uses an existing
+> `.git` if there is one, and its first commit stages everything
+> (`git add -A`), including changes you had not committed. During `run`,
+> every step is a commit on the current branch, and a failed attempt is
+> undone with `git reset --hard` and `git clean -fd`, which deletes
+> untracked files that are not ignored. To point Tenaz at an existing
+> project, start from a clean tree on its own branch or worktree:
+>
+> ```bash
+> git worktree add ../my-project-tenaz -b tenaz/my-goal
+> ```
+
 ### Without questions
 
 Every answer has a flag, and `init` with `--model` asks nothing, for
