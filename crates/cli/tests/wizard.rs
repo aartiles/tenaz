@@ -71,6 +71,7 @@ fn the_wizard_pins_everything_run_needs() {
         .unwrap();
     let answers = [
         "Build four trivial files.", // goal
+        "2",                         // where: a new folder, not this one
         "project",                   // project directory
         "2",                         // model: beta
         "40000",                     // context window, not reported for beta
@@ -116,14 +117,16 @@ fn the_wizard_pins_everything_run_needs() {
     assert!(launch.get("engineStop").is_none(), "{launch}");
 
     // No launch flags: run reads them from run.json, and a flag given now
-    // is saved there.
+    // is saved there. Started from the folder init ran in, run finds the
+    // project in its subfolder.
     let run = tenaz()
-        .current_dir(&project)
+        .current_dir(work.path())
         .args(["run", "--media-timeout", "99"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(run.status.success(), "{stderr}");
+    assert!(stderr.contains("Using the project in"), "{stderr}");
     assert!(stderr.contains("Run finished: COMPLETE"), "{stderr}");
     let ledger: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(project.join(".tenaz/run.json")).unwrap())
@@ -326,4 +329,57 @@ fn the_wizard_offers_a_worktree_on_an_existing_repository() {
     assert_eq!(git(&["status", "--porcelain"]), "");
     let stdout = String::from_utf8_lossy(&init.stdout);
     assert!(stdout.contains("app-tenaz-add-a-login-page"), "{stdout}");
+}
+
+/// Started in a folder that already holds files, the wizard offers to work
+/// there, and those files become the run's starting point.
+#[test]
+fn the_wizard_offers_the_folder_it_runs_in() {
+    let origin = stand_in_server();
+    let work = tempfile::tempdir().unwrap();
+    let here = std::fs::canonicalize(work.path()).unwrap();
+    std::fs::write(
+        here.join("extracto.csv"),
+        "fecha,importe\n2026-07-01,-12.50\n",
+    )
+    .unwrap();
+
+    let mut child = tenaz()
+        .current_dir(&here)
+        .args(["init", "--interactive", "--harness", "fake"])
+        .args(["--base-url", &format!("{origin}/v1")])
+        .args(["--set", "notify=false"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let answers = [
+        "Sum the expenses.", // goal
+        "",                  // where: here
+        "1",                 // model: alpha
+        "n",                 // reads images
+        "",                  // ComfyUI: none
+        "",                  // create: yes
+    ];
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{}\n", answers.join("\n")).as_bytes())
+        .unwrap();
+    let init = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&init.stderr);
+    assert!(init.status.success(), "{stderr}");
+    assert!(stderr.contains("Where should Tenaz work?"), "{stderr}");
+    assert!(stderr.contains("(1 item)"), "{stderr}");
+    assert!(stderr.contains("Tenaz makes it one"), "{stderr}");
+    assert!(here.join(".tenaz/run.json").is_file());
+    let tracked = Command::new("git")
+        .current_dir(&here)
+        .args(["ls-files"])
+        .output()
+        .unwrap();
+    let tracked = String::from_utf8_lossy(&tracked.stdout);
+    assert!(tracked.lines().any(|l| l == "extracto.csv"), "{tracked}");
 }

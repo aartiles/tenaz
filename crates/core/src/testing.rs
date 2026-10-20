@@ -351,6 +351,12 @@ impl Player {
 
     async fn play(mut self, prompt: &str) {
         let Some(role) = field(prompt, "Role").map(str::to_owned) else {
+            if prompt.contains(crate::orchestrator::TOOL_PROBE_FILE) {
+                let printed =
+                    std::fs::read_to_string(self.cwd.join(crate::orchestrator::TOOL_PROBE_FILE))
+                        .unwrap_or_default();
+                return self.finish(printed.trim());
+            }
             return self.finish("323");
         };
         let task = field(prompt, "Task").map(str::to_owned).unwrap_or_default();

@@ -24,12 +24,27 @@ below; this page is about the real ones.
 
 The preflight runs before the first session and checks:
 
-- **Tool calling** through the OpenAI chat completions API.
+- **Tool calling** through the harness's own tools: the model must run
+  `cat probe.txt` with the agent's shell tool and report the word in the
+  file. A model that calls tools with malformed arguments fails here, not
+  three bootstrap sessions later. Same flag.
 - **Reasoning output.** A model that cannot think fails the preflight; pass
   `--allow-weak-engine` to record the failure and run anyway.
 - **Prefix caching.** Without it every turn pays the whole prompt again.
   Same flag.
 - **Vision**, only when the project was initialised with `--vision`.
+
+Some engines' tool-call parsers hand an object argument back as JSON
+text when its schema has no `type` (a `oneOf` of objects, as fx declares
+`shell.request`); TensorFold does (ashhart/TensorFold#1121), and fx then
+rejects every shell call. The engine proxy repairs exactly that: an
+argument whose schema accepts only objects and whose value is a string
+holding a JSON object is parsed back, in streamed and whole responses;
+anything else passes through untouched. Each repair is logged in
+`.tenaz/private/tool-repairs.jsonl` and counted by `tenaz status`;
+`--set repairToolArgs=false` turns it off. Pi's tools take flat
+arguments, so nothing of theirs is repaired; with `--no-proxy` nothing
+is.
 
 Fresh sessions per task keep contexts short (6–35k tokens in the runs
 above), so a 32k context is the practical floor (`contextFloor`).
@@ -59,6 +74,14 @@ above), so a 32k context is the practical floor (`contextFloor`).
   settings, credentials (`auth.json`), extensions and context files are
   not used: a provider you signed in to with `/login` needs its `apiKey`
   in `models.json` instead.
+- Skills: by default the agent sees only the skills pinned with
+  `init --skill`, and none without them. Pi gets `--no-skills` plus each
+  pinned skill. fx's skill catalog gets a 0-byte budget, because fx also
+  lists the skills of every folder above the project (`~/.claude/skills`
+  and `~/.agents/skills` for a project under the home folder); pinned
+  skills are linked into its isolated `HOME`, and with them fx lists those
+  folders' skills again. `--set agentSkills=true` lets the agent load the
+  skills it finds by itself.
 
 ## Known gaps
 

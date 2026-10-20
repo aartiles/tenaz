@@ -28,6 +28,11 @@ pub struct FxSettings {
     /// but does not forward it to a custom OpenAI-compatible provider; the
     /// engine proxy fills `reasoning_effort` into the requests instead.
     pub effort: Option<String>,
+    /// Lists skills to the model. Off, fx's skill catalog gets a budget of
+    /// 0 bytes: no skill reaches the context, including those fx finds in
+    /// the folders above the project (`~/.claude/skills` for a project under
+    /// the home folder).
+    pub skill_catalog: bool,
 }
 
 impl FxSettings {
@@ -53,11 +58,19 @@ impl FxSettings {
             "permission_mode": self.permission_mode,
             "auto_upgrade": false
         });
-        if let (Some(effort), Some(object)) = (&self.effort, json.as_object_mut()) {
-            object.insert(
-                "effort".to_owned(),
-                serde_json::Value::String(effort.clone()),
-            );
+        if let Some(object) = json.as_object_mut() {
+            if let Some(effort) = &self.effort {
+                object.insert(
+                    "effort".to_owned(),
+                    serde_json::Value::String(effort.clone()),
+                );
+            }
+            if !self.skill_catalog {
+                object.insert(
+                    "context_limits".to_owned(),
+                    serde_json::json!({ "skill_catalog_bytes": 0 }),
+                );
+            }
         }
         json
     }
@@ -195,6 +208,7 @@ mod tests {
             supports_vision: true,
             permission_mode: "ask".into(),
             effort: Some("medium".into()),
+            skill_catalog: false,
         };
         let mcp = vec![ProfileMcpServer {
             name: "lease".into(),
@@ -218,6 +232,12 @@ mod tests {
         assert_eq!(written["permission_mode"], "ask");
         assert_eq!(written["effort"], "medium");
         assert_eq!(written["auto_upgrade"], false);
+        assert_eq!(written["context_limits"]["skill_catalog_bytes"], 0);
+        let with_skills = FxSettings {
+            skill_catalog: true,
+            ..settings
+        };
+        assert!(with_skills.to_json().get("context_limits").is_none());
         let servers: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(home.path().join(".fx/mcp.json")).unwrap(),
         )

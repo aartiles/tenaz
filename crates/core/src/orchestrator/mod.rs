@@ -15,8 +15,9 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 pub use init::{InitOptions, Templates, init};
+pub use preflight::TOOL_PROBE_FILE;
 pub use sampler::Sampler;
-pub use status::{status_json, status_text};
+pub use status::{TOOL_REPAIRS, status_json, status_text};
 
 use crate::ledger::{JournalRecord, Ledger, Phase};
 use crate::params::RunParams;
@@ -305,15 +306,23 @@ impl Runner {
             return Ok(false);
         }
         self.log(&format!(
-            "Preflight: reasoning={} cache={}",
-            preflight.reasoning, preflight.cache
+            "Preflight: reasoning={} cache={} tools={}",
+            preflight.reasoning,
+            preflight.cache,
+            preflight.tools.unwrap_or(false)
         ));
         let ok = preflight.ok;
         self.ledger.preflight = Some(preflight);
         self.save()?;
         if !ok {
             if !allow_weak_engine {
-                return Err(RunError::Precondition("Engine preflight failed (see .tenaz/run.json \"preflight\"). Fix thinking/prefix cache, or pass --allow-weak-engine to record the run anyway.".to_owned()));
+                return Err(RunError::Precondition(format!(
+                    "Engine preflight failed: {}. Details in .tenaz/run.json \"preflight\" and .tenaz/private/preflight.*; pass --allow-weak-engine to run anyway.",
+                    preflight::failures(
+                        &self.ledger.config.harness,
+                        self.ledger.preflight.as_ref()
+                    )
+                )));
             }
             if let Some(p) = &mut self.ledger.preflight {
                 p.accepted_weak = true;

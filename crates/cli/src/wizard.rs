@@ -291,6 +291,27 @@ fn ask_project<R: BufRead, W: Write>(
         Goal::Text(text) => slug(text),
         _ => "tenaz-project".to_owned(),
     };
+    if let Ok(here) = std::env::current_dir()
+        && let Some(count) = here_entries(&here)
+    {
+        let options = [
+            format!(
+                "Here, in {} ({count} {})",
+                here.display(),
+                if count == 1 { "item" } else { "items" }
+            ),
+            "In a new folder".to_owned(),
+        ];
+        if p.choose("Where should Tenaz work?", &options, 0)? == 0 {
+            if !here.join(".git").exists() {
+                p.say(
+                    "  This folder is not a git repository: Tenaz makes it one and commits \
+                     what is in it now as the starting point, so every change can be undone.",
+                )?;
+            }
+            return Ok(here);
+        }
+    }
     loop {
         let dir = PathBuf::from(p.ask("Project directory", Some(&suggested))?);
         if !dir.join(".tenaz/run.json").exists() && !dir.join(".agent/run.json").exists() {
@@ -655,6 +676,24 @@ fn harness_kind(name: &str) -> HarnessKind {
     } else {
         HarnessKind::Fx
     }
+}
+
+/// How many visible files and folders `dir` holds, when it is a folder the
+/// user could mean as the project: not empty, not already a Tenaz run, and
+/// neither the home folder nor the filesystem root.
+fn here_entries(dir: &Path) -> Option<usize> {
+    if dir.parent().is_none()
+        || std::env::home_dir().is_some_and(|home| home == dir)
+        || dir.join(".tenaz/run.json").exists()
+    {
+        return None;
+    }
+    let count = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .count();
+    (count > 0).then_some(count)
 }
 
 /// A directory name from the first words of the goal.

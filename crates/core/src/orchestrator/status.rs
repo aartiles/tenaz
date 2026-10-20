@@ -1,6 +1,7 @@
 //! `status`: where a run is, from files only, safe while the run works.
 
 use serde_json::{Value, json};
+use std::fmt::Write as _;
 
 use crate::ledger::{JournalRecord, Ledger, Phase, SessionRecord};
 use crate::memory::{MemorySample, memory_line};
@@ -34,9 +35,10 @@ pub fn status_text(project: &Project) -> String {
         || "not run".to_owned(),
         |p| {
             format!(
-                "reasoning={} cache={}{}",
+                "reasoning={} cache={}{}{}",
                 p.reasoning,
                 p.cache,
+                p.tools.map(|t| format!(" tools={t}")).unwrap_or_default(),
                 if p.accepted_weak {
                     " (accepted weak)"
                 } else {
@@ -118,7 +120,26 @@ pub fn status_text(project: &Project) -> String {
         engine_line(&requests),
         memory_line(&samples),
     ];
-    format!("{}\n", lines.join("\n"))
+    let mut text = lines.join("\n");
+    let repairs = tool_repairs(project);
+    if repairs > 0 {
+        let _ = write!(
+            text,
+            "
+Tool-call repairs: {repairs} (the engine sent object arguments as text; .tenaz/private/{TOOL_REPAIRS})"
+        );
+    }
+    format!("{text}\n")
+}
+
+/// The engine proxy's log of repaired tool-call arguments, under `.tenaz/private/`.
+pub const TOOL_REPAIRS: &str = "tool-repairs.jsonl";
+
+/// How many tool calls the engine proxy repaired.
+fn tool_repairs(project: &Project) -> usize {
+    std::fs::read_to_string(project.private_dir().join(TOOL_REPAIRS)).map_or(0, |text| {
+        text.lines().filter(|l| !l.trim().is_empty()).count()
+    })
 }
 
 /// Tasks per status, in the order the backlog first shows each status.
@@ -192,6 +213,7 @@ pub fn status_json(project: &Project) -> Value {
         "inflight": ledger.inflight,
         "sessions": sessions.len(),
         "sessions_failed": sessions.iter().filter(|s| !s.ok).count(),
+        "tool_repairs": tool_repairs(project),
         "model": ledger.config.model,
         "harness": ledger.config.harness,
         "origin": ledger.origin,

@@ -112,8 +112,17 @@ impl Watchdog {
                 id,
                 name,
                 result_text,
-                ..
-            } => self.tool_end(id, name, result_text, elapsed_ms, &mut actions),
+                is_error,
+            } => {
+                if *is_error {
+                    self.metrics.tool_errors += 1;
+                    if self.metrics.first_tool_error.is_none() {
+                        let shown: String = result_text.chars().take(200).collect();
+                        self.metrics.first_tool_error = Some(format!("{name}: {shown}"));
+                    }
+                }
+                self.tool_end(id, name, result_text, elapsed_ms, &mut actions);
+            }
             SessionEvent::MessageEnd {
                 usage,
                 stop_reason,

@@ -30,8 +30,11 @@ pub fn allowed(role: Role, path: &str, task: Option<&TaskId>, repo: &dyn RepoFac
     } else {
         matches!(role, Role::Bootstrap | Role::Builder)
     };
-    // A done card is history: nobody may rewrite it.
+    // A done card is history: nobody may rewrite it. Before the bootstrap is
+    // accepted no task has been built, so a card a bootstrap session marked
+    // done is a mistake it must be able to correct.
     if allowed
+        && role != Role::Bootstrap
         && path.starts_with(".tenaz/tasks/")
         && repo
             .head_content(path)
@@ -137,7 +140,7 @@ mod tests {
                 "{role}"
             );
             assert!(
-                !allowed(role, ".tenaz/tasks/T001.md", None, &r),
+                role == Role::Bootstrap || !allowed(role, ".tenaz/tasks/T001.md", None, &r),
                 "{role}: done card"
             );
         }
@@ -149,6 +152,19 @@ mod tests {
         let t = TaskId::parse("T007").unwrap();
         assert!(allowed(Role::Bootstrap, "verify", None, &r));
         assert!(allowed(Role::Bootstrap, ".tenaz/tasks/T002.md", None, &r));
+        let marked_done = Repo {
+            head: vec![(".tenaz/tasks/T007.md", "---\nid: T007\nstatus: done\n---\n")],
+        };
+        assert!(
+            allowed(Role::Bootstrap, ".tenaz/tasks/T007.md", None, &marked_done),
+            "a bootstrap may fix a card an earlier bootstrap marked done"
+        );
+        assert!(!allowed(
+            Role::Replan,
+            ".tenaz/tasks/T007.md",
+            None,
+            &marked_done
+        ));
         assert!(!allowed(Role::Bootstrap, ".tenaz/checks/x.sh", None, &r));
         assert!(allowed(Role::Builder, "src/a.js", Some(&t), &r));
         assert!(allowed(Role::Builder, ".tenaz/notes/T007.md", Some(&t), &r));

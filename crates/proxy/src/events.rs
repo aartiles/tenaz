@@ -54,6 +54,13 @@ pub enum ProxyEvent {
         first_byte_ms: Option<u64>,
         total_ms: u64,
     },
+    /// A tool call's arguments came back with objects as JSON text where the
+    /// tool's schema accepts only objects; they were parsed back.
+    ToolArgsRepaired {
+        request: u64,
+        tool: String,
+        fields: Vec<String>,
+    },
     /// The engine returned an error status or could not be reached.
     EngineError {
         request: u64,

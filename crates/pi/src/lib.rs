@@ -57,8 +57,10 @@ pub struct PiLaunch {
     pub thinking: String,
     /// Comma-separated tool allowlist.
     pub tools: String,
-    /// Skill directories loaded explicitly (discovery is off).
+    /// Skill directories loaded explicitly.
     pub skills: Vec<PathBuf>,
+    /// Pi also discovers skills in its usual folders (`--no-skills` is left out).
+    pub discover_skills: bool,
     /// Extra arguments appended after the pinned ones.
     pub extra_args: Vec<String>,
     pub env: Vec<(String, String)>,
@@ -72,6 +74,7 @@ impl PiLaunch {
             thinking: "medium".to_owned(),
             tools: PI_TOOLS.to_owned(),
             skills: Vec::new(),
+            discover_skills: false,
             extra_args: Vec::new(),
             env: Vec::new(),
         }
@@ -86,6 +89,12 @@ impl PiLaunch {
     #[must_use]
     pub fn skills(mut self, skills: Vec<PathBuf>) -> Self {
         self.skills = skills;
+        self
+    }
+
+    #[must_use]
+    pub fn discover_skills(mut self, discover: bool) -> Self {
+        self.discover_skills = discover;
         self
     }
 
@@ -112,8 +121,9 @@ impl PiLaunch {
 
     /// The command line of one session: RPC mode,
     /// a session directory or no persistence, the model and thinking level,
-    /// the tool allowlist, no MCP, no extensions, no skill discovery (pinned
-    /// skills are passed explicitly), project files trusted, offline.
+    /// the tool allowlist, no MCP, no extensions, no skill discovery unless
+    /// asked for (pinned skills are passed explicitly), project files
+    /// trusted, offline.
     /// Paths are made absolute against the runner's directory: Pi runs in
     /// the project, where a relative path would point somewhere else.
     pub fn args(&self, session_dir: Option<&Path>) -> Vec<String> {
@@ -134,8 +144,10 @@ impl PiLaunch {
             self.tools.clone(),
             "--no-mcp".to_owned(),
             "--no-extensions".to_owned(),
-            "--no-skills".to_owned(),
         ]);
+        if !self.discover_skills {
+            args.push("--no-skills".to_owned());
+        }
         for skill in &self.skills {
             args.push("--skill".to_owned());
             args.push(absolute(skill));
@@ -213,6 +225,14 @@ impl Harness for PiHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skill_discovery_stays_off_unless_asked_for() {
+        let launch = PiLaunch::new("pi", "m");
+        assert!(launch.args(None).iter().any(|a| a == "--no-skills"));
+        let discovering = launch.discover_skills(true).args(None);
+        assert!(!discovering.iter().any(|a| a == "--no-skills"));
+    }
 
     #[test]
     fn args_follow_the_task_loops_pi_args() {

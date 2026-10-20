@@ -130,6 +130,10 @@ pub struct Preflight {
     pub settled: bool,
     pub reasoning: bool,
     pub cache: bool,
+    /// The model ran a shell command through the harness's tool and
+    /// reported its output; `None` in preflights from before this check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<bool>,
     pub vision: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision_answer: Option<String>,
@@ -219,6 +223,9 @@ pub struct Ledger {
     pub phase: Phase,
     pub session_seq: u32,
     pub bootstrap_attempts: u32,
+    /// Bootstrap attempts in which every tool call the model made failed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub bootstrap_tool_failures: u32,
     pub done_since_replan: u32,
     pub stuck_replanned: bool,
     pub final_cycles: u32,
@@ -273,6 +280,7 @@ impl Ledger {
             phase: Phase::Bootstrap,
             session_seq: 0,
             bootstrap_attempts: 0,
+            bootstrap_tool_failures: 0,
             done_since_replan: 0,
             stuck_replanned: false,
             final_cycles: 0,
@@ -539,6 +547,11 @@ impl JournalEntry {
             }
         }
     }
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes fields by reference
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[cfg(test)]

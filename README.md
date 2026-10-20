@@ -179,7 +179,8 @@ the code is written; where they disagree with the protocol about how the
 work is done (commits, branches, scope), the protocol wins. Sessions may not
 edit either file. Skill
 directories passed with `--skill` at `init` are pinned read-only into
-`.tenaz/skills/`.
+`.tenaz/skills/`, and are the only skills the agent sees; `--set
+agentSkills=true` also lets it load the ones it finds by itself.
 
 ### In an existing project
 

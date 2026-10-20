@@ -191,6 +191,11 @@ pub struct SessionMetrics {
     pub compactions: u32,
     pub provider_errors: u32,
     pub tool_calls: u32,
+    /// Tool calls the harness reported as failed, and the first of them.
+    #[serde(default)]
+    pub tool_errors: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_tool_error: Option<String>,
     pub writes: u32,
     pub capacity_limits: Vec<u64>,
     pub big_outputs: u32,
@@ -237,6 +242,12 @@ impl SessionMetrics {
                 .is_some_and(|r| r.contains("provider errors"))
     }
 
+    /// The model called tools and every call failed: it is not using the
+    /// harness's tools the way they work, whatever the task asked.
+    pub fn every_tool_call_failed(&self) -> bool {
+        self.tool_calls > 0 && self.tool_errors >= self.tool_calls
+    }
+
     /// The session was stopped at its context budget.
     pub fn context_stopped(&self) -> bool {
         self.abort_reason
@@ -271,6 +282,20 @@ pub fn is_image_refusal(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_whose_every_tool_call_failed_is_told_apart() {
+        let mut m = SessionMetrics::default();
+        assert!(
+            !m.every_tool_call_failed(),
+            "no tool calls is not a tool failure"
+        );
+        m.tool_calls = 3;
+        m.tool_errors = 2;
+        assert!(!m.every_tool_call_failed());
+        m.tool_errors = 3;
+        assert!(m.every_tool_call_failed());
+    }
 
     #[test]
     fn server_timings_follow_the_llama_cpp_layout() {

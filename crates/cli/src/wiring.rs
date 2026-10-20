@@ -2,7 +2,7 @@
 //! the harness for a run from the ledger and the command line.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -215,6 +215,11 @@ pub async fn wire(
             gate.clone(),
             feed.clone(),
             config.thinking.as_deref(),
+            ledger.params.repair_tool_args.then(|| {
+                project
+                    .private_dir()
+                    .join(tenaz_core::orchestrator::TOOL_REPAIRS)
+            }),
         )
         .await?;
         let url = handle.base_url();
@@ -231,6 +236,7 @@ pub async fn wire(
         harness_base_url,
         &mcp_endpoints,
         &ledger.skills,
+        ledger.params.agent_skills,
         ledger.params.verify_path(),
         &feed,
     )?;
@@ -259,14 +265,41 @@ pub async fn wire(
     Ok(Wired { deps, services })
 }
 
-/// The engine proxy: per-request usage and errors go to `feed`, and requests
-/// are given the `reasoning_effort` the thinking level asks for.
+/// Appends one repair to `log`, as a JSON line.
+fn log_repair(log: &Path, request: u64, tool: &str, fields: &[String]) {
+    use tenaz_core::ports::Clock as _;
+    tracing::info!(
+        tool,
+        ?fields,
+        "repaired tool-call arguments the engine sent as text"
+    );
+    let line = serde_json::json!({
+        "at": tenaz_adapters::clock::SystemClock::new().now_rfc3339(),
+        "request": request,
+        "tool": tool,
+        "fields": fields,
+    });
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, format!("{line}\n").as_bytes()));
+    if let Err(error) = written {
+        tracing::warn!(%error, "cannot record a tool-call repair");
+    }
+}
+
+/// The engine proxy: per-request usage and errors go to `feed`, requests
+/// are given the `reasoning_effort` the thinking level asks for, and with a
+/// `repairs` log, tool-call arguments sent as text are repaired and logged.
 async fn start_proxy(
     base_url: &str,
     gate: Gate,
     feed: tokio::sync::broadcast::Sender<EngineObservation>,
     thinking: Option<&str>,
+    repairs: Option<PathBuf>,
 ) -> anyhow::Result<tenaz_proxy::ProxyHandle> {
+    let repair_log = repairs.clone();
     let mut proxy = Proxy::new(
         origin(base_url)?,
         gate,
@@ -292,9 +325,19 @@ async fn start_proxy(
             ProxyEvent::EngineError { message, .. } => {
                 let _ = feed.send(EngineObservation::Error { message });
             }
+            ProxyEvent::ToolArgsRepaired {
+                request,
+                tool,
+                fields,
+            } => {
+                if let Some(log) = &repair_log {
+                    log_repair(log, request, &tool, &fields);
+                }
+            }
             ProxyEvent::Completed { .. } | ProxyEvent::Held { .. } => {}
         }),
     );
+    proxy.repair_tool_args = repairs.is_some();
     if let Some(effort) = reasoning_effort(thinking) {
         // fx does not forward its effort to a custom provider; the proxy fills it in.
         proxy.request_defaults.insert(
@@ -322,6 +365,7 @@ fn build_harness(
     harness_base_url: String,
     mcp_endpoints: &[McpEndpoint],
     skills: &[SkillPin],
+    agent_skills: bool,
     verify_path: &str,
     feed: &tokio::sync::broadcast::Sender<EngineObservation>,
 ) -> anyhow::Result<Arc<dyn Harness>> {
@@ -362,7 +406,8 @@ fn build_harness(
                         .map(|s| project.tenaz_dir().join("skills").join(&s.name))
                         .collect(),
                 )
-                .agent_dir(&agent_dir);
+                .agent_dir(&agent_dir)
+                .discover_skills(agent_skills);
             Ok(Arc::new(launch.harness(config.harness_version.clone())))
         }
         "fx" => {
@@ -379,6 +424,7 @@ fn build_harness(
                 supports_vision: config.supports_images(),
                 permission_mode: "ask".to_owned(),
                 effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
+                skill_catalog: agent_skills || !skills.is_empty(),
             };
             let profile_mcp: Vec<ProfileMcpServer> = mcp_endpoints
                 .iter()
@@ -390,6 +436,13 @@ fn build_harness(
                 })
                 .collect();
             write_profile(&home, &settings, &profile_mcp).context("cannot write the fx profile")?;
+            link_fx_skills(project, &home, skills)?;
+            if !skills.is_empty() && !agent_skills {
+                tracing::warn!(
+                    "fx lists the pinned skills, and with them any skills it finds in the folders \
+                     above the project; Pi loads only the pinned ones"
+                );
+            }
             let mut launch = FxLaunch::new(&options.fx_bin, &home);
             launch.args.clone_from(&options.fx_args);
             launch.log_dir = Some(project.private_dir());
@@ -419,6 +472,27 @@ fn pi_template(provider: &str, id: &str) -> Option<serde_json::Map<String, serde
         .inspect_err(|error| tracing::warn!(%error, "ignoring Pi's models.json"))
         .ok()
         .flatten()
+}
+
+/// Puts the pinned skills where fx looks for its own: `.agents/skills/` in
+/// its isolated `HOME`, as links to `.tenaz/skills/<name>`. Links from an
+/// earlier run are replaced.
+fn link_fx_skills(project: &Project, home: &Path, skills: &[SkillPin]) -> anyhow::Result<()> {
+    let dir = home.join(".agents/skills");
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).context("cannot clear fx's skill folder")?;
+    }
+    if skills.is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&dir)?;
+    for skill in skills {
+        let target = project.tenaz_dir().join("skills").join(&skill.name);
+        let target = std::path::absolute(&target).unwrap_or(target);
+        std::os::unix::fs::symlink(&target, dir.join(&skill.name))
+            .with_context(|| format!("cannot link the skill {} for fx", skill.name))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

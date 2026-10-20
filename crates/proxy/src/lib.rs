@@ -4,6 +4,7 @@
 //! only once per turn), and classifies engine errors in one place.
 
 mod events;
+mod repair;
 mod tap;
 
 use std::net::SocketAddr;
@@ -24,6 +25,8 @@ pub use events::{
     EngineErrorKind, Observer, ProxyEvent, ProxyUsage, classify_error, usage_from_json,
 };
 
+pub use repair::{ObjectArgs, Repair};
+use repair::{StreamRepair, repair_body};
 use tap::{Tap, TappedStream};
 
 /// The proxy's shared state.
@@ -40,6 +43,9 @@ pub struct Proxy {
     /// `reasoning_effort`: fx does not forward a reasoning setting to a custom
     /// OpenAI-compatible provider, and Sushi's default effort is `off`.
     pub request_defaults: serde_json::Map<String, serde_json::Value>,
+    /// Parse back tool-call arguments the engine sent as JSON text where the
+    /// tool's schema accepts only an object (see [`repair`]).
+    pub repair_tool_args: bool,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -94,6 +100,7 @@ impl Proxy {
             sequence: AtomicU64::new(0),
             include_usage: true,
             request_defaults: serde_json::Map::new(),
+            repair_tool_args: true,
         }
     }
 
@@ -202,11 +209,20 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
         Some(rewritten) => bytes::Bytes::from(rewritten),
         None => body,
     };
-    let stream = completion
-        && serde_json::from_slice::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|j| j.get("stream").and_then(serde_json::Value::as_bool))
-            .unwrap_or(false);
+    let request_json = if completion {
+        serde_json::from_slice::<serde_json::Value>(&body).ok()
+    } else {
+        None
+    };
+    let stream = request_json
+        .as_ref()
+        .and_then(|j| j.get("stream").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    let watched = request_json
+        .as_ref()
+        .filter(|_| proxy.repair_tool_args)
+        .map(ObjectArgs::from_request)
+        .filter(|w| !w.is_empty());
     // Hold while the lease has the LLM away.
     if !proxy.gate.is_open() {
         let waited = Instant::now();
@@ -276,10 +292,110 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
             .map(|chunk| chunk.map_err(std::io::Error::other)),
         tap,
     );
-    let mut response = Response::new(Body::from_stream(tapped));
+    let body = match watched.filter(|_| status.is_success()) {
+        None => Body::from_stream(tapped),
+        Some(watched) if stream || event_stream => {
+            Body::from_stream(RepairingStream::new(tapped, watched, proxy.clone(), id))
+        }
+        Some(watched) => {
+            // Non-streaming: the whole body, repaired when it needs to be.
+            let mut whole = Vec::new();
+            let mut tapped = tapped;
+            while let Some(chunk) = tapped.next().await {
+                match chunk {
+                    Ok(chunk) => whole.extend_from_slice(&chunk),
+                    Err(_) => break,
+                }
+            }
+            drop(tapped);
+            match repair_body(&whole, &watched) {
+                Some((fixed, repairs)) => {
+                    report_repairs(&proxy, id, repairs);
+                    Body::from(fixed)
+                }
+                None => Body::from(whole),
+            }
+        }
+    };
+    let mut response = Response::new(body);
     *response.status_mut() = status;
     *response.headers_mut() = response_headers;
     response
+}
+
+fn report_repairs(proxy: &Proxy, request: u64, repairs: Vec<Repair>) {
+    for repair in repairs {
+        proxy.observe(ProxyEvent::ToolArgsRepaired {
+            request,
+            tool: repair.tool,
+            fields: repair.fields,
+        });
+    }
+}
+
+/// An SSE body passed through [`StreamRepair`].
+struct RepairingStream<S> {
+    inner: S,
+    repair: StreamRepair,
+    proxy: Arc<Proxy>,
+    request: u64,
+    ended: bool,
+}
+
+impl<S> RepairingStream<S> {
+    fn new(inner: S, watched: ObjectArgs, proxy: Arc<Proxy>, request: u64) -> Self {
+        Self {
+            inner,
+            repair: StreamRepair::new(watched),
+            proxy,
+            request,
+            ended: false,
+        }
+    }
+
+    fn report(&mut self) {
+        let repairs = std::mem::take(&mut self.repair.repairs);
+        report_repairs(&self.proxy, self.request, repairs);
+    }
+}
+
+impl<S> futures::Stream for RepairingStream<S>
+where
+    S: futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin,
+{
+    type Item = Result<bytes::Bytes, std::io::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        let this = &mut *self;
+        loop {
+            if this.ended {
+                return Poll::Ready(None);
+            }
+            match std::pin::Pin::new(&mut this.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    let out = this.repair.push(&chunk);
+                    this.report();
+                    if !out.is_empty() {
+                        return Poll::Ready(Some(Ok(bytes::Bytes::from(out))));
+                    }
+                }
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(error))),
+                Poll::Ready(None) => {
+                    this.ended = true;
+                    let out = this.repair.finish();
+                    this.report();
+                    if !out.is_empty() {
+                        return Poll::Ready(Some(Ok(bytes::Bytes::from(out))));
+                    }
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
 }
 
 fn elapsed_ms(since: Instant) -> u64 {

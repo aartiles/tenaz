@@ -149,8 +149,17 @@ impl Runner {
                 .clone()
                 .unwrap_or_default()
                 .join("; ");
+            let hint = if self.ledger.bootstrap_tool_failures >= self.ledger.bootstrap_attempts {
+                format!(
+                    " (in every attempt all of the model's tool calls failed: the model does not \
+                     work with {}'s tools; try another model or the other harness)",
+                    self.ledger.config.harness
+                )
+            } else {
+                String::new()
+            };
             return self.block(&format!(
-                "bootstrap failed {} times: {errors}",
+                "bootstrap failed {} times{hint}: {errors}",
                 self.ledger.bootstrap_attempts
             ));
         }
@@ -195,15 +204,41 @@ impl Runner {
                 crate::ownership::reverted_note(Role::Bootstrap, &s.record.reverted),
             );
         }
+        // A session whose every tool call failed did not get to the task: say
+        // so first, for the next session and for whoever reads the block.
+        if !errors.is_empty() && s.metrics.every_tool_call_failed() {
+            errors.insert(
+                0,
+                format!(
+                    "every tool call in the session failed ({} of {}), so it could not read or \
+                     write the project; the first: {}",
+                    s.metrics.tool_errors,
+                    s.metrics.tool_calls,
+                    s.metrics.first_tool_error.as_deref().unwrap_or("unknown")
+                ),
+            );
+        }
         self.journal(JournalRecord::BootstrapValidation {
             attempt: self.ledger.bootstrap_attempts,
             errors: errors.clone(),
             session_ok: s.ok(),
         });
         if !errors.is_empty() {
+            if s.metrics.every_tool_call_failed() {
+                self.ledger.bootstrap_tool_failures += 1;
+            }
             self.log(&format!(
-                "Bootstrap not accepted: {} problem(s)",
-                errors.len()
+                "Bootstrap not accepted: {} problem(s){}",
+                errors.len(),
+                if s.metrics.every_tool_call_failed() {
+                    format!(
+                        "; all {} tool calls failed, the first: {}",
+                        s.metrics.tool_calls,
+                        s.metrics.first_tool_error.as_deref().unwrap_or("unknown")
+                    )
+                } else {
+                    String::new()
+                }
             ));
             self.ledger.last_errors = Some(errors);
             return self.save();

@@ -1,5 +1,6 @@
 //! The engine preflight: reasoning at the configured level, a working
-//! prefix cache, and (for vision models) a correctly read image.
+//! prefix cache, a shell command run through the harness's own tool, and
+//! (for vision models) a correctly read image.
 
 use std::path::Path;
 
@@ -9,33 +10,41 @@ use crate::session::StopReason;
 
 use super::{RunError, Runner};
 
+/// The file the tool probe reads, and the word in it. The word appears
+/// nowhere in the prompt, so an answer with it means the tool call worked.
+pub const TOOL_PROBE_FILE: &str = "probe.txt";
+const TOOL_PROBE_WORD: &str = "marmalade-4817";
+
 impl Runner {
     pub(crate) async fn preflight(&mut self) -> Result<Preflight, RunError> {
         let filler = "The orchestrator measures whether the engine reuses a cached prompt prefix. "
             .repeat(40);
         let vision = self.ledger.config.supports_images();
-        let image_dir = if vision {
-            Some(
-                tempfile::Builder::new()
-                    .prefix("tenaz-preflight-")
-                    .tempdir()?,
-            )
-        } else {
-            None
-        };
-        if let Some(dir) = &image_dir {
+        let dir = tempfile::Builder::new()
+            .prefix("tenaz-preflight-")
+            .tempdir()?;
+        std::fs::write(
+            dir.path().join(TOOL_PROBE_FILE),
+            format!("{TOOL_PROBE_WORD}\n"),
+        )?;
+        if vision {
             write_test_image(&dir.path().join("probe.png"))?;
         }
-        let cwd = image_dir.as_ref().map_or_else(
-            || std::env::current_dir().unwrap_or_else(|_| self.project.root().to_path_buf()),
-            |d| d.path().to_path_buf(),
-        );
+        let cwd = dir.path().to_path_buf();
+        // Absolute paths: a harness may run its tools in another folder than
+        // the session's (fx uses the folder it was started in).
+        let probe = cwd.join(TOOL_PROBE_FILE);
+        let image = cwd.join("probe.png");
         let mut prompts = vec![
             format!("{filler}\nThink briefly, then answer with only the number: what is 17 * 23?"),
             "Now answer with only the number: what is 19 * 21?".to_owned(),
+            format!(
+                "Use your shell tool to run `cat {}`, then answer with only the word it printed.",
+                probe.display()
+            ),
         ];
         if vision {
-            prompts.push("Use the read tool to open probe.png in the current directory and look at it. Answer with two words only: the colour of the square, then the colour of the background.".to_owned());
+            prompts.push(format!("Use the read tool to open {} and look at it. Answer with two words only: the colour of the square, then the colour of the background.", image.display()));
         }
         let (m, requests) = self
             .run_harness("preflight", &prompts, cwd, None, false)
@@ -55,12 +64,14 @@ impl Runner {
         });
         let reasoning = m.reasoning_chars > 0 || m.usage.reasoning > 0;
         let cache = second.is_some_and(|a| a.usage.cache_read > 0);
+        let tools = m.texts.iter().any(|t| t.contains(TOOL_PROBE_WORD));
         Ok(Preflight {
             at: self.now(),
-            ok: m.settled && reasoning && cache && vision_ok != Some(false),
+            ok: m.settled && reasoning && cache && tools && vision_ok != Some(false),
             settled: m.settled,
             reasoning,
             cache,
+            tools: Some(tools),
             vision: vision_ok,
             vision_answer: vision.then(|| last_text.trim().chars().take(80).collect()),
             reasoning_chars: m.reasoning_chars,
@@ -70,6 +81,40 @@ impl Runner {
             engine: engine_summary(&requests),
             accepted_weak: false,
         })
+    }
+}
+
+/// What failed in `preflight`, in words, for the error that stops the run.
+pub(crate) fn failures(harness: &str, preflight: Option<&Preflight>) -> String {
+    let Some(p) = preflight else {
+        return "no result".to_owned();
+    };
+    let mut failed = Vec::new();
+    if !p.settled {
+        failed.push("the session did not finish".to_owned());
+    }
+    if !p.reasoning {
+        failed.push("no reasoning at the configured level".to_owned());
+    }
+    if !p.cache {
+        failed.push("the engine did not reuse the cached prompt prefix".to_owned());
+    }
+    if p.tools == Some(false) {
+        failed.push(format!(
+            "the model could not run `cat {TOOL_PROBE_FILE}` with {harness}'s shell tool, so it \
+             cannot work in the project; try another model, or the other harness"
+        ));
+    }
+    if p.vision == Some(false) {
+        failed.push(format!(
+            "the model did not read the test image correctly (it answered {:?})",
+            p.vision_answer.as_deref().unwrap_or_default()
+        ));
+    }
+    if failed.is_empty() {
+        "no check failed".to_owned()
+    } else {
+        failed.join("; ")
     }
 }
 
@@ -148,6 +193,31 @@ fn zlib_stored(data: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_tool_probe_is_named_with_the_harness() {
+        let p = Preflight {
+            at: String::new(),
+            ok: false,
+            settled: true,
+            reasoning: true,
+            cache: true,
+            tools: Some(false),
+            vision: None,
+            vision_answer: None,
+            reasoning_chars: 10,
+            second_turn_cache_read: 100,
+            duration_ms: 0,
+            engine_metrics: false,
+            engine: None,
+            accepted_weak: false,
+        };
+        let text = failures("fx", Some(&p));
+        assert!(text.contains("with fx's shell tool"), "{text}");
+        assert!(!text.contains("cache"), "{text}");
+        let old = Preflight { tools: None, ..p };
+        assert_eq!(failures("fx", Some(&old)), "no check failed");
+    }
 
     #[test]
     fn test_image_is_a_well_formed_png() {

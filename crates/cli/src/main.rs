@@ -762,12 +762,29 @@ struct FinishArgs {
     delete_run_branch: bool,
 }
 
-/// The project at `dir`, or an error that points at the runs in worktrees
-/// of the repository there.
+/// The project at `dir` or, when `dir` has none, in the only one of its
+/// subfolders that has one; else an error that points at the runs in
+/// worktrees of the repository there.
 fn initialized(dir: PathBuf) -> anyhow::Result<Project> {
-    let project = Project::new(absolute(dir));
+    let mut project = Project::new(absolute(dir));
     if let Some(note) = project.legacy_layout_note() {
         anyhow::bail!(note);
+    }
+    if !project.exists(".tenaz/run.json") {
+        let runs = runs_below(project.root());
+        if let [only] = runs.as_slice() {
+            eprintln!("Using the project in {}", only.display());
+            project = Project::new(only.clone());
+        } else if !runs.is_empty() {
+            let mut message = format!(
+                "{} has no .tenaz/run.json, but these subfolders do; pick one with --project:",
+                project.root().display()
+            );
+            for run in &runs {
+                let _ = write!(message, "\n  {}", run.display());
+            }
+            anyhow::bail!(message);
+        }
     }
     if !project.exists(".tenaz/run.json") {
         let mut message = format!(
@@ -780,6 +797,20 @@ fn initialized(dir: PathBuf) -> anyhow::Result<Project> {
         anyhow::bail!(message);
     }
     Ok(project)
+}
+
+/// The direct subfolders of `dir` that hold a Tenaz run, sorted.
+fn runs_below(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut runs: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.join(".tenaz/run.json").is_file())
+        .collect();
+    runs.sort();
+    runs
 }
 
 fn execute_finish(args: FinishArgs) -> anyhow::Result<()> {

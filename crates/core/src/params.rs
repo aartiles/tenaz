@@ -80,6 +80,14 @@ pub struct RunParams {
     /// wrapper around the project's own tests, and the plan fits the change.
     /// Left unset, `init` sets it from whether the repository has commits.
     pub existing_project: Option<bool>,
+    /// Let the coding agent also load the skills it finds by itself (its own
+    /// skill folders, and with fx those of the folders above the project).
+    /// Off, it sees only the skills pinned with `init --skill`, if any.
+    pub agent_skills: bool,
+    /// The engine proxy parses back tool-call arguments the engine sent as
+    /// JSON text where the tool's schema accepts only an object, and logs
+    /// each repair in `.tenaz/private/tool-repairs.jsonl`.
+    pub repair_tool_args: bool,
 }
 
 impl Default for RunParams {
@@ -119,6 +127,8 @@ impl Default for RunParams {
             memory_sample_sec: 30,
             notify: true,
             existing_project: None,
+            agent_skills: false,
+            repair_tool_args: true,
         }
     }
 }
