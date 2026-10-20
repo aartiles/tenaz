@@ -237,7 +237,7 @@ pub async fn wire(
     let deps = Deps {
         harness,
         vcs: Arc::new(GitRepo::new(project.root())),
-        verify: Arc::new(VerifyProcess::new(project.root())),
+        verify: Arc::new(VerifyProcess::new(project.root()).at(ledger.params.verify_path())),
         clock: Arc::new(SystemClock::new()),
         notifier: Arc::new(DesktopNotifier::new(
             project

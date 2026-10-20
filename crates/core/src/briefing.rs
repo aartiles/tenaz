@@ -77,6 +77,17 @@ pub fn build(role: Role, b: &Briefing<'_>) -> String {
     text
 }
 
+/// What changes in a bootstrap when the project had code before the run.
+/// It comes after the role prompt and overrides it where they differ.
+pub const EXISTING_PROJECT: &str = "This project already has code, conventions and tests; the brief asks for a change to it. Where this section and the role prompt differ, this section wins.
+
+- Do not build a skeleton or restructure the project. Read only what the change touches.
+- `.tenaz/map.md` covers the parts of the project the change touches, not every file.
+- The verify executable is `.tenaz/verify`, not `verify` at the root; it is not part of the delivered change. Make it a thin wrapper that runs the project's own test commands (and linters, if the project uses them) and reports them under the contract. Run it from the project root.
+- Checks for new behaviour belong in the project's own test suite, written the way its existing tests are, so they ship with the change. `.tenaz/verify` maps them to check IDs (`T003.name`), for example by test name or file.
+- `T000.` checks are the project's existing tests: they must pass now and keep passing.
+- Plan as many tasks as the change needs, even one; the 6 to 40 range does not apply.";
+
 /// The note a fresh session gets when it continues work stopped at the context budget.
 pub const CONTINUATION: &str = "## Continuation\n\nAn earlier session on this same work was stopped because its context grew past the budget. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Do not reread large files whole.";
 

@@ -76,6 +76,10 @@ pub struct RunParams {
     pub memory_sample_sec: u64,
     /// Desktop notifications when a run starts, waits on the engine, blocks, ends or crashes.
     pub notify: bool,
+    /// The project had code before the run: `verify` is `.tenaz/verify`, a
+    /// wrapper around the project's own tests, and the plan fits the change.
+    /// Left unset, `init` sets it from whether the repository has commits.
+    pub existing_project: Option<bool>,
 }
 
 impl Default for RunParams {
@@ -114,6 +118,7 @@ impl Default for RunParams {
             map_clip_bytes: 8000,
             memory_sample_sec: 30,
             notify: true,
+            existing_project: None,
         }
     }
 }
@@ -140,6 +145,15 @@ pub enum ParamError {
 }
 
 impl RunParams {
+    /// Where the `verify` executable is, relative to the project root.
+    pub fn verify_path(&self) -> &'static str {
+        if self.existing_project == Some(true) {
+            ".tenaz/verify"
+        } else {
+            "verify"
+        }
+    }
+
     /// The parameter names, in declaration order.
     pub fn names() -> Vec<String> {
         match serde_json::to_value(Self::default()) {
@@ -239,6 +253,17 @@ mod tests {
             Err(ParamError::Syntax(_))
         ));
         assert_eq!(p, RunParams::default());
+    }
+
+    #[test]
+    fn an_existing_project_keeps_verify_under_tenaz() {
+        let mut p = RunParams::default();
+        assert_eq!(p.existing_project, None);
+        assert_eq!(p.verify_path(), "verify");
+        p.apply_override("existingProject=true").unwrap();
+        assert_eq!(p.verify_path(), ".tenaz/verify");
+        p.apply_override("existingProject=false").unwrap();
+        assert_eq!(p.verify_path(), "verify");
     }
 
     #[test]

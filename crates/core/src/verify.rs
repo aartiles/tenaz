@@ -1,6 +1,6 @@
-//! The `verify` contract the orchestrator enforces: an executable at the
-//! project root, exit code 0 on success, and one JSON object as the last line
-//! of stdout.
+//! The `verify` contract the orchestrator enforces: an executable (`verify`
+//! at the project root, or `.tenaz/verify` in an existing project), exit code
+//! 0 on success, and one JSON object as the last line of stdout.
 
 use serde::{Deserialize, Serialize};
 
@@ -126,9 +126,30 @@ fn tail(text: &str, bytes: usize) -> String {
     text[start..].to_owned()
 }
 
+/// Text for a session, with `./verify` and `` `verify` `` pointing at `path`.
+/// The prompts and steers name the default `verify` at the root; an existing
+/// project keeps it at `.tenaz/verify` instead.
+pub fn retarget(text: &str, path: &str) -> String {
+    if path == "verify" {
+        return text.to_owned();
+    }
+    text.replace("./verify", &format!("./{path}"))
+        .replace("`verify`", &format!("`{path}`"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retarget_points_the_text_at_the_verify_path() {
+        let text = "Run ./verify --all. If you need a check, add it to `verify`.";
+        assert_eq!(retarget(text, "verify"), text);
+        assert_eq!(
+            retarget(text, ".tenaz/verify"),
+            "Run ./.tenaz/verify --all. If you need a check, add it to `.tenaz/verify`."
+        );
+    }
 
     fn raw(status: i32, stdout: &str) -> RawVerifyOutput {
         RawVerifyOutput {
