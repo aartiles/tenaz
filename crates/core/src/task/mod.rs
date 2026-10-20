@@ -163,10 +163,19 @@ impl TaskCard {
             Some(value) => value.to_text().unwrap_or_default().parse()?,
         };
         let list_of = |key: &str| fm.get(key).map(Value::to_list).unwrap_or_default();
-        let depends = list_of("depends")
+        let mut depends = list_of("depends")
             .iter()
             .map(|d| TaskId::parse(d))
             .collect::<Result<Vec<_>, _>>()?;
+        // A task id under `requires` is a dependency written in the wrong list.
+        let (task_ids, requires): (Vec<String>, Vec<String>) = expand_ranges(list_of("requires"))
+            .into_iter()
+            .partition(|r| TaskId::parse(r).is_ok());
+        for id in task_ids.iter().filter_map(|r| TaskId::parse(r).ok()) {
+            if !depends.contains(&id) {
+                depends.push(id);
+            }
+        }
         let parent = match fm.get("parent").and_then(Value::to_text) {
             Some(p) if !p.is_empty() => Some(TaskId::parse(&p)?),
             _ => None,
@@ -194,7 +203,7 @@ impl TaskCard {
             id,
             title: text_of("title"),
             status,
-            requires: expand_ranges(list_of("requires")),
+            requires,
             depends,
             files: list_of("files"),
             parent,
@@ -267,6 +276,19 @@ mod tests {
         assert_eq!(card.title, "Import CSV");
         assert_eq!(card.status, TaskStatus::Todo);
         assert_eq!(card.requires, vec!["R4", "R9"]);
+        let misplaced = TaskCard::parse(
+            "T007.md",
+            "---\nid: T007\nrequires: [R6, T006, T002]\ndepends: [T006]\n---\n",
+        )
+        .unwrap();
+        assert_eq!(misplaced.requires, ["R6"]);
+        assert_eq!(
+            misplaced.depends,
+            [
+                TaskId::parse("T006").unwrap(),
+                TaskId::parse("T002").unwrap()
+            ]
+        );
         assert_eq!(
             expand_ranges(vec![
                 "R1-R3".into(),

@@ -100,7 +100,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   attempt that leaves fewer problems than the one before does not count,
   up to `maxBootstrapAttempts` such attempts. `--resume` on a run blocked
   in bootstrap starts both counts again. Task cards a model wrapped in a
-  code fence are unfenced before they are checked.
+  code fence are unfenced before they are checked, and task ids listed
+  under `requires` are read as dependencies. When cards a planner wrote
+  later cannot be read, a replan session gets the problems to fix, twice
+  in a row at most, before the run blocks.
 - **Existing projects.** `init` refuses a project directory that is a
   subdirectory of a larger repository (a monorepo package, for example):
   point it at the repository root, or pass `--in-place` to make the

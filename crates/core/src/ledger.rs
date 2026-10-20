@@ -230,6 +230,9 @@ pub struct Ledger {
     /// the attempt before; at most `maxBootstrapAttempts` of them.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub bootstrap_uncounted: u32,
+    /// Planner sessions run in a row to fix invalid task cards.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub card_repairs: u32,
     pub done_since_replan: u32,
     pub stuck_replanned: bool,
     pub final_cycles: u32,
@@ -286,6 +289,7 @@ impl Ledger {
             bootstrap_attempts: 0,
             bootstrap_tool_failures: 0,
             bootstrap_uncounted: 0,
+            card_repairs: 0,
             done_since_replan: 0,
             stuck_replanned: false,
             final_cycles: 0,
