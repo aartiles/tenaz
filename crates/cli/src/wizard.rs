@@ -196,8 +196,11 @@ pub async fn run<R: BufRead, W: Write>(
         bail!("Nothing was created.");
     }
     if let Goal::Text(text) = &goal {
-        std::fs::create_dir_all(&plan.project)?;
-        std::fs::write(plan.project.join("BRIEF.md"), format!("# Goal\n\n{text}\n"))?;
+        let brief = plan.project.join(tenaz_core::project::BRIEF);
+        if let Some(dir) = brief.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(brief, format!("# Goal\n\n{text}\n"))?;
     }
     Ok(plan)
 }
@@ -209,7 +212,7 @@ fn ask_goal<R: BufRead, W: Write>(args: &InitArgs, p: &mut Prompter<R, W>) -> an
     if args
         .project
         .as_ref()
-        .is_some_and(|dir| dir.join("BRIEF.md").is_file())
+        .is_some_and(|dir| dir.join(tenaz_core::project::BRIEF).is_file())
     {
         return Ok(Goal::InProject);
     }
@@ -470,7 +473,11 @@ fn show<R: BufRead, W: Write>(
     p: &mut Prompter<R, W>,
 ) -> anyhow::Result<()> {
     let goal_text = match goal {
-        Goal::InProject => plan.project.join("BRIEF.md").display().to_string(),
+        Goal::InProject => plan
+            .project
+            .join(tenaz_core::project::BRIEF)
+            .display()
+            .to_string(),
         Goal::File(path) => path.display().to_string(),
         Goal::Text(text) => text.clone(),
     };
@@ -500,7 +507,7 @@ fn show<R: BufRead, W: Write>(
     let flags = InitArgs {
         project: Some(plan.project.clone()),
         brief: match goal {
-            Goal::Text(_) | Goal::InProject => Some(plan.project.join("BRIEF.md")),
+            Goal::Text(_) | Goal::InProject => Some(plan.project.join(tenaz_core::project::BRIEF)),
             Goal::File(path) => Some(path.clone()),
         },
         harness: Some(plan.harness),

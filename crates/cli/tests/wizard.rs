@@ -100,7 +100,7 @@ fn the_wizard_pins_everything_run_needs() {
 
     let project = work.path().join("project");
     assert_eq!(
-        std::fs::read_to_string(project.join("BRIEF.md")).unwrap(),
+        std::fs::read_to_string(project.join(".tenaz/brief.md")).unwrap(),
         "# Goal\n\nBuild four trivial files.\n"
     );
     let ledger: serde_json::Value =

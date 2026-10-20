@@ -5,10 +5,18 @@ Each session does one unit of work (plan, one task, or one review) and then
 stops. The repository is the only memory between sessions, and the next
 session knows only what you leave in it.
 
+The project may have its own instructions (`AGENTS.md`, `CLAUDE.md` or
+similar). Follow them for how the code is written: style, conventions, tools
+and commands. Where they conflict with this protocol about how the work is
+done (committing, branches, pull requests, which files you may change, when
+to stop, how work is checked), this protocol wins: the orchestrator commits,
+and you do not commit, push, open pull requests or switch branches.
+
 ## Rules for every session
 
-- `BRIEF.md` is the original request. Never edit it, `AGENTS.md`, or
-  `.tenaz/prompts/`.
+- `.tenaz/brief.md` is the original request. Never edit it, this protocol
+  (`.tenaz/protocol.md`), `.tenaz/prompts/`, or the project's own
+  `AGENTS.md` and `CLAUDE.md`.
 - `.tenaz/run.json` and `.tenaz/journal.jsonl` belong to the orchestrator.
   Do not edit them.
 - The orchestrator runs `./verify` after your session and decides the outcome
@@ -46,7 +54,8 @@ session knows only what you leave in it.
   pages, reports), list their paths in an optional `"artifacts"` array in that
   JSON. Reviewers open them.
 - Checks are deterministic, need no network, clean up after themselves, and
-  finish within 120 seconds in total, unless `BRIEF.md` sets another limit.
+  finish within 120 seconds in total, unless `.tenaz/brief.md` sets another
+  limit.
 - A check tests behaviour (run the program and assert on its output or
   state), not merely that a file exists.
 - Never delete or weaken an existing check to make it pass. If a check is

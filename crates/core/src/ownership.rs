@@ -1,6 +1,7 @@
 //! Which paths a session of each role may change. Everything else it wrote
 //! is reverted after the session, and the next prompt says so.
 
+use crate::project::{BRIEF, GITIGNORE, PROTOCOL};
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId};
 
@@ -12,9 +13,11 @@ pub trait RepoFacts {
     fn head_content(&self, path: &str) -> Option<String>;
 }
 
-/// `BRIEF.md`, `AGENTS.md` and the role prompts are never edited by a session.
+/// The brief, the protocol, the role prompts, `.tenaz/.gitignore` and the
+/// project's own agent instructions are never edited by a session.
 pub fn is_protected(path: &str) -> bool {
-    path == "BRIEF.md" || path == "AGENTS.md" || path.starts_with(".tenaz/prompts/")
+    [BRIEF, PROTOCOL, GITIGNORE, "AGENTS.md", "CLAUDE.md"].contains(&path)
+        || path.starts_with(".tenaz/prompts/")
 }
 
 /// Whether `role` may leave a change at `path`.
@@ -78,7 +81,7 @@ pub fn partition<'a>(
 /// The explanation the next session gets when files were reverted.
 pub fn reverted_note(role: Role, paths: &[String]) -> String {
     format!(
-        "The orchestrator reverted your changes to {}, because a {role} session may not write there. Under .tenaz/ a bootstrap session writes only spec.md, map.md, tasks/ and notes/; BRIEF.md, AGENTS.md and .tenaz/prompts/ are never edited. Put verify and any code it runs in the project itself (for example a checks/ or scripts/ folder at the root), not under .tenaz/.",
+        "The orchestrator reverted your changes to {}, because a {role} session may not write there. Under .tenaz/ a bootstrap session writes only spec.md, map.md, tasks/ and notes/; .tenaz/brief.md, .tenaz/protocol.md, .tenaz/prompts/ and the project's AGENTS.md and CLAUDE.md are never edited. Put verify and any code it runs in the project itself (for example a checks/ or scripts/ folder at the root), not under .tenaz/.",
         paths.join(", ")
     )
 }
@@ -115,7 +118,15 @@ mod tests {
     fn protected_files_are_never_allowed() {
         let r = repo();
         for role in Role::ALL {
-            assert!(!allowed(role, "BRIEF.md", None, &r), "{role}");
+            for path in [
+                ".tenaz/brief.md",
+                ".tenaz/protocol.md",
+                ".tenaz/.gitignore",
+                "AGENTS.md",
+                "CLAUDE.md",
+            ] {
+                assert!(!allowed(role, path, None, &r), "{role} {path}");
+            }
             assert!(
                 !allowed(role, ".tenaz/prompts/builder.md", None, &r),
                 "{role}"
@@ -180,12 +191,12 @@ mod tests {
         let r = repo();
         let reverted = partition(
             Role::Bootstrap,
-            ["verify", "BRIEF.md", ".tenaz/checks/a.sh"],
+            ["verify", ".tenaz/brief.md", ".tenaz/checks/a.sh"],
             None,
             &r,
         );
-        assert_eq!(reverted, vec!["BRIEF.md", ".tenaz/checks/a.sh"]);
+        assert_eq!(reverted, vec![".tenaz/brief.md", ".tenaz/checks/a.sh"]);
         let note = reverted_note(Role::Bootstrap, &reverted);
-        assert!(note.starts_with("The orchestrator reverted your changes to BRIEF.md, .tenaz/checks/a.sh, because a bootstrap session may not write there."));
+        assert!(note.starts_with("The orchestrator reverted your changes to .tenaz/brief.md, .tenaz/checks/a.sh, because a bootstrap session may not write there."));
     }
 }

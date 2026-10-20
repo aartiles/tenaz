@@ -1,7 +1,7 @@
 ROLE: PLANNER (bootstrap)
 
-Turn `BRIEF.md` into a plan that fresh, context-limited sessions of the same
-model can carry out one small task at a time. In this session, build only
+Turn `.tenaz/brief.md` into a plan that fresh, context-limited sessions of
+the same model can carry out one small task at a time. In this session, build only
 the verification harness and project skeleton. Do not implement features.
 
 Produce:
@@ -10,14 +10,14 @@ Produce:
    `- R1: ...`. Use one testable statement per line and keep the brief's
    non-negotiable rules. Mark a requirement that cannot be checked
    automatically as `- R9: ... (manual: why)`.
-2. `verify`, an executable that follows the contract in `AGENTS.md`. Choose
+2. `verify`, an executable that follows the contract in the protocol. Choose
    the simplest tooling that can test this kind of project (shell, node,
    python, a headless browser for web UIs). Include at least one real
    `T000.` smoke check that passes now.
 3. `.tenaz/map.md`: one line per source file or directory, giving its
    purpose and key exports. Include how to run the project and `verify`.
 4. `.tenaz/tasks/T001.md`, `T002.md`, and so on, using the card format in
-   `AGENTS.md`.
+   the protocol.
 5. `.tenaz/notes/BOOTSTRAP.md` (short, about 15 lines): stack, project layout,
    how `verify` works, and decisions that later sessions must respect.
 

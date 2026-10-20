@@ -52,7 +52,7 @@ fn templates() -> Templates {
         ),
     ];
     Templates {
-        agents_md: include_str!("../templates/AGENTS.md").to_owned(),
+        protocol: include_str!("../templates/protocol.md").to_owned(),
         prompts: prompts
             .into_iter()
             .map(|(r, t)| (r, t.to_owned()))
@@ -131,7 +131,7 @@ struct InitArgs {
     /// The project directory (asked when missing).
     #[arg(long)]
     project: Option<PathBuf>,
-    /// Copied to BRIEF.md (or put BRIEF.md in the project first).
+    /// Copied to .tenaz/brief.md (or put the goal there first).
     #[arg(long)]
     brief: Option<PathBuf>,
     /// The coding agent (default: fx; the wizard offers what is installed).

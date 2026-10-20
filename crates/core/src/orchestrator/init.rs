@@ -9,23 +9,23 @@ use std::path::{Path, PathBuf};
 use crate::ledger::{Launch, Ledger, ModelConfig, SkillPin};
 use crate::params::RunParams;
 use crate::ports::{Clock, Vcs};
-use crate::project::Project;
+use crate::project::{BRIEF, GITIGNORE, PROTOCOL, Project};
 use crate::role::Role;
 use crate::util::sha256_hex;
 
 use super::RunError;
 
-/// The shared rules and role prompts copied into every project.
+/// The working protocol and role prompts copied into every project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Templates {
-    pub agents_md: String,
+    pub protocol: String,
     pub prompts: BTreeMap<Role, String>,
 }
 
 impl Templates {
-    /// Reads `AGENTS.md` and `prompts/<role>.md` from a directory.
+    /// Reads `protocol.md` and `prompts/<role>.md` from a directory.
     pub fn load(dir: &Path) -> io::Result<Self> {
-        let agents_md = fs::read_to_string(dir.join("AGENTS.md"))?;
+        let protocol = fs::read_to_string(dir.join("protocol.md"))?;
         let mut prompts = BTreeMap::new();
         for role in Role::ALL {
             prompts.insert(
@@ -33,21 +33,21 @@ impl Templates {
                 fs::read_to_string(dir.join("prompts").join(format!("{}.md", role.as_str())))?,
             );
         }
-        Ok(Self { agents_md, prompts })
+        Ok(Self { protocol, prompts })
     }
 
-    /// The hash the ledger pins: every prompt in role order, then `AGENTS.md`.
+    /// The hash the ledger pins: every prompt in role order, then the protocol.
     pub fn sha256(&self) -> String {
         let mut text = String::new();
         for role in Role::ALL {
             text.push_str(self.prompts.get(&role).map_or("", String::as_str));
         }
-        text.push_str(&self.agents_md);
+        text.push_str(&self.protocol);
         sha256_hex(text)
     }
 
     fn write_into(&self, project: &Project) -> io::Result<()> {
-        project.write("AGENTS.md", &self.agents_md)?;
+        project.write(PROTOCOL, &self.protocol)?;
         for (role, text) in &self.prompts {
             project.write(&role.prompt_path(), text)?;
         }
@@ -71,7 +71,7 @@ impl Ord for Role {
 /// What `init` needs.
 #[derive(Clone, Debug)]
 pub struct InitOptions {
-    /// Copied to `BRIEF.md`; without it the project must already have one.
+    /// Copied to `.tenaz/brief.md`; without it the project must already have one.
     pub brief: Option<PathBuf>,
     pub config: ModelConfig,
     /// How `run` starts the engine, harness and media tools.
@@ -99,19 +99,15 @@ pub fn init(
             ".tenaz/run.json already exists; this project is already initialized".to_owned(),
         ));
     }
-    fs::create_dir_all(project.root())?;
-    if let Some(brief) = &options.brief {
-        fs::copy(brief, project.path("BRIEF.md"))?;
-    }
-    let brief = project.read("BRIEF.md").map_err(|_| {
-        RunError::Precondition("Pass --brief FILE or put BRIEF.md in the project".to_owned())
-    })?;
-    if let Some(existing) = project.read_if("AGENTS.md")
-        && existing != templates.agents_md
-    {
-        return Err(RunError::Precondition("The project already has a different AGENTS.md. Move it away first; Tenaz owns that file.".to_owned()));
-    }
     project.create_layout()?;
+    if let Some(brief) = &options.brief
+        && !same_file(brief, &project.path(BRIEF))
+    {
+        fs::copy(brief, project.path(BRIEF))?;
+    }
+    let brief = project.brief().map_err(|_| {
+        RunError::Precondition(format!("Pass --brief FILE or put the goal in {BRIEF}"))
+    })?;
     templates.write_into(project)?;
     project.ensure_gitignore()?;
     if !project.exists(".git") {
@@ -146,11 +142,16 @@ pub(crate) fn refresh_templates(
     templates: &Templates,
 ) -> Result<(), RunError> {
     templates.write_into(project)?;
+    project.ensure_gitignore()?;
     vcs.commit_paths(
-        &["AGENTS.md", ".tenaz/prompts"],
-        "tenaz: refresh shared rules and prompts",
+        &[PROTOCOL, ".tenaz/prompts", GITIGNORE],
+        "tenaz: refresh the protocol and prompts",
     )?;
     Ok(())
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
 const SKILL_SKIP: [&str; 3] = [".git", ".github", "node_modules"];

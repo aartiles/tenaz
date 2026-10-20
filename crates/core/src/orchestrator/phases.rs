@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::backlog::Backlog;
 use crate::briefing::{self, Briefing};
 use crate::ledger::{CurrentTask, JournalRecord, Phase, StoppedAttempt, TaskOutcome};
+use crate::project::BRIEF;
 use crate::role::Role;
 use crate::spec::coverage;
 use crate::task::{TaskCard, TaskId, TaskStatus};
@@ -77,10 +78,12 @@ impl Runner {
         card: Option<(&str, &str)>,
         extra: Vec<(String, String)>,
     ) -> Result<String, RunError> {
+        let protocol = self.project.protocol()?;
         let role_prompt = self.project.role_prompt(role)?;
         let spec = self.project.read_if(".tenaz/spec.md");
         let map = self.project.read_if(".tenaz/map.md");
         let b = Briefing {
+            protocol: &protocol,
             role_prompt: &role_prompt,
             spec: spec.as_deref(),
             map: map.as_deref(),
@@ -149,10 +152,7 @@ impl Runner {
             ));
         }
         self.ledger.bootstrap_attempts += 1;
-        let mut extra = vec![(
-            "Original brief (BRIEF.md)".to_owned(),
-            self.project.read("BRIEF.md")?,
-        )];
+        let mut extra = vec![(format!("Original brief ({BRIEF})"), self.project.brief()?)];
         if let Some(errors) = &self.ledger.last_errors
             && !errors.is_empty()
         {

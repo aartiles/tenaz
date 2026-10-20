@@ -1,5 +1,5 @@
-//! The first user message of a session. Stable content comes first (role
-//! prompt, spec, map) so the engine's prefix cache can reuse it across
+//! The first user message of a session. Stable content comes first (the
+//! protocol, role prompt, spec, map) so the engine's prefix cache can reuse it across
 //! sessions; then the session header, the task card and the extra sections.
 
 use std::fmt::Write as _;
@@ -27,6 +27,10 @@ pub fn header(role: Role, fields: &[(String, String)]) -> String {
 /// What a briefing is built from.
 #[derive(Clone, Debug, Default)]
 pub struct Briefing<'a> {
+    /// `.tenaz/protocol.md`: the rules every session follows. It travels in
+    /// the prompt, so no harness has to discover it as a context file, and
+    /// the project's own `AGENTS.md` stays the project's.
+    pub protocol: &'a str,
     pub role_prompt: &'a str,
     /// `.tenaz/spec.md`, when it exists.
     pub spec: Option<&'a str>,
@@ -44,7 +48,11 @@ pub struct Briefing<'a> {
 
 /// Composes the prompt as the task loop did.
 pub fn build(role: Role, b: &Briefing<'_>) -> String {
-    let mut text = b.role_prompt.to_owned();
+    let mut text = String::new();
+    if !b.protocol.trim().is_empty() {
+        let _ = write!(text, "{}\n\n---\n\n", b.protocol.trim());
+    }
+    text += b.role_prompt;
     if role != Role::Bootstrap && b.packed {
         text += &section("Spec (.tenaz/spec.md)", b.spec.unwrap_or(""));
         text += &section(
@@ -108,6 +116,7 @@ mod tests {
     #[test]
     fn packed_builder_briefing_has_stable_content_first() {
         let b = Briefing {
+            protocol: "# Working protocol\n",
             role_prompt: "ROLE: BUILDER",
             spec: Some("- R1: a"),
             map: Some("- src: code"),
@@ -126,7 +135,7 @@ mod tests {
         let text = build(Role::Builder, &b);
         assert_eq!(
             text,
-            "ROLE: BUILDER\n\n## Spec (.tenaz/spec.md)\n\n- R1: a\n\n## Repository map (.tenaz/map.md)\n\n- src: code\n\n## Session\n\nRole: BUILDER\nTask: T007\nAttempt: 1 of 3\nThis is a fresh session. Do only this unit of work, then stop.\n\n## Task card (.tenaz/tasks/T007.md)\n\n---\nid: T007\n---\n## Goal\n\n## Latest ./verify --all\n\nverify ok"
+            "# Working protocol\n\n---\n\nROLE: BUILDER\n\n## Spec (.tenaz/spec.md)\n\n- R1: a\n\n## Repository map (.tenaz/map.md)\n\n- src: code\n\n## Session\n\nRole: BUILDER\nTask: T007\nAttempt: 1 of 3\nThis is a fresh session. Do only this unit of work, then stop.\n\n## Task card (.tenaz/tasks/T007.md)\n\n---\nid: T007\n---\n## Goal\n\n## Latest ./verify --all\n\nverify ok"
         );
     }
 
@@ -143,6 +152,10 @@ mod tests {
         };
         let text = build(Role::Builder, &b);
         assert!(!text.contains("## Spec"));
+        assert!(
+            text.starts_with("P\n\n## Session"),
+            "no protocol, no separator"
+        );
         assert!(text.ends_with(
             "Your task card is .tenaz/tasks/T001.md. Read it, then the spec and map as needed."
         ));

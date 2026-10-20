@@ -500,7 +500,8 @@ impl Player {
         .await;
         self.write_tool(".tenaz/notes/BOOTSTRAP.md", "Fake stack.\n", false)
             .await;
-        self.write_tool("BRIEF.md", "tampered\n", false).await; // must be reverted
+        self.write_tool(".tenaz/brief.md", "tampered\n", false)
+            .await; // must be reverted
         self.finish("Done.");
     }
 
