@@ -231,6 +231,7 @@ pub async fn wire(
         harness_base_url,
         &mcp_endpoints,
         &ledger.skills,
+        ledger.params.verify_path(),
         &feed,
     )?;
     let port = reqwest_url(&base_url)?.2;
@@ -311,7 +312,7 @@ async fn start_proxy(
 
 /// The harness named in the ledger: fx over ACP with its profile written
 /// into the project, Pi in RPC mode with the pinned skills, or the scripted
-/// fake.
+/// fake (writing `verify` where the run expects it).
 #[allow(clippy::too_many_arguments)]
 fn build_harness(
     project: &Project,
@@ -321,10 +322,14 @@ fn build_harness(
     harness_base_url: String,
     mcp_endpoints: &[McpEndpoint],
     skills: &[SkillPin],
+    verify_path: &str,
     feed: &tokio::sync::broadcast::Sender<EngineObservation>,
 ) -> anyhow::Result<Arc<dyn Harness>> {
     match config.harness.as_str() {
-        "fake" => Ok(Arc::new(ScriptedHarness::default())),
+        "fake" => Ok(Arc::new(ScriptedHarness {
+            verify_path: Some(verify_path.to_owned()),
+            ..ScriptedHarness::default()
+        })),
         "pi" => {
             // Pi reaches the engine through its provider config (models.json),
             // so the runner's proxy and media MCP server are not on its path.

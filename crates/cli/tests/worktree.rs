@@ -191,6 +191,8 @@ fn init_on_a_repository_works_in_a_worktree_and_finish_squashes_the_run() {
         "{files}"
     );
     assert!(files.lines().any(|f| f == "README.md"), "{files}");
+    // In an existing project verify is .tenaz/verify, so it does not ship.
+    assert!(!files.lines().any(|f| f == "verify"), "{files}");
     assert!(
         files.lines().count() > 2,
         "the run's files are there: {files}"

@@ -192,6 +192,9 @@ The run then treats the brief as a change to that project:
   are the `T000.` checks and must keep passing.
 - Bootstrap maps only what the change touches and plans as few tasks as the
   change needs, instead of a skeleton and 6 to 40 tasks.
+- The run works on its own branch in a worktree (above), and
+  `tenaz finish` puts the change on a branch of your repository as one
+  commit, without `.tenaz/`.
 
 ## How it compares
 
