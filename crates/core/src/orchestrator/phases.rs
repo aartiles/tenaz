@@ -112,6 +112,13 @@ impl Runner {
 
     async fn validate_bootstrap(&self) -> (Vec<String>, Backlog) {
         let mut errors = Vec::new();
+        let unfenced = self.project.unfence_cards();
+        if !unfenced.is_empty() {
+            self.log(&format!(
+                "Removed the code fence around task cards: {}",
+                unfenced.join(", ")
+            ));
+        }
         let reqs = self.project.requirements();
         if reqs.is_empty() {
             errors.push(".tenaz/spec.md has no requirement lines like \"- R1: ...\"".to_owned());
@@ -237,6 +244,21 @@ impl Runner {
         if !errors.is_empty() {
             if s.metrics.every_tool_call_failed() {
                 self.ledger.bootstrap_tool_failures += 1;
+            }
+            // An attempt that left fewer problems than the one before is
+            // progress: it is not counted, up to as many again as allowed.
+            if let Some(before) = self.ledger.last_errors.as_ref().map(Vec::len)
+                && errors.len() < before
+                && self.ledger.bootstrap_uncounted < self.params.max_bootstrap_attempts
+            {
+                self.ledger.bootstrap_attempts -= 1;
+                self.ledger.bootstrap_uncounted += 1;
+                self.log(&format!(
+                    "Bootstrap made progress ({before} -> {} problems); this attempt is not counted ({} of {} such)",
+                    errors.len(),
+                    self.ledger.bootstrap_uncounted,
+                    self.params.max_bootstrap_attempts
+                ));
             }
             self.log(&format!(
                 "Bootstrap not accepted: {} problem(s){}",

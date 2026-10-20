@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(
             loaded.errors,
             vec![
-                ".tenaz/tasks/T003.md: missing --- frontmatter ---",
+                ".tenaz/tasks/T003.md: the file must start with a line `---` (the frontmatter); it starts with \"nope\"",
                 "T001: depends on missing T009",
                 "T002: requires unknown R7",
                 "T002: parent T050 does not exist",

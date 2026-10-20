@@ -368,6 +368,7 @@ impl Runner {
                 // A resumed bootstrap gets its attempts again.
                 self.ledger.bootstrap_attempts = 0;
                 self.ledger.bootstrap_tool_failures = 0;
+                self.ledger.bootstrap_uncounted = 0;
             }
             self.save()?;
         }

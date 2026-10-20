@@ -126,6 +126,8 @@ fn is_number(v: &str) -> bool {
 /// A frontmatter that could not be read.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FrontmatterError {
+    #[error("the file must start with a line `---` (the frontmatter); it starts with {0:?}")]
+    NoStart(String),
     #[error("missing --- frontmatter ---")]
     Missing,
     #[error("bad frontmatter line: {0}")]
@@ -147,7 +149,9 @@ impl Frontmatter {
 
 /// Splits `---\n...\n---\n` from the body and parses its lines.
 pub fn parse_frontmatter(text: &str) -> Result<Frontmatter, FrontmatterError> {
-    let rest = text.strip_prefix("---").ok_or(FrontmatterError::Missing)?;
+    let rest = text.strip_prefix("---").ok_or_else(|| {
+        FrontmatterError::NoStart(text.lines().next().unwrap_or("").chars().take(60).collect())
+    })?;
     let rest = rest
         .strip_prefix("\r\n")
         .or_else(|| rest.strip_prefix('\n'))
@@ -168,6 +172,23 @@ pub fn parse_frontmatter(text: &str) -> Result<Frontmatter, FrontmatterError> {
         entries,
         body: body.to_owned(),
     })
+}
+
+/// `text` without a code fence wrapped around it (a model writing a card
+/// as a Markdown code block: a first line such as ```` ```markdown ```` before
+/// the `---`, and a closing ```` ``` ```` line); `None` when it has none.
+pub fn unfence(text: &str) -> Option<String> {
+    let trimmed = text.trim_start();
+    let (first, rest) = trimmed.split_once('\n')?;
+    if !first.trim_end().starts_with("```") || !rest.trim_start().starts_with("---") {
+        return None;
+    }
+    let rest = rest.trim_start();
+    let body = rest.trim_end();
+    let body = body
+        .strip_suffix("```")
+        .map_or(body, |b| b.trim_end_matches([' ', '\t']));
+    Some(format!("{}\n", body.trim_end()))
 }
 
 /// Finds the first line that is exactly `---` and returns what is before and
@@ -267,10 +288,31 @@ mod tests {
     }
 
     #[test]
+    fn a_fenced_card_is_unfenced() {
+        let fenced = "```markdown\n---\nid: T001\n---\n## Goal\nOne.\n```\n";
+        assert_eq!(
+            unfence(fenced).unwrap(),
+            "---\nid: T001\n---\n## Goal\nOne.\n"
+        );
+        assert_eq!(
+            unfence("\n```\n---\nid: T001\n---\nbody\n").unwrap(),
+            "---\nid: T001\n---\nbody\n"
+        );
+        assert_eq!(unfence("---\nid: T001\n---\n"), None);
+        assert_eq!(unfence("```python\nprint(1)\n```\n"), None);
+    }
+
+    #[test]
     fn rejects_missing_or_bad_frontmatter() {
         assert_eq!(
             parse_frontmatter("no front").unwrap_err(),
-            FrontmatterError::Missing
+            FrontmatterError::NoStart("no front".into())
+        );
+        assert!(
+            parse_frontmatter("```markdown\n---\nid: T1\n---\n")
+                .unwrap_err()
+                .to_string()
+                .contains("it starts with \"```markdown\"")
         );
         assert_eq!(
             parse_frontmatter("---\nid: T1\n").unwrap_err(),

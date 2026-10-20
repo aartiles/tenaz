@@ -260,6 +260,30 @@ impl Project {
     }
 
     /// Reads every `.md` card under `.tenaz/tasks/`.
+    /// Rewrites the task cards a model wrapped in a code fence without it,
+    /// and names them.
+    pub fn unfence_cards(&self) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(self.tasks_dir()) else {
+            return Vec::new();
+        };
+        let mut fixed = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.extension().is_none_or(|x| x != "md") {
+                continue;
+            }
+            if let Some(text) = fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| crate::task::frontmatter::unfence(&t))
+                && fs::write(&path, text).is_ok()
+            {
+                fixed.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        fixed.sort();
+        fixed
+    }
+
     pub fn load_backlog(&self) -> LoadedBacklog {
         let dir = self.tasks_dir();
         let Ok(entries) = fs::read_dir(&dir) else {

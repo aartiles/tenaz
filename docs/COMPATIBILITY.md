@@ -96,8 +96,11 @@ above), so a 32k context is the practical floor (`contextFloor`).
   footprint are sampled on macOS only.
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
-- A pause during a bootstrap session counts as one of its attempts.
-  `--resume` on a run blocked in bootstrap starts the count again.
+- A pause during a bootstrap session counts as one of its attempts. An
+  attempt that leaves fewer problems than the one before does not count,
+  up to `maxBootstrapAttempts` such attempts. `--resume` on a run blocked
+  in bootstrap starts both counts again. Task cards a model wrapped in a
+  code fence are unfenced before they are checked.
 - **Existing projects.** `init` refuses a project directory that is a
   subdirectory of a larger repository (a monorepo package, for example):
   point it at the repository root, or pass `--in-place` to make the

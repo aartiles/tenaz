@@ -226,6 +226,10 @@ pub struct Ledger {
     /// Bootstrap attempts in which every tool call the model made failed.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub bootstrap_tool_failures: u32,
+    /// Bootstrap attempts not counted because they left fewer problems than
+    /// the attempt before; at most `maxBootstrapAttempts` of them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub bootstrap_uncounted: u32,
     pub done_since_replan: u32,
     pub stuck_replanned: bool,
     pub final_cycles: u32,
@@ -281,6 +285,7 @@ impl Ledger {
             session_seq: 0,
             bootstrap_attempts: 0,
             bootstrap_tool_failures: 0,
+            bootstrap_uncounted: 0,
             done_since_replan: 0,
             stuck_replanned: false,
             final_cycles: 0,
