@@ -54,7 +54,7 @@ fn templates() -> Templates {
         ),
     ];
     Templates {
-        agents_md: include_str!("../templates/AGENTS.md").to_owned(),
+        protocol: include_str!("../templates/protocol.md").to_owned(),
         prompts: prompts
             .into_iter()
             .map(|(r, t)| (r, t.to_owned()))
@@ -133,7 +133,7 @@ struct InitArgs {
     /// The project directory (asked when missing).
     #[arg(long)]
     project: Option<PathBuf>,
-    /// Copied to BRIEF.md (or put BRIEF.md in the project first).
+    /// Copied to .tenaz/brief.md (or put the goal there first).
     #[arg(long)]
     brief: Option<PathBuf>,
     /// The coding agent (default: fx; the wizard offers what is installed).
@@ -395,7 +395,7 @@ fn pinned_workflows(specs: &[String]) -> anyhow::Result<BTreeMap<String, String>
 }
 
 /// The brief's text and the file `init` copies it from: `--brief`, the
-/// wizard's goal (through a scratch file), or none (`BRIEF.md` in place).
+/// wizard's goal (through a scratch file), or none (the brief in place).
 fn brief_source(plan: &InitPlan) -> anyhow::Result<(Option<String>, Option<PathBuf>)> {
     if let Some(path) = &plan.brief {
         let text = std::fs::read_to_string(path)
@@ -631,8 +631,9 @@ enum Command {
     },
     /// A branch with the result in the original repository: one commit on
     /// top of the commit the run started from, with the project's changes
-    /// and none of Tenaz's files (.tenaz/, and the BRIEF.md, AGENTS.md and
-    /// .gitignore lines its first commit added). One commit rather than the
+    /// and none of Tenaz's files (.tenaz/; for runs from older layouts also
+    /// the root BRIEF.md, AGENTS.md and .gitignore lines its first commit
+    /// added). One commit rather than the
     /// run's series because that series interleaves bookkeeping commits and
     /// steps that later ones rework; the run branch (tenaz/<slug>) keeps it
     /// all. Nothing is pushed.

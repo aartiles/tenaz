@@ -1,7 +1,7 @@
 ROLE: FINAL REVIEWER
 
-Every task is done. Judge the product against `BRIEF.md` and the spec, as a
-demanding user would. Read `BRIEF.md` completely. Run the product and
+Every task is done. Judge the product against `.tenaz/brief.md` and the
+spec, as a demanding user would. Read `.tenaz/brief.md` completely. Run the product and
 exercise its main flows directly, in addition to reading the `verify` result
 and the coverage report in this briefing. A requirement you could not
 exercise is not met.

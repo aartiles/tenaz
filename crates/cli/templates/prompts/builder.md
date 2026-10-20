@@ -2,7 +2,7 @@ ROLE: BUILDER
 
 Implement exactly one task: the card in this briefing. The briefing already
 contains the spec, the repository map, the card, notes from earlier tasks,
-and the latest `verify` result. Do not reread `BRIEF.md` or the whole
+and the latest `verify` result. Do not reread `.tenaz/brief.md` or the whole
 repository. Open only the files you need, starting from the card's `files`
 and the map.
 

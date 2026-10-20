@@ -1,5 +1,6 @@
-//! The project on disk: `BRIEF.md`, `AGENTS.md`, `verify`, and the
-//! orchestration state under `.tenaz/`.
+//! The project on disk: `verify` and everything Tenaz keeps under `.tenaz/`
+//! (the brief, the protocol, the role prompts and the run's state). Outside
+//! `.tenaz/` Tenaz writes only what the sessions build.
 
 use std::fs;
 use std::io;
@@ -10,6 +11,14 @@ use crate::ledger::{JournalEntry, JournalRecord, Ledger};
 use crate::role::Role;
 use crate::spec::{Requirement, parse_requirements};
 use crate::task::{TaskId, set_card_fields};
+
+/// The original request, copied at `init`.
+pub const BRIEF: &str = ".tenaz/brief.md";
+/// The working protocol every briefing starts with.
+pub const PROTOCOL: &str = ".tenaz/protocol.md";
+/// Keeps the run's private files out of git without touching the project's
+/// own `.gitignore`.
+pub const GITIGNORE: &str = ".tenaz/.gitignore";
 
 /// Paths and file access for one project.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +42,10 @@ impl Project {
     /// What to do when the project still keeps its state in `.agent/`,
     /// where builds before the rename to `.tenaz/` put it; `None` otherwise.
     pub fn legacy_layout_note(&self) -> Option<String> {
-        if self.exists(".tenaz/run.json") || !self.exists(".agent/run.json") {
+        if self.exists(".tenaz/run.json") {
+            return self.root_layout_note();
+        }
+        if !self.exists(".agent/run.json") {
             return None;
         }
         let root = self.root.display();
@@ -43,9 +55,29 @@ impl Project {
              mv '{root}/.agent' '{root}/.tenaz'\n  \
              change .agent/ to .tenaz/ in '{root}/.gitignore'\n  \
              tenaz run --project '{root}' --refresh-templates\n\
-             The last step rewrites AGENTS.md and the prompts with the new paths. \
+             The last step rewrites the protocol and the prompts with the new paths. \
              Pass the launch flags (--engine, --comfyui, ...) to that run once; they \
              are saved in run.json."
+        ))
+    }
+
+    /// What to do when a run started before the brief and the protocol moved
+    /// into `.tenaz/` still has `BRIEF.md` at the root; `None` otherwise.
+    fn root_layout_note(&self) -> Option<String> {
+        if self.exists(BRIEF) || !self.exists("BRIEF.md") {
+            return None;
+        }
+        let root = self.root.display();
+        Some(format!(
+            "{root} keeps BRIEF.md and AGENTS.md at the root, the layout of earlier builds; \
+             this version keeps them under .tenaz/ and leaves the project's own AGENTS.md \
+             alone. To move it:\n  \
+             git -C '{root}' mv BRIEF.md .tenaz/brief.md\n  \
+             git -C '{root}' rm -q AGENTS.md   (or put your own AGENTS.md back there)\n  \
+             git -C '{root}' commit -qm 'tenaz: move the brief into .tenaz/'\n  \
+             tenaz run --project '{root}' --refresh-templates\n\
+             The last step writes .tenaz/protocol.md, the prompts and .tenaz/.gitignore. \
+             The .tenaz/ lines in the project's .gitignore can then go."
         ))
     }
 
@@ -213,6 +245,14 @@ impl Project {
         self.read(&role.prompt_path())
     }
 
+    pub fn brief(&self) -> io::Result<String> {
+        self.read(BRIEF)
+    }
+
+    pub fn protocol(&self) -> io::Result<String> {
+        self.read(PROTOCOL)
+    }
+
     /// `(verdict, text)` of a review file: the first `Verdict: ACCEPT|CHANGES` line.
     pub fn verdict(&self, relative: &str) -> (Option<String>, Option<String>) {
         let text = self.read_if(relative);
@@ -231,15 +271,11 @@ impl Project {
         (verdict, text)
     }
 
-    /// Adds the orchestrator's private paths to `.gitignore` when missing.
+    /// Adds the orchestrator's private paths to `.tenaz/.gitignore` when
+    /// missing. The project's own `.gitignore` is not touched.
     pub fn ensure_gitignore(&self) -> io::Result<()> {
-        let wanted = [
-            ".tenaz/private/",
-            ".tenaz/run.json",
-            ".tenaz/journal.jsonl",
-            ".tenaz/skills/",
-        ];
-        let current = self.read_if(".gitignore").unwrap_or_default();
+        let wanted = ["/private/", "/run.json", "/journal.jsonl", "/skills/"];
+        let current = self.read_if(GITIGNORE).unwrap_or_default();
         let missing: Vec<&str> = wanted
             .into_iter()
             .filter(|line| !current.lines().any(|l| l == *line))
@@ -253,7 +289,7 @@ impl Project {
         }
         text.push_str(&missing.join("\n"));
         text.push('\n');
-        self.write(".gitignore", &text)
+        self.write(GITIGNORE, &text)
     }
 }
 
@@ -352,15 +388,29 @@ mod tests {
     #[test]
     fn gitignore_gets_only_the_missing_lines() {
         let (_dir, p) = project();
-        p.write(".gitignore", "node_modules\n.tenaz/run.json")
-            .unwrap();
+        p.write(".gitignore", "node_modules\n").unwrap();
+        p.write(GITIGNORE, "# mine\n/run.json").unwrap();
         p.ensure_gitignore().unwrap();
         assert_eq!(
-            p.read(".gitignore").unwrap(),
-            "node_modules\n.tenaz/run.json\n.tenaz/private/\n.tenaz/journal.jsonl\n.tenaz/skills/\n"
+            p.read(GITIGNORE).unwrap(),
+            "# mine\n/run.json\n/private/\n/journal.jsonl\n/skills/\n"
         );
         p.ensure_gitignore().unwrap();
-        assert_eq!(p.read(".gitignore").unwrap().lines().count(), 5);
+        assert_eq!(p.read(GITIGNORE).unwrap().lines().count(), 5);
+        assert_eq!(p.read(".gitignore").unwrap(), "node_modules\n");
+    }
+
+    #[test]
+    fn a_run_with_the_brief_at_the_root_gets_a_note() {
+        let (_dir, p) = project();
+        p.write(".tenaz/run.json", "{}").unwrap();
+        assert_eq!(p.legacy_layout_note(), None);
+        p.write("BRIEF.md", "# Goal\n").unwrap();
+        let note = p.legacy_layout_note().unwrap();
+        assert!(note.contains("mv BRIEF.md .tenaz/brief.md"), "{note}");
+        assert!(note.contains("--refresh-templates"), "{note}");
+        p.write(BRIEF, "# Goal\n").unwrap();
+        assert_eq!(p.legacy_layout_note(), None);
     }
 
     #[test]

@@ -19,11 +19,11 @@ use anyhow::{Context as _, bail};
 use tenaz_adapters::git::{GitRepo, TreeEdits};
 use tenaz_core::ledger::{Ledger, Origin};
 use tenaz_core::ports::Vcs as _;
-use tenaz_core::project::Project;
+use tenaz_core::project::{BRIEF, Project};
 
 /// Where Tenaz writes the run's state; never part of a deliverable.
 const STATE_DIR: &str = ".tenaz";
-/// Files older layouts wrote at the project root.
+/// Files older layouts wrote at the project root (now under `.tenaz/`).
 const OWNED_FILES: [&str; 2] = ["BRIEF.md", "AGENTS.md"];
 /// The message of the commit `tenaz init` makes.
 const INIT_MESSAGE: &str = "tenaz: init";
@@ -88,11 +88,12 @@ pub fn worktree_dir(toplevel: &Path, slug: &str) -> PathBuf {
 }
 
 /// The `git status --porcelain` lines that stop a worktree run: everything
-/// except an untracked `BRIEF.md` when that file is to be the brief.
+/// except an untracked brief (`.tenaz/brief.md`) when it is to be the brief.
 pub fn blocking_changes(status: &[String], brief_is_untracked_ok: bool) -> Vec<String> {
+    let untracked_brief = format!("?? {BRIEF}");
     status
         .iter()
-        .filter(|l| !(brief_is_untracked_ok && l.as_str() == "?? BRIEF.md"))
+        .filter(|l| !(brief_is_untracked_ok && **l == untracked_brief))
         .cloned()
         .collect()
 }
@@ -146,15 +147,17 @@ pub fn finish_message(brief: &str, run_branch: Option<&str>, commits: u64) -> St
     message
 }
 
-/// A directory with nothing in it but, perhaps, a `BRIEF.md`: a new
-/// project, whatever repository it is in.
+/// A directory with nothing in it but, perhaps, the brief: a new project,
+/// whatever repository it is in.
 fn is_fresh_dir(dir: &Path) -> bool {
-    match std::fs::read_dir(dir) {
+    let only = |dir: &Path, name: &str| match std::fs::read_dir(dir) {
         Err(_) => true,
         Ok(entries) => entries
             .filter_map(Result::ok)
-            .all(|e| e.file_name() == "BRIEF.md"),
-    }
+            .all(|e| e.file_name() == name),
+    };
+    let (state, file) = BRIEF.split_once('/').unwrap_or((BRIEF, ""));
+    only(dir, state) && only(&dir.join(state), file)
 }
 
 fn short(sha: &str) -> &str {
@@ -191,7 +194,7 @@ pub struct WorktreePlan {
     pub base_commit: String,
     pub branch: String,
     pub path: PathBuf,
-    /// An untracked `BRIEF.md` in the user's checkout, to copy in as the brief.
+    /// An untracked brief in the user's checkout, to copy in.
     pub untracked_brief: Option<PathBuf>,
 }
 
@@ -292,12 +295,12 @@ pub fn place(
             },
         });
     }
-    // An untracked BRIEF.md here is the brief, when no other file is.
-    let in_checkout = dir.join("BRIEF.md");
+    // An untracked brief here is the brief, when no other file is.
+    let in_checkout = dir.join(BRIEF);
     let is_it =
         |f: &Path| std::fs::canonicalize(f).ok() == std::fs::canonicalize(&in_checkout).ok();
     let untracked_brief =
-        brief_file.is_none_or(is_it) && !repo.in_head("BRIEF.md") && in_checkout.is_file();
+        brief_file.is_none_or(is_it) && !repo.in_head(BRIEF) && in_checkout.is_file();
     let blocking = blocking_changes(&repo.status_lines()?, untracked_brief);
     if !blocking.is_empty() {
         let mut shown: Vec<String> = blocking.iter().take(10).map(|l| format!("  {l}")).collect();
@@ -315,7 +318,7 @@ pub fn place(
     }
     let brief_text = match brief {
         Some(text) => Some(text.to_owned()),
-        None => std::fs::read_to_string(dir.join("BRIEF.md")).ok(),
+        None => std::fs::read_to_string(dir.join(BRIEF)).ok(),
     };
     let wanted = request.name.as_deref().map_or_else(
         || {
@@ -557,7 +560,7 @@ pub fn finish(project: &Project, request: &FinishRequest) -> anyhow::Result<Fini
         );
     }
     let brief = project
-        .read_if(".tenaz/brief.md")
+        .read_if(BRIEF)
         .or_else(|| project.read_if("BRIEF.md"))
         .unwrap_or_default();
     let commits = repo.count_commits(base.as_deref(), &source)?;
@@ -670,10 +673,11 @@ mod tests {
 
     #[test]
     fn only_an_untracked_brief_is_let_through() {
-        let status = vec!["?? BRIEF.md".to_owned(), " M src/lib.rs".to_owned()];
+        let status = vec!["?? .tenaz/brief.md".to_owned(), " M src/lib.rs".to_owned()];
         assert_eq!(blocking_changes(&status, true), vec![" M src/lib.rs"]);
         assert_eq!(blocking_changes(&status, false).len(), 2);
-        assert!(blocking_changes(&["?? BRIEF.md".to_owned()], true).is_empty());
+        assert!(blocking_changes(&["?? .tenaz/brief.md".to_owned()], true).is_empty());
+        assert_eq!(blocking_changes(&["?? BRIEF.md".to_owned()], true).len(), 1);
     }
 
     #[test]

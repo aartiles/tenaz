@@ -26,12 +26,23 @@ uses [Semantic Versioning](https://semver.org/).
   branch. The setup wizard asks which, `run` and `status` say where the
   run works, and both point to the worktree from the original checkout.
 - `tenaz finish`: a branch in the original repository with the run's
-  result as one commit on the starting commit, without `.tenaz/` or the
-  files and `.gitignore` lines Tenaz added; the run branch keeps the full
-  history, `--remove-worktree` removes the worktree. Nothing is pushed.
+  result as one commit on the starting commit, without `.tenaz/` (nor,
+  for older layouts, the root files and `.gitignore` lines Tenaz added);
+  the run branch keeps the full history, `--remove-worktree` removes the
+  worktree. Nothing is pushed.
 - The run's state lives in `.tenaz/` (it was `.agent/`). A project still
   in the old layout is not run: `init`, `run` and `status` say how to move
   it (`mv .agent .tenaz`, the `.gitignore` lines, `--refresh-templates`).
+- Tenaz keeps all its files under `.tenaz/`: the brief is
+  `.tenaz/brief.md` (it was `BRIEF.md`), the shared rules are
+  `.tenaz/protocol.md` (they were the project's `AGENTS.md`) and the ignore
+  rules are in `.tenaz/.gitignore` (they were appended to the project's
+  `.gitignore`). The protocol now starts every session's prompt instead of
+  relying on the agent to load `AGENTS.md`, so `init` works in a project
+  that has its own `AGENTS.md`, and sessions may not edit the project's
+  `AGENTS.md` or `CLAUDE.md`. A run started with `BRIEF.md` at the root is
+  not run: `run` and `status` say how to move it (`git mv`,
+  `--refresh-templates`).
 - Without `--engine`, `init` asks the engine at `--base-url` which API it
   speaks (Sushi or generic) and names the provider after it.
 - Orchestrator: bootstrap, build, verify, review,

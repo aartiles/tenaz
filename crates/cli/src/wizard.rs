@@ -264,7 +264,7 @@ fn ask_goal<R: BufRead, W: Write>(args: &InitArgs, p: &mut Prompter<R, W>) -> an
     if args
         .project
         .as_ref()
-        .is_some_and(|dir| dir.join("BRIEF.md").is_file())
+        .is_some_and(|dir| dir.join(tenaz_core::project::BRIEF).is_file())
     {
         return Ok(Goal::InProject);
     }
@@ -525,7 +525,11 @@ fn show<R: BufRead, W: Write>(
     p: &mut Prompter<R, W>,
 ) -> anyhow::Result<()> {
     let goal_text = match goal {
-        Goal::InProject => plan.project.join("BRIEF.md").display().to_string(),
+        Goal::InProject => plan
+            .project
+            .join(tenaz_core::project::BRIEF)
+            .display()
+            .to_string(),
         Goal::File(path) => path.display().to_string(),
         Goal::Text(text) => text.clone(),
     };
@@ -555,7 +559,7 @@ fn show<R: BufRead, W: Write>(
     let flags = InitArgs {
         project: Some(plan.project.clone()),
         brief: match goal {
-            Goal::Text(_) | Goal::InProject => Some(plan.project.join("BRIEF.md")),
+            Goal::Text(_) | Goal::InProject => Some(plan.project.join(tenaz_core::project::BRIEF)),
             Goal::File(path) => Some(path.clone()),
         },
         harness: Some(plan.harness),

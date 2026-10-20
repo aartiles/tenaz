@@ -100,7 +100,7 @@ fn the_wizard_pins_everything_run_needs() {
 
     let project = work.path().join("project");
     assert_eq!(
-        std::fs::read_to_string(project.join("BRIEF.md")).unwrap(),
+        std::fs::read_to_string(project.join(".tenaz/brief.md")).unwrap(),
         "# Goal\n\nBuild four trivial files.\n"
     );
     let ledger: serde_json::Value =
@@ -225,10 +225,10 @@ fn the_wizard_offers_a_worktree_on_an_existing_repository() {
     );
     let worktree = root.join("app-tenaz-add-a-login-page");
     assert_eq!(
-        std::fs::read_to_string(worktree.join("BRIEF.md")).unwrap(),
+        std::fs::read_to_string(worktree.join(".tenaz/brief.md")).unwrap(),
         "# Goal\n\nAdd a login page.\n"
     );
-    assert!(!repo.join("BRIEF.md").exists());
+    assert!(!repo.join(".tenaz/brief.md").exists());
     assert!(!repo.join(".tenaz").exists());
     assert_eq!(git(&["status", "--porcelain"]), "");
     let stdout = String::from_utf8_lossy(&init.stdout);

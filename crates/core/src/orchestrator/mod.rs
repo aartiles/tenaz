@@ -24,7 +24,7 @@ use crate::ports::{
     Clock, EngineAdapter, EngineMetricsSource, Harness, HarnessError, MemoryProbe, Notifier, Vcs,
     VcsError, VerifyRunner,
 };
-use crate::project::Project;
+use crate::project::{BRIEF, PROTOCOL, Project};
 use crate::util::sha256_hex;
 
 /// The ports a run needs.
@@ -262,18 +262,39 @@ impl Runner {
         }
     }
 
+    /// Writes and commits the given templates, then checks that the protocol
+    /// every briefing starts with is there.
+    fn refresh_templates(&mut self, templates: Option<&Templates>) -> Result<(), RunError> {
+        if let Some(templates) = templates {
+            init::refresh_templates(&self.project, self.deps.vcs.as_ref(), templates)?;
+            let to = templates.sha256();
+            self.journal(JournalRecord::TemplatesRefreshed {
+                from: Some(self.ledger.templates_sha256.clone()),
+                to: to.clone(),
+            });
+            self.ledger.templates_sha256 = to;
+            self.save()?;
+        }
+        if !self.project.exists(PROTOCOL) {
+            return Err(RunError::Precondition(format!(
+                "{PROTOCOL} is missing; run again with --refresh-templates to write it"
+            )));
+        }
+        Ok(())
+    }
+
     /// The whole run: preconditions, preflight, then the phases until the run
     /// ends, blocks or pauses.
     pub async fn run(&mut self, options: RunOptions) -> Result<(), RunError> {
         let project = self.project.clone();
         project.create_layout()?;
         let brief = project
-            .read("BRIEF.md")
-            .map_err(|_| RunError::Precondition("BRIEF.md is missing".to_owned()))?;
+            .brief()
+            .map_err(|_| RunError::Precondition(format!("{BRIEF} is missing")))?;
         if sha256_hex(&brief) != self.ledger.brief_sha256 {
-            return Err(RunError::Precondition(
-                "BRIEF.md changed since init".to_owned(),
-            ));
+            return Err(RunError::Precondition(format!(
+                "{BRIEF} changed since init"
+            )));
         }
         self.check_skills()?;
         let info = self.deps.harness.info();
@@ -288,16 +309,7 @@ impl Runner {
             self.ledger.blocked_reason = None;
             self.save()?;
         }
-        if let Some(templates) = &options.refresh_templates {
-            init::refresh_templates(&self.project, self.deps.vcs.as_ref(), templates)?;
-            let to = templates.sha256();
-            self.journal(JournalRecord::TemplatesRefreshed {
-                from: Some(self.ledger.templates_sha256.clone()),
-                to: to.clone(),
-            });
-            self.ledger.templates_sha256 = to;
-            self.save()?;
-        }
+        self.refresh_templates(options.refresh_templates.as_ref())?;
         if options.runner_version != self.ledger.runner_version {
             self.journal(JournalRecord::RunnerChanged {
                 from: Some(self.ledger.runner_version.clone()),

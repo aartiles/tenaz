@@ -106,10 +106,13 @@ tenaz run
 tenaz status
 ```
 
-- `init` creates the project, writes the goal to `BRIEF.md`, adds the
-  agent rules (`AGENTS.md`) and role prompts (`.tenaz/prompts/`), pins the
+- `init` creates the project (or uses the directory you point it at),
+  writes the goal to `.tenaz/brief.md`, adds the working protocol
+  (`.tenaz/protocol.md`) and role prompts (`.tenaz/prompts/`), pins the
   model, the agent, how to start the engine and the run parameters in
-  `.tenaz/run.json`, and makes the first commit.
+  `.tenaz/run.json`, and makes the first commit. Everything it writes is
+  under `.tenaz/`, with its own `.tenaz/.gitignore`; the project's
+  `AGENTS.md`, `CLAUDE.md` and `.gitignore` are left as they are.
 - `run` reads all of that from `run.json`, probes the engine, then works
   until the goal is met or a task blocks. A launch flag given to `run`
   (`--comfyui`, `--engine-start`, ...) replaces the pinned value and is
@@ -126,8 +129,8 @@ tenaz status
 > and `--name` change them), records the starting branch and commit in
 > `.tenaz/run.json`, and the run works there. `run` and `status` say where,
 > and point to the worktree when started from your checkout. `init` refuses
-> a tree with uncommitted changes (an untracked `BRIEF.md` is taken as the
-> brief) rather than leave them behind. `--in-place` keeps the old
+> a tree with uncommitted changes (an untracked `.tenaz/brief.md` is taken
+> as the brief) rather than leave them behind. `--in-place` keeps the old
 > behaviour: the run commits on your current branch, and its first commit
 > takes everything uncommitted (`git add -A`). A new or empty directory
 > becomes a new repository, as before.
@@ -140,10 +143,10 @@ tenaz finish
 
 `finish` creates a branch in your repository (named after the goal, or
 `--branch`) with one commit on top of the commit the run started from: the
-project's changes, without `.tenaz/` and without the files and
-`.gitignore` lines Tenaz's first commit added. One commit, because the
-run's own history interleaves bookkeeping with steps that later steps
-rework; that history stays on `tenaz/<goal>`. `--remove-worktree` then
+project's changes, without `.tenaz/` (and, for runs from older layouts,
+without the root files and `.gitignore` lines Tenaz's first commit
+added). One commit, because the run's own history interleaves bookkeeping
+with steps that later steps rework; that history stays on `tenaz/<goal>`. `--remove-worktree` then
 removes the worktree (its uncommitted `run.json` and journal go with it).
 Nothing is pushed.
 
@@ -164,8 +167,14 @@ workflow (`--comfyui http://127.0.0.1:8188 --workflow default=txt2img.json`);
 with an engine other than Sushi, `--engine-stop` and `--engine-start` let
 Tenaz free the memory while images render.
 
-The prompts in `.tenaz/prompts/` and the rules in `AGENTS.md` are plain
-Markdown in your project; edit them to change how the agent works. Skill
+The protocol in `.tenaz/protocol.md` and the prompts in `.tenaz/prompts/`
+are plain Markdown in your project; edit them to change how the agent works.
+Every session's prompt starts with the protocol, so it does not depend on
+the agent finding a context file. The project's own `AGENTS.md` or
+`CLAUDE.md`, which agents such as Pi load by themselves, still apply to how
+the code is written; where they disagree with the protocol about how the
+work is done (commits, branches, scope), the protocol wins. Sessions may not
+edit either file. Skill
 directories passed with `--skill` at `init` are pinned read-only into
 `.tenaz/skills/`.
 

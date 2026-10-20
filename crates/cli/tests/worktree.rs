@@ -282,16 +282,22 @@ fn in_place_keeps_working_on_the_current_branch() {
 #[test]
 fn an_untracked_brief_in_the_checkout_becomes_the_runs_brief() {
     let (_work, repo, _brief) = repository();
-    std::fs::write(repo.join("BRIEF.md"), "# Goal\n\nAdd a login page.\n").unwrap();
+    std::fs::create_dir_all(repo.join(".tenaz")).unwrap();
+    std::fs::write(
+        repo.join(".tenaz/brief.md"),
+        "# Goal\n\nAdd a login page.\n",
+    )
+    .unwrap();
     let out = init(&repo, None, &[]);
     assert!(out.status.success(), "{}", text(&out));
     let worktree = repo.with_file_name("app-tenaz-add-a-login-page");
     assert_eq!(
-        std::fs::read_to_string(worktree.join("BRIEF.md")).unwrap(),
+        std::fs::read_to_string(worktree.join(".tenaz/brief.md")).unwrap(),
         "# Goal\n\nAdd a login page.\n"
     );
     // Left where the user put it.
-    assert!(repo.join("BRIEF.md").exists());
+    assert!(repo.join(".tenaz/brief.md").exists());
+    assert!(!repo.join(".tenaz/run.json").exists());
 }
 
 #[test]
@@ -318,12 +324,13 @@ fn new_directories_and_subdirectories_of_a_repository() {
 #[test]
 fn an_untracked_brief_can_also_be_named_with_brief() {
     let (_work, repo, _brief) = repository();
-    std::fs::write(repo.join("BRIEF.md"), "# Add a login page\n").unwrap();
-    let out = init(&repo, Some(&repo.join("BRIEF.md")), &[]);
+    std::fs::create_dir_all(repo.join(".tenaz")).unwrap();
+    std::fs::write(repo.join(".tenaz/brief.md"), "# Add a login page\n").unwrap();
+    let out = init(&repo, Some(&repo.join(".tenaz/brief.md")), &[]);
     assert!(out.status.success(), "{}", text(&out));
     assert!(
         repo.with_file_name("app-tenaz-add-a-login-page")
-            .join("BRIEF.md")
+            .join(".tenaz/brief.md")
             .exists()
     );
 }

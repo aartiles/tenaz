@@ -276,11 +276,11 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     assert!(
         sessions
             .iter()
-            .any(|s| s.reverted.iter().any(|p| p == "BRIEF.md")),
-        "BRIEF.md tampering not reverted"
+            .any(|s| s.reverted.iter().any(|p| p == ".tenaz/brief.md")),
+        "brief tampering not reverted"
     );
     assert_eq!(
-        project.read("BRIEF.md").unwrap(),
+        project.brief().unwrap(),
         "# Fake brief\n\nBuild four trivial files.\n"
     );
     for id in ["T001", "T002", "T004", "T003a", "T003b"] {
