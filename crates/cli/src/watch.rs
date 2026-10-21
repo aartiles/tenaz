@@ -280,7 +280,7 @@ pub fn render(event: &SessionEvent, level: Level) -> Vec<String> {
                 }
                 lines
             } else if *is_error {
-                vec![format!("    ✗ {}", fit(result_text))]
+                vec![format!("    ✗ {}", fit(&error_summary(result_text)))]
             } else {
                 Vec::new()
             }
@@ -345,12 +345,7 @@ pub fn render(event: &SessionEvent, level: Level) -> Vec<String> {
 /// shell results, which the stream keeps only the start of), its exit code.
 fn result_lines(text: &str) -> Vec<String> {
     if text.trim_start().starts_with('{') {
-        let code = text
-            .split_once("\"exit_code\":")
-            .map(|(_, rest)| rest.chars().take_while(|c| c.is_ascii_digit() || *c == '-'))
-            .map(String::from_iter)
-            .filter(|c| !c.is_empty());
-        return code.map_or_else(Vec::new, |c| vec![format!("    │ exit {c}")]);
+        return exit_code(text).map_or_else(Vec::new, |c| vec![format!("    │ exit {c}")]);
     }
     let mut lines: Vec<String> = text
         .lines()
@@ -362,6 +357,25 @@ fn result_lines(text: &str) -> Vec<String> {
         lines.push(format!("    │ … {more} more lines"));
     }
     lines
+}
+
+/// The exit code of a JSON envelope (fx's shell results), if it says.
+fn exit_code(text: &str) -> Option<String> {
+    let (_, rest) = text.split_once("\"exit_code\":")?;
+    let code: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    (!code.is_empty()).then_some(code)
+}
+
+/// A failed tool result on one line: the exit code of a JSON envelope,
+/// else the text.
+fn error_summary(text: &str) -> String {
+    if text.trim_start().starts_with('{') {
+        return exit_code(text).map_or_else(|| "failed".to_owned(), |c| format!("exit {c}"));
+    }
+    text.to_owned()
 }
 
 /// The part of a tool call's arguments worth reading: the command, path or
@@ -385,6 +399,13 @@ fn describe_args(args: &serde_json::Value) -> String {
             }
             return value.to_owned();
         }
+    }
+    // A call on a running process (fx's `interact`): what it does to which.
+    if let Some(action) = args.get("action").and_then(serde_json::Value::as_str) {
+        let target = ["session_id", "id", "pid"]
+            .iter()
+            .find_map(|k| args.get(*k).and_then(serde_json::Value::as_str));
+        return target.map_or_else(|| action.to_owned(), |t| format!("{action} {t}"));
     }
     args.to_string()
 }
@@ -468,6 +489,22 @@ mod tests {
             is_error: false,
         };
         assert!(render(&ok, Level::Actions).is_empty());
+        let failed = SessionEvent::ToolCallEnd {
+            id: "1".into(),
+            name: "shell".into(),
+            result_text: "{\"session_id\":null,\"state\":\"completed\",\"full_output_hand".into(),
+            is_error: true,
+        };
+        assert_eq!(render(&failed, Level::Actions), ["    ✗ failed"]);
+        let interact = SessionEvent::ToolCallStart {
+            id: "2".into(),
+            name: "shell".into(),
+            args: serde_json::json!({"action": "interact", "session_id": "shell-9", "yield_time_ms": 60000}),
+        };
+        assert_eq!(
+            render(&interact, Level::Actions),
+            ["  → shell: interact shell-9"]
+        );
         assert!(render(&call, Level::Summary).is_empty());
     }
 
