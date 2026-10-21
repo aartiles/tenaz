@@ -16,6 +16,7 @@ use tokio::io::AsyncReadExt;
 pub struct VerifyProcess {
     root: PathBuf,
     path: String,
+    wrapper: Vec<String>,
 }
 
 impl VerifyProcess {
@@ -23,7 +24,15 @@ impl VerifyProcess {
         Self {
             root: root.into(),
             path: "verify".to_owned(),
+            wrapper: Vec::new(),
         }
+    }
+
+    /// Starts `verify` through `wrapper` (the sandbox launcher).
+    #[must_use]
+    pub fn wrapped(mut self, wrapper: Vec<String>) -> Self {
+        self.wrapper = wrapper;
+        self
     }
 
     /// Runs the executable at `path`, relative to the root, instead.
@@ -51,7 +60,12 @@ impl VerifyRunner for VerifyProcess {
         }
         // `./verify` from the root, as the contract names it: a relative root
         // joined into the program path would be resolved from the root again.
-        let spawned = tokio::process::Command::new(format!("./{}", self.path))
+        let (program, args) = tenaz_core::util::wrap_command(
+            &self.wrapper,
+            std::path::Path::new(&format!("./{}", self.path)),
+            args.iter().map(|a| (*a).to_owned()).collect(),
+        );
+        let spawned = tokio::process::Command::new(program)
             .args(args)
             .current_dir(&self.root)
             .env("CI", "1")

@@ -18,6 +18,9 @@ tracing.workspace = true
 reqwest.workspace = true
 time.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
+
 [dev-dependencies]
 tenaz-core = { workspace = true, features = ["testing"] }
 tempfile.workspace = true

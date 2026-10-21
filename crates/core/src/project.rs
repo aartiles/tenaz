@@ -19,6 +19,12 @@ pub const PROTOCOL: &str = ".tenaz/protocol.md";
 /// Keeps the run's private files out of git without touching the project's
 /// own `.gitignore`.
 pub const GITIGNORE: &str = ".tenaz/.gitignore";
+/// The run's ledger: the pinned setup and where the run is.
+pub const LEDGER: &str = ".tenaz/run.json";
+
+/// The last ledger text this process saved, by ledger path. A sandboxed run
+/// puts it back when a session changed `run.json` (see `save_ledger`).
+static SAVED_LEDGERS: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
 
 /// Held by a run while it works; dropping it releases the lock.
 #[derive(Debug)]
@@ -141,7 +147,7 @@ impl Project {
     }
 
     pub fn ledger_path(&self) -> PathBuf {
-        self.tenaz_dir().join("run.json")
+        self.path(LEDGER)
     }
 
     pub fn journal_path(&self) -> PathBuf {
@@ -233,7 +239,26 @@ impl Project {
     pub fn save_ledger(&self, ledger: &Ledger) -> io::Result<()> {
         let text = serde_json::to_string_pretty(ledger)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        self.write_atomic(".tenaz/run.json", &format!("{text}\n"))
+        let text = format!("{text}\n");
+        self.write_atomic(LEDGER, &text)?;
+        let path = std::path::absolute(self.ledger_path()).unwrap_or_else(|_| self.ledger_path());
+        let mut saved = SAVED_LEDGERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        saved.retain(|(p, _)| *p != path);
+        saved.push((path, text));
+        Ok(())
+    }
+
+    /// The text of the ledger this process last saved for this project, if any.
+    pub fn last_saved_ledger(&self) -> Option<String> {
+        let path = std::path::absolute(self.ledger_path()).unwrap_or_else(|_| self.ledger_path());
+        SAVED_LEDGERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|(p, _)| *p == path)
+            .map(|(_, text)| text.clone())
     }
 
     pub fn append_journal(&self, at: String, record: JournalRecord) -> io::Result<()> {

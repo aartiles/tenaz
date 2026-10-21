@@ -141,11 +141,13 @@ tenaz status
 > takes everything uncommitted (`git add -A`). A new or empty directory
 > becomes a new repository, as before.
 
-> **Tenaz does not sandbox the agent.** The agent runs the shell commands
-> and writes the files the model asks for, as your user, and Tenaz approves
-> every permission request it makes; the project's `verify` script runs the
-> same way. A model that misreads the goal can touch anything your user can.
-> Run Tenaz in a container, a VM or a user account that holds nothing you
+> **By default Tenaz does not sandbox the agent.** The agent runs the shell
+> commands and writes the files the model asks for, as your user, and Tenaz
+> approves every permission request it makes; the project's `verify` script
+> runs the same way. A model that misreads the goal can touch anything your
+> user can. `init --set sandbox=true` (or `"sandbox": true` in the params
+> of `.tenaz/run.json`) limits that: see [Sandbox](#sandbox). Either way,
+> run Tenaz in a container, a VM or a user account that holds nothing you
 > would miss, and do not point it at a brief or a repository you do not
 > trust. While a run works, the engine proxy and the media MCP server listen
 > on `127.0.0.1` without authentication, so any local process can reach
@@ -197,6 +199,35 @@ edit either file. Skill
 directories passed with `--skill` at `init` are pinned read-only into
 `.tenaz/skills/`, and are the only skills the agent sees; `--set
 agentSkills=true` also lets it load the ones it finds by itself.
+
+### Sandbox
+
+With `--set sandbox=true` at `init`, the agent and `verify` run in an OS
+sandbox: Seatbelt on macOS, Landlock on Linux (5.13 or later). Nothing to
+install. Everything they start inherits it.
+
+- They can write only to the project, its git directory (for a worktree,
+  the repository's shared `.git` too), the temporary directories, `/dev`
+  and the existing directories in `sandboxAllowWrite` (by default the
+  package caches `~/.cargo/registry`, `~/.cargo/git`, `~/.npm`, `~/.cache`
+  and `~/Library/Caches`). Writing elsewhere fails with `Operation not
+  permitted`.
+- They cannot change what Tenaz runs or trusts outside the sandbox: the
+  git hooks and config, a worktree's `.git` file and `.tenaz/run.json`. On
+  macOS the sandbox refuses those writes. Landlock cannot refuse a path
+  inside a directory it lets a process write to, so on Linux Tenaz puts
+  them back after every session and every `verify` run, before it runs git
+  again, and says so in its log. It does that on macOS too.
+- They cannot read `sandboxDenyRead` (by default `~/.ssh`, `~/.aws`,
+  `~/.gnupg`). On Linux the names of the files there stay visible.
+- The network is not limited yet.
+
+Both lists are comma-separated, with `~` for your home directory:
+`--set sandboxAllowWrite=~/.cargo/registry,~/.m2`. `run` checks the sandbox
+by starting a program in it before the first session and stops with the
+reason when it cannot, for example when Tenaz itself already runs in a
+sandbox on macOS. The sandbox reduces what a mistaken model can damage; it
+is not a boundary against a hostile brief or repository.
 
 ### In an existing project
 

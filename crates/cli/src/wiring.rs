@@ -17,10 +17,12 @@ use tenaz_adapters::media::comfyui::ComfyUi;
 use tenaz_adapters::metrics::PrometheusMetrics;
 use tenaz_adapters::notify::DesktopNotifier;
 use tenaz_adapters::probe_macos::MacMemoryProbe;
+use tenaz_adapters::sandbox::{Guard, GuardedHarness, GuardedVerify, Policy};
 use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
 use tenaz_core::ledger::{JournalRecord, SkillPin};
 use tenaz_core::orchestrator::Deps;
+use tenaz_core::params::RunParams;
 use tenaz_core::ports::{EngineAdapter, Harness, MediaAdapter};
 use tenaz_core::project::Project;
 use tenaz_core::session::Usage;
@@ -228,7 +230,12 @@ pub async fn wire(
     } else {
         base_url.clone()
     };
-    let harness = build_harness(
+    let sandbox = sandbox(project, &ledger.params)?;
+    let wrapper = sandbox
+        .as_ref()
+        .map(|s| s.wrapper.clone())
+        .unwrap_or_default();
+    let mut harness = build_harness(
         project,
         config,
         harness,
@@ -239,12 +246,22 @@ pub async fn wire(
         ledger.params.agent_skills,
         ledger.params.verify_path(),
         &feed,
+        &wrapper,
     )?;
+    let mut verify: Arc<dyn tenaz_core::ports::VerifyRunner> = Arc::new(
+        VerifyProcess::new(project.root())
+            .at(ledger.params.verify_path())
+            .wrapped(wrapper),
+    );
+    if let Some(sandbox) = sandbox {
+        harness = Arc::new(GuardedHarness::new(harness, sandbox.guard.clone()));
+        verify = Arc::new(GuardedVerify::new(verify, sandbox.guard));
+    }
     let port = reqwest_url(&base_url)?.2;
     let deps = Deps {
         harness,
         vcs: Arc::new(GitRepo::new(project.root())),
-        verify: Arc::new(VerifyProcess::new(project.root()).at(ledger.params.verify_path())),
+        verify,
         clock: Arc::new(SystemClock::new()),
         notifier: Arc::new(DesktopNotifier::new(
             project
@@ -263,6 +280,50 @@ pub async fn wire(
         }),
     };
     Ok(Wired { deps, services })
+}
+
+/// A sandboxed run's launcher prefix and the guard of its protected paths.
+struct Sandbox {
+    wrapper: Vec<String>,
+    guard: Arc<Guard>,
+}
+
+/// The sandbox when the run asks for one (`sandbox` in run.json), checked
+/// by starting a program in it; an error when this machine cannot give one.
+fn sandbox(project: &Project, params: &RunParams) -> anyhow::Result<Option<Sandbox>> {
+    if !params.sandbox {
+        return Ok(None);
+    }
+    let launcher = std::env::current_exe().context("cannot find the tenaz binary")?;
+    let policy = Policy::for_project(
+        project.root(),
+        &params.sandbox_allow_write,
+        &params.sandbox_deny_read,
+    )
+    .context("cannot build the sandbox policy")?;
+    policy.probe(&launcher).context(
+        "the run asks for a sandbox (\"sandbox\": true in the params of .tenaz/run.json) and \
+         this machine cannot give one; fix that, or set it to false to run without one",
+    )?;
+    let show = |paths: &[PathBuf]| {
+        paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    tracing::info!(
+        "sandbox: the agent and verify write only to {}",
+        show(&policy.write)
+    );
+    tracing::info!("sandbox: protected {}", show(&policy.deny_write));
+    if !policy.deny_read.is_empty() {
+        tracing::info!("sandbox: unreadable {}", show(&policy.deny_read));
+    }
+    Ok(Some(Sandbox {
+        wrapper: policy.wrapper(&launcher),
+        guard: Arc::new(Guard::new(&policy, project)),
+    }))
 }
 
 /// Appends one repair to `log`, as a JSON line.
@@ -376,8 +437,10 @@ fn build_harness(
     agent_skills: bool,
     verify_path: &str,
     feed: &tokio::sync::broadcast::Sender<EngineObservation>,
+    wrapper: &[String],
 ) -> anyhow::Result<Arc<dyn Harness>> {
     match config.harness.as_str() {
+        // The scripted harness writes from inside Tenaz: there is no process to sandbox.
         "fake" => Ok(Arc::new(ScriptedHarness {
             verify_path: Some(verify_path.to_owned()),
             ..ScriptedHarness::default()
@@ -415,7 +478,8 @@ fn build_harness(
                         .collect(),
                 )
                 .agent_dir(&agent_dir)
-                .discover_skills(agent_skills);
+                .discover_skills(agent_skills)
+                .wrapper(wrapper.to_vec());
             Ok(Arc::new(launch.harness(config.harness_version.clone())))
         }
         "fx" => {
@@ -457,6 +521,7 @@ fn build_harness(
             // fx is started through this binary, which puts right what fx
             // says outside the protocol (see tenaz_acp::fx::normalize_line).
             launch.shim = std::env::current_exe().ok();
+            launch.wrapper = wrapper.to_vec();
             let mut acp = launch
                 .harness(config.harness_version.clone())
                 .with_observations(feed.clone());

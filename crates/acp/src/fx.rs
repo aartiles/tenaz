@@ -7,6 +7,7 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use tenaz_core::ports::HarnessInfo;
+use tenaz_core::util::wrap_command;
 
 use crate::AcpHarness;
 
@@ -142,6 +143,9 @@ pub struct FxLaunch {
     pub log_dir: Option<PathBuf>,
     /// A program that starts fx and normalizes its stdout (see [`harness`](Self::harness)).
     pub shim: Option<PathBuf>,
+    /// A program and leading arguments fx (or the shim) is started through:
+    /// the sandbox launcher, when the run is sandboxed.
+    pub wrapper: Vec<String>,
 }
 
 /// The subcommand of the shim program that runs fx.
@@ -175,6 +179,7 @@ impl FxLaunch {
             args: vec!["acp".to_owned()],
             log_dir: None,
             shim: None,
+            wrapper: Vec::new(),
         }
     }
 
@@ -208,19 +213,21 @@ impl FxLaunch {
         };
         let launch = self.clone();
         let program = self.shim.clone().unwrap_or_else(|| self.binary.clone());
+        let (command, _) = wrap_command(&self.wrapper, &program, Vec::new());
         AcpHarness::subprocess_with(
             info,
-            program,
+            command,
             std::sync::Arc::new(move |spec| {
                 let args = launch.command_args(&spec.label);
-                match &launch.shim {
+                let args = match &launch.shim {
                     Some(_) => [
                         vec![SHIM_COMMAND.to_owned(), launch.binary.display().to_string()],
                         args,
                     ]
                     .concat(),
                     None => args,
-                }
+                };
+                wrap_command(&launch.wrapper, &program, args).1
             }),
             vec![
                 ("HOME".to_owned(), self.home.display().to_string()),

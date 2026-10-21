@@ -64,6 +64,9 @@ pub struct PiLaunch {
     /// Extra arguments appended after the pinned ones.
     pub extra_args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// A program and leading arguments Pi is started through: the sandbox
+    /// launcher, when the run is sandboxed.
+    pub wrapper: Vec<String>,
 }
 
 impl PiLaunch {
@@ -77,6 +80,7 @@ impl PiLaunch {
             discover_skills: false,
             extra_args: Vec::new(),
             env: Vec::new(),
+            wrapper: Vec::new(),
         }
     }
 
@@ -101,6 +105,12 @@ impl PiLaunch {
     #[must_use]
     pub fn extra_args(mut self, args: Vec<String>) -> Self {
         self.extra_args = args;
+        self
+    }
+
+    #[must_use]
+    pub fn wrapper(mut self, wrapper: Vec<String>) -> Self {
+        self.wrapper = wrapper;
         self
     }
 
@@ -215,9 +225,12 @@ impl Harness for PiHarness {
     }
 
     async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
-        let args = self.launch.args(spec.persist_dir.as_deref());
-        let session =
-            session::PiSession::spawn(&self.launch.binary, &args, &self.launch.env, &spec)?;
+        let (program, args) = tenaz_core::util::wrap_command(
+            &self.launch.wrapper,
+            &self.launch.binary,
+            self.launch.args(spec.persist_dir.as_deref()),
+        );
+        let session = session::PiSession::spawn(&program, &args, &self.launch.env, &spec)?;
         Ok(Box::new(session))
     }
 }

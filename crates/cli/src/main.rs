@@ -780,6 +780,23 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
+    /// Runs a program in the OS sandbox: it may write only below the
+    /// `--write` directories, never to the `--deny-write` paths, and may not
+    /// read the `--deny-read` ones. Used by `run` when `sandbox` is on.
+    #[command(name = "sandbox-exec", hide = true)]
+    SandboxExec(SandboxExecArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxExecArgs {
+    #[arg(long)]
+    write: Vec<PathBuf>,
+    #[arg(long)]
+    deny_write: Vec<PathBuf>,
+    #[arg(long)]
+    deny_read: Vec<PathBuf>,
+    #[arg(last = true, required = true)]
+    command: Vec<std::ffi::OsString>,
 }
 
 /// `tenaz fx-shim <fx> <args>`: fx with stdin and stderr inherited and its
@@ -923,6 +940,31 @@ fn execute_finish(args: FinishArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `tenaz sandbox-exec`: becomes the command under the policy; returns
+/// only when that fails, with the shell's "cannot execute" code.
+fn sandbox_exec(args: SandboxExecArgs) -> ExitCode {
+    let SandboxExecArgs {
+        write,
+        deny_write,
+        deny_read,
+        command,
+    } = args;
+    let policy = tenaz_adapters::sandbox::Policy {
+        write,
+        deny_write,
+        deny_read,
+    };
+    let error = policy.exec(&command);
+    eprintln!(
+        "tenaz sandbox-exec: cannot run {}: {error}",
+        command
+            .first()
+            .map(|c| c.to_string_lossy())
+            .unwrap_or_default()
+    );
+    ExitCode::from(126)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<ExitCode> {
     tracing_subscriber::fmt()
@@ -1057,6 +1099,7 @@ async fn main() -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::FxShim { command } => fx_shim(&command),
+        Command::SandboxExec(args) => Ok(sandbox_exec(args)),
         Command::Guide => {
             print!("{}", include_str!("../skill/SKILL.md"));
             Ok(ExitCode::SUCCESS)

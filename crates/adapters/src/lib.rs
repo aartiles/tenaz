@@ -10,4 +10,5 @@ pub mod media;
 pub mod metrics;
 pub mod notify;
 pub mod probe_macos;
+pub mod sandbox;
 pub mod verify;

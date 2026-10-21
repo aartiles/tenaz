@@ -17,6 +17,24 @@ pub fn clip(text: &str, limit: usize) -> String {
     format!("{}\n[... clipped {} bytes]", &text[..cut], text.len() - cut)
 }
 
+/// `program args...` started through `wrapper` (a program and its leading
+/// arguments, such as the sandbox launcher); unchanged when `wrapper` is empty.
+pub fn wrap_command(
+    wrapper: &[String],
+    program: &std::path::Path,
+    args: Vec<String>,
+) -> (std::path::PathBuf, Vec<String>) {
+    match wrapper.split_first() {
+        None => (program.to_path_buf(), args),
+        Some((launcher, leading)) => {
+            let mut wrapped = leading.to_vec();
+            wrapped.push(program.display().to_string());
+            wrapped.extend(args);
+            (std::path::PathBuf::from(launcher), wrapped)
+        }
+    }
+}
+
 /// The rough token count of a text: four characters per token.
 pub fn approx_tokens(text: &str) -> usize {
     text.len().div_ceil(4)

@@ -94,6 +94,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   10-minute tool call has not been measured.
 - **Linux and NVIDIA memory.** Memory pressure, swap and the engine's
   footprint are sampled on macOS only.
+- **The sandbox** (`sandbox=true`) has been tested on macOS, with `verify`
+  and a Pi session against a local model. The Landlock version for Linux
+  compiles and its rules are unit-tested, but it has not run on a Linux
+  kernel yet; neither has fx in the sandbox.
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
 - A pause during a bootstrap session counts as one of its attempts. An

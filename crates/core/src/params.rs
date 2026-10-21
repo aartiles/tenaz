@@ -92,6 +92,16 @@ pub struct RunParams {
     /// JSON text where the tool's schema accepts only an object, and logs
     /// each repair in `.tenaz/private/tool-repairs.jsonl`.
     pub repair_tool_args: bool,
+    /// Run the coding agent and `verify` in an OS sandbox (Seatbelt on macOS,
+    /// Landlock on Linux): they can write only to the project, its git
+    /// directory, the temporary directories and `sandboxAllowWrite`, and
+    /// never to the git hooks and config or `.tenaz/run.json`.
+    pub sandbox: bool,
+    /// More directories a sandboxed run may write to, comma-separated
+    /// (`~` is the home directory); the ones that do not exist are skipped.
+    pub sandbox_allow_write: String,
+    /// Directories a sandboxed run may not read, comma-separated.
+    pub sandbox_deny_read: String,
 }
 
 impl Default for RunParams {
@@ -134,6 +144,10 @@ impl Default for RunParams {
             existing_project: None,
             agent_skills: false,
             repair_tool_args: true,
+            sandbox: false,
+            sandbox_allow_write: "~/.cargo/registry,~/.cargo/git,~/.npm,~/.cache,~/Library/Caches"
+                .to_owned(),
+            sandbox_deny_read: "~/.ssh,~/.aws,~/.gnupg".to_owned(),
         }
     }
 }
@@ -279,6 +293,17 @@ mod tests {
         assert_eq!(p.verify_path(), ".tenaz/verify");
         p.apply_override("existingProject=false").unwrap();
         assert_eq!(p.verify_path(), "verify");
+    }
+
+    #[test]
+    fn the_sandbox_is_off_unless_asked_for() {
+        let mut p = RunParams::default();
+        assert!(!p.sandbox);
+        p.apply_override("sandbox=true").unwrap();
+        p.apply_override("sandboxAllowWrite=~/.m2,/opt/cache")
+            .unwrap();
+        assert!(p.sandbox);
+        assert_eq!(p.sandbox_allow_write, "~/.m2,/opt/cache");
     }
 
     #[test]
