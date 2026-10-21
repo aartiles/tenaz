@@ -193,6 +193,22 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
         sessions.iter().any(|s| s.context_budget == 49190),
         "lowered context budget not applied to the next session"
     );
+    // 85196 configured: halfway back from 49190 after four sessions held.
+    assert!(
+        has(&|r| matches!(
+            r,
+            JournalRecord::ContextCapRaised {
+                context_cap: Some(67193),
+                clean_sessions: 4,
+                ..
+            }
+        )),
+        "the lowered context budget was not raised after sessions the engine held"
+    );
+    assert!(
+        sessions.iter().any(|s| s.context_budget == 67193),
+        "raised context budget not applied to later sessions"
+    );
     assert!(
         aborted_with("context budget exceeded"),
         "session past 1.3x its context budget was not stopped"

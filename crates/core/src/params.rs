@@ -50,6 +50,10 @@ pub struct RunParams {
     pub context_floor: u64,
     /// Immediate reruns after the context budget was lowered, before blocking.
     pub capacity_retries: u32,
+    /// Sessions in a row without a memory failure before a lowered context
+    /// budget is raised halfway back; doubles after each raise that fails
+    /// (0 keeps it lowered).
+    pub capacity_recover_sessions: u32,
     /// A single tool result above this (about 4 characters per token) gets a steer.
     pub big_output_tokens: usize,
     /// A session past this multiple of its context budget is stopped.
@@ -113,6 +117,7 @@ impl Default for RunParams {
             capacity_headroom: 0.8,
             context_floor: 32768,
             capacity_retries: 4,
+            capacity_recover_sessions: 4,
             big_output_tokens: 8000,
             context_abort: 1.3,
             context_continuations: 3,

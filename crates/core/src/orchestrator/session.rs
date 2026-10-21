@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::briefing::{CONTINUATION, image_continuation};
 use crate::ledger::{Inflight, JournalRecord, SessionRecord};
+use crate::memory::MemoryWindow;
 use crate::metrics::{EngineCounters, RequestRecord, delta, engine_summary};
 use crate::ownership;
 use crate::ports::{PermissionDecision, SessionSpec};
@@ -19,6 +20,11 @@ use crate::verify::retarget;
 use crate::watchdog::{Action, WatchConfig, Watchdog};
 
 use super::{RunError, Runner};
+
+/// macOS memory pressure level `critical`: no time to raise the budget.
+const CRITICAL_PRESSURE: u32 = 4;
+/// A cap this close to the configured budget is lifted rather than raised.
+const RAISE_STEP_MIN: u64 = 4096;
 
 /// What a session is about.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -396,6 +402,9 @@ impl Runner {
                 return Err(self.pause(&label, role, ctx)?);
             }
             let metrics = &result.metrics;
+            if !metrics.engine_failed() {
+                self.note_engine_held(&label, result.record.memory.as_ref())?;
+            }
             if metrics.context_stopped() && continued < self.params.context_continuations {
                 continued += 1;
                 self.journal(JournalRecord::ContextContinuation {
@@ -485,8 +494,12 @@ impl Runner {
         let cap = (limit as f64 * self.params.capacity_headroom).floor() as u64;
         if self.ledger.context_cap.is_none_or(|current| cap < current) {
             self.ledger.context_cap = Some(cap);
-            self.save()?;
         }
+        self.ledger.cap_clean_sessions = 0;
+        if std::mem::take(&mut self.ledger.cap_raised) {
+            self.ledger.cap_failed_raises += 1;
+        }
+        self.save()?;
         let current = self.ledger.context_cap.unwrap_or(cap);
         self.journal(JournalRecord::ContextCap {
             label: label.to_owned(),
@@ -495,6 +508,52 @@ impl Runner {
             retry,
         });
         self.log(&format!("  {label}: the engine can hold about {limit} tokens now; context budget lowered to {current}; rerunning the same session ({retry}/{}, not counted as an attempt)", self.params.capacity_retries));
+        Ok(())
+    }
+
+    /// Counts a session the engine held at a lowered budget and, after
+    /// `capacityRecoverSessions` of them in a row, raises the budget halfway
+    /// back to the configured one. The engine only says how much it can hold
+    /// when a prompt overflows it, so memory freed later is found by trying;
+    /// each raise that overflows again doubles the sessions the next one waits for.
+    fn note_engine_held(
+        &mut self,
+        label: &str,
+        memory: Option<&MemoryWindow>,
+    ) -> Result<(), RunError> {
+        let Some(cap) = self.ledger.context_cap else {
+            return Ok(());
+        };
+        if self.params.capacity_recover_sessions == 0 {
+            return Ok(());
+        }
+        if memory.is_some_and(|m| m.pressure_max >= CRITICAL_PRESSURE) {
+            self.ledger.cap_clean_sessions = 0;
+            return self.save();
+        }
+        self.ledger.cap_clean_sessions += 1;
+        let needed = self
+            .params
+            .capacity_recover_sessions
+            .saturating_mul(1 << self.ledger.cap_failed_raises.min(4));
+        let clean = self.ledger.cap_clean_sessions;
+        if clean < needed {
+            return self.save();
+        }
+        let full = self.ledger.configured_budget_tokens();
+        let raised = cap + full.saturating_sub(cap) / 2;
+        let new_cap = (full.saturating_sub(raised) >= RAISE_STEP_MIN).then_some(raised);
+        self.ledger.context_cap = new_cap;
+        self.ledger.cap_clean_sessions = 0;
+        self.ledger.cap_raised = true;
+        self.save()?;
+        self.journal(JournalRecord::ContextCapRaised {
+            label: label.to_owned(),
+            context_cap: new_cap,
+            clean_sessions: clean,
+        });
+        let budget = new_cap.unwrap_or(full);
+        self.log(&format!("  {label}: {clean} sessions in a row without the engine running out of memory; context budget raised to {budget}"));
         Ok(())
     }
 

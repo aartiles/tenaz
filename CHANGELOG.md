@@ -77,6 +77,11 @@ uses [Semantic Versioning](https://semver.org/).
   (`server`: prefill and decode milliseconds, cached tokens, and draft
   counts when the engine reports them), and `status` prints the draft
   acceptance.
+- A context budget lowered because the engine ran out of memory is raised
+  halfway back after `capacityRecoverSessions` sessions in a row (4 by
+  default; 0 keeps it lowered) that the engine held without critical memory
+  pressure. A raise the engine overflows again lowers it as before and
+  doubles the sessions the next raise waits for.
 
 ### Fixed
 

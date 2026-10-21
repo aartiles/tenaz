@@ -243,6 +243,15 @@ pub struct Ledger {
     pub checkpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_cap: Option<u64>,
+    /// Sessions in a row the engine held at the lowered budget.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cap_clean_sessions: u32,
+    /// Raises of the budget that the engine overflowed again.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cap_failed_raises: u32,
+    /// The budget was raised and no session has overflowed since.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cap_raised: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_errors: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -298,6 +307,9 @@ impl Ledger {
             preflight: None,
             checkpoint: None,
             context_cap: None,
+            cap_clean_sessions: 0,
+            cap_failed_raises: 0,
+            cap_raised: false,
             last_errors: None,
             pending_continuation: false,
             paused_at: None,
@@ -312,15 +324,20 @@ impl Ledger {
     /// The budget a session is steered at: the configured share of the
     /// window, or less once the engine has said it cannot hold more.
     pub fn context_budget_tokens(&self, requested: Option<u64>) -> u64 {
+        let wanted = requested.unwrap_or_else(|| self.configured_budget_tokens());
+        self.context_cap.map_or(wanted, |cap| wanted.min(cap))
+    }
+
+    /// The configured share of the context window, before any cap.
+    pub fn configured_budget_tokens(&self) -> u64 {
         #[allow(
             clippy::cast_precision_loss,
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss
         )]
-        let default =
+        let budget =
             (self.config.context_window as f64 * self.params.context_budget).floor() as u64;
-        let wanted = requested.unwrap_or(default);
-        self.context_cap.map_or(wanted, |cap| wanted.min(cap))
+        budget
     }
 
     /// `003-builder-T007`.
@@ -417,6 +434,12 @@ pub enum JournalRecord {
         engine_max_context: u64,
         context_cap: u64,
         retry: u32,
+    },
+    ContextCapRaised {
+        label: String,
+        /// `None`: back to the configured budget.
+        context_cap: Option<u64>,
+        clean_sessions: u32,
     },
     EngineRetry {
         label: String,
