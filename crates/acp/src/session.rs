@@ -114,7 +114,12 @@ impl AcpSession {
                     let mut commands = command_rx;
                     let mut observations = observations;
                     loop {
+                        // Biased, in causal order: a prompt is sent before the
+                        // engine requests it causes, and the proxy observes a
+                        // request before the agent can finish the prompt, so
+                        // a queued observation must not land after `Settled`.
                         tokio::select! {
+                            biased;
                             command = commands.recv() => match command {
                                 None | Some(Command::Close(_)) => {
                                     if let Some(Command::Close(done)) = command {
