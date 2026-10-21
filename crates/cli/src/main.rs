@@ -1,6 +1,7 @@
 //! `tenaz`: the single-model runner command line.
 
 mod detect;
+mod watch;
 mod wiring;
 mod wizard;
 mod worktree;
@@ -107,6 +108,22 @@ Exit codes (also when the run had already ended before this call):
   5  paused after Ctrl-C or SIGTERM. Run again, without --resume.";
 
 /// What the phases mean, after `tenaz status --help`.
+const WATCH_HELP: &str = "\
+Levels:
+  summary   the run log: sessions starting and ending, steers, tasks done.
+  actions   also every tool call and model reply on one line, with the context
+            each turn used (ctx), its output and thinking, and decode speed.
+  full      also replies in full and the start of every tool result (the
+            stream keeps 200 characters; shell results show their exit code).
+  debug     also the harness's own log lines (fx: <label>.fx-acp.log).
+
+Example:
+  tenaz watch --project ./my-app --level full
+
+Everything shown is in .tenaz/private/: orchestrator.log and, per session,
+<label>.rpc.jsonl (the events), <label>.prompt.md and the harness logs.
+";
+
 const STATUS_HELP: &str = "\
 Phases:
   BOOTSTRAP            planning: the spec, the verify script and the task cards.
@@ -731,6 +748,24 @@ enum Command {
     /// steps that later ones rework; the run branch (tenaz/<slug>) keeps it
     /// all.
     Finish(FinishArgs),
+    /// Follow what the run is doing, session by session, as it happens
+    /// (reads files only, safe while a run works). Ctrl-C stops watching,
+    /// not the run.
+    #[command(after_help = WATCH_HELP)]
+    Watch {
+        /// How much to show; each level adds to the one before.
+        #[arg(long, short, value_enum, default_value = "actions")]
+        level: watch::Level,
+        /// Lines of the current session shown before following.
+        #[arg(long, default_value_t = 30)]
+        history: usize,
+        /// Print what is there and exit instead of following.
+        #[arg(long)]
+        once: bool,
+        /// The run's directory: the one init printed (a worktree for an existing repository).
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+    },
     /// The tunable parameters and their defaults.
     Params,
     /// Print the agent skill for delegating goals to Tenaz (a SKILL.md).
@@ -1002,6 +1037,23 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
         Command::Finish(args) => {
             execute_finish(args)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Watch {
+            level,
+            history,
+            once,
+            project,
+        } => {
+            let project = initialized(project)?;
+            watch::watch(
+                &project,
+                &watch::WatchOptions {
+                    level,
+                    history,
+                    once,
+                },
+            )?;
             Ok(ExitCode::SUCCESS)
         }
         Command::FxShim { command } => fx_shim(&command),

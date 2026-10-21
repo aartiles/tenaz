@@ -77,6 +77,11 @@ uses [Semantic Versioning](https://semver.org/).
   (`server`: prefill and decode milliseconds, cached tokens, and draft
   counts when the engine reports them), and `status` prints the draft
   acceptance.
+- `tenaz watch` follows a run from its files as it works, at four levels:
+  `summary` (the run log), `actions` (each tool call and reply on one line,
+  with context, output, thinking and decode speed), `full` (whole replies,
+  the start of tool results) and `debug` (the harness's log too). `--once`
+  prints the current session and exits.
 - A context budget lowered because the engine ran out of memory is raised
   halfway back after `capacityRecoverSessions` sessions in a row (4 by
   default; 0 keeps it lowered) that the engine held without critical memory

@@ -119,6 +119,12 @@ tenaz status
   saved. `--resume` continues a blocked run after you have fixed what
   blocked it.
 - `status` reads files only and is safe while a run works.
+- `tenaz watch` follows the run as it works, session by session: with
+  `--level summary` the run log only, with `actions` (the default) also each
+  tool call and model reply on one line with the context it used and the
+  decode speed, with `full` whole replies and the start of tool results, and
+  with `debug` the harness's own log too. It reads files only; Ctrl-C stops
+  watching, not the run.
 
 > **Tenaz commits to the project's repository.** Every step of a run is a
 > commit, and a failed attempt is undone with `git reset --hard` and
