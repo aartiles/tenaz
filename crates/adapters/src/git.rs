@@ -140,6 +140,13 @@ impl GitRepo {
         self.ok(&["rev-parse", "--verify", "-q", "HEAD^{commit}"])
     }
 
+    /// The index holds some file under `root`: the directory is part of the
+    /// repository, not just inside its working tree (ignored or untracked).
+    pub fn tracks_any(&self) -> bool {
+        self.git(&["ls-files", "--", "."])
+            .is_ok_and(|s| !s.trim().is_empty())
+    }
+
     /// The branch HEAD is on; `None` when detached.
     pub fn current_branch(&self) -> Option<String> {
         self.git(&["symbolic-ref", "--short", "-q", "HEAD"])

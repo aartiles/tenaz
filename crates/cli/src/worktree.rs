@@ -209,7 +209,9 @@ impl Placement {
 }
 
 /// The repository with commits whose top is `dir`, if any, and whether
-/// `dir` is instead somewhere inside one.
+/// `dir` is instead somewhere inside one with files of it. A directory the
+/// outer repository tracks nothing in (ignored, or not added yet) is a new
+/// project, whatever it holds.
 fn repo_at(dir: &Path) -> (Option<GitRepo>, Option<PathBuf>) {
     if is_fresh_dir(dir) {
         return (None, None);
@@ -223,8 +225,10 @@ fn repo_at(dir: &Path) -> (Option<GitRepo>, Option<PathBuf>) {
     }
     if std::fs::canonicalize(&top).ok() == std::fs::canonicalize(dir).ok() {
         (Some(repo), None)
-    } else {
+    } else if repo.tracks_any() {
         (None, Some(top))
+    } else {
+        (None, None)
     }
 }
 

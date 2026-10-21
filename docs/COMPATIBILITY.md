@@ -104,10 +104,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
   under `requires` are read as dependencies. When cards a planner wrote
   later cannot be read, a replan session gets the problems to fix, twice
   in a row at most, before the run blocks.
-- **Existing projects.** `init` refuses a project directory that is a
-  subdirectory of a larger repository (a monorepo package, for example):
-  point it at the repository root, or pass `--in-place` to make the
-  directory a nested repository of its own. `tenaz finish` authors the
+- **Existing projects.** `init` refuses a project directory that holds
+  files of a larger repository (a monorepo package, for example): point
+  it at the repository root, or pass `--in-place` to make the directory a
+  nested repository of its own. A directory inside a repository that
+  tracks nothing in it (ignored, or not added yet) is a new project and
+  becomes a nested repository without `--in-place`. `tenaz finish` authors the
   delivered commit as Tenaz rather than as you (amend it with
   `git commit --amend --reset-author` if needed), and with
   `--remove-worktree` it removes the run's worktree without asking for

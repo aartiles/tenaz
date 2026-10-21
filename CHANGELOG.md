@@ -38,6 +38,8 @@ uses [Semantic Versioning](https://semver.org/).
   the old behaviour; `--worktree` and `--name` choose the directory and
   branch. The setup wizard asks which, `run` and `status` say where the
   run works, and both point to the worktree from the original checkout.
+  A directory inside a repository that tracks nothing in it, such as an
+  ignored directory with seed files, is a new project rather than refused.
 - `tenaz finish`: a branch in the original repository with the run's
   result as one commit on the starting commit, without `.tenaz/` (nor,
   for older layouts, the root files and `.gitignore` lines Tenaz added);

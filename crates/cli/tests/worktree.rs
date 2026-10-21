@@ -312,7 +312,21 @@ fn new_directories_and_subdirectories_of_a_repository() {
     assert!(fresh.join(".git").exists());
     assert!(ledger(&fresh).get("origin").is_none());
 
-    // A directory with files inside the repository: refused.
+    // Seeded directories the repository tracks nothing in, ignored or not
+    // added yet: new projects too, with the seed in the first commit.
+    std::fs::write(repo.join(".gitignore"), "target/\nruns/\n").unwrap();
+    git(&repo, &["commit", "-q", "-am", "ignore runs"]);
+    for seeded in [repo.join("runs/one"), repo.join("draft")] {
+        std::fs::create_dir_all(seeded.join("vendor")).unwrap();
+        std::fs::write(seeded.join("vendor/lib.js"), "\n").unwrap();
+        let out = init(&seeded, Some(&brief), &[]);
+        assert!(out.status.success(), "{}", text(&out));
+        assert!(seeded.join(".git").exists());
+        assert!(ledger(&seeded).get("origin").is_none());
+        assert_eq!(git(&seeded, &["ls-files", "vendor"]), "vendor/lib.js");
+    }
+
+    // A directory with files of the repository: refused.
     let sub = repo.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
     std::fs::write(sub.join("lib.rs"), "\n").unwrap();
