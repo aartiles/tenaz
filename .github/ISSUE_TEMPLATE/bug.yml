@@ -1,0 +1,51 @@
+name: Bug report
+description: A run that failed, blocked or did something wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what Tenaz did instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tenaz version
+      description: Output of `tenaz --version`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: macOS 15 arm64, Ubuntu 24.04 x86_64 with an RTX 4090, ...
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Harness and version
+      placeholder: Pi 1.1.0, fx 0.0.14, fake
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: Engine, model and context window
+      placeholder: llama.cpp b6000, Qwen3-Coder-30B-A3B Q4_K_M, 65536
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: tenaz status --json
+      description: Run it in the project directory and paste the output.
+      render: json
+  - type: textarea
+    id: log
+    attributes:
+      label: Run log
+      description: The relevant part of `tenaz watch --level summary` or of the files under `.tenaz/`. Remove anything private.
+      render: text

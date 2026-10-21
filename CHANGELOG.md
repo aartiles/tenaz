@@ -96,3 +96,12 @@ uses [Semantic Versioning](https://semver.org/).
   failure instead of being charged as a task attempt, and its exit code and
   stderr tail are journaled (`harness_exit`).
 - fx writes one ACP log per session instead of overwriting a shared one.
+- An ACP session handles a proxy observation before the prompt's end, so
+  per-request usage is no longer occasionally lost or attributed to the
+  wrong turn.
+
+### Security
+
+- `SECURITY.md` and the README say what Tenaz does not isolate (the agent's
+  commands, `verify`, the unauthenticated local proxy and MCP server) and
+  how to report a vulnerability privately.

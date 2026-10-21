@@ -57,10 +57,10 @@ Download the archive for your platform from the
 tar -xzf tenaz-*.tar.gz && install -m 755 tenaz-*/tenaz ~/.local/bin/tenaz
 ```
 
-Or build from source with a stable Rust toolchain:
+Or build from source with Rust 1.91 or later:
 
 ```bash
-cargo install --locked --git https://github.com/OWNER/tenaz tenaz
+cargo install --locked --git https://github.com/aartiles/tenaz tenaz
 ```
 
 ## Try it without a model
@@ -141,6 +141,16 @@ tenaz status
 > takes everything uncommitted (`git add -A`). A new or empty directory
 > becomes a new repository, as before.
 
+> **Tenaz does not sandbox the agent.** The agent runs the shell commands
+> and writes the files the model asks for, as your user, and Tenaz approves
+> every permission request it makes; the project's `verify` script runs the
+> same way. A model that misreads the goal can touch anything your user can.
+> Run Tenaz in a container, a VM or a user account that holds nothing you
+> would miss, and do not point it at a brief or a repository you do not
+> trust. While a run works, the engine proxy and the media MCP server listen
+> on `127.0.0.1` without authentication, so any local process can reach
+> them. See [`SECURITY.md`](SECURITY.md).
+
 When the run is done (or stopped), turn it into something to review:
 
 ```bash
@@ -189,6 +199,9 @@ directories passed with `--skill` at `init` are pinned read-only into
 agentSkills=true` also lets it load the ones it finds by itself.
 
 ### In an existing project
+
+This mode is experimental: it has been exercised with the scripted harness
+only, not yet with a real model.
 
 Pointed at a repository that already has commits, `init` sets
 `existingProject=true` (override it with `--set existingProject=false`).

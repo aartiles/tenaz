@@ -1,0 +1,37 @@
+name: Engine or agent compatibility
+description: Report how Tenaz works, or fails, with an engine, model or coding agent
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: docs/COMPATIBILITY.md lists what has been tested. Reports of what works are as welcome as reports of what does not.
+  - type: input
+    id: version
+    attributes:
+      label: Tenaz version
+    validations:
+      required: true
+  - type: input
+    id: combo
+    attributes:
+      label: Platform, harness, engine and model
+      placeholder: Linux x86_64, Pi 1.1.0, Ollama 0.12, qwen3-coder:30b, 32768 context
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: How far did it get
+      options:
+        - Preflight failed
+        - Blocked in bootstrap
+        - Blocked during the tasks
+        - Completed with gaps
+        - Completed
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What failed, with `tenaz status --json` and the relevant log lines.
