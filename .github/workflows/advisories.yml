@@ -1,0 +1,24 @@
+name: Advisories
+
+# Security advisories appear without any change here, so they are checked on
+# a schedule and when the lock file changes, not on every pull request.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  push:
+    paths: ["Cargo.lock", "deny.toml"]
+  pull_request:
+    paths: ["Cargo.lock", "deny.toml"]
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
