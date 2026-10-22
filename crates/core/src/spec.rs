@@ -40,6 +40,63 @@ pub fn parse_requirements(spec: &str) -> Vec<Requirement> {
     reqs
 }
 
+/// The spec with only the requirements in `ids`: other requirement lines
+/// (and the lines that continue them) are left out, then the headings left
+/// with nothing under them. Prose is kept. `None` when the spec has none of
+/// `ids`, so the caller shows the whole spec.
+pub fn cited(spec: &str, ids: &[String]) -> Option<String> {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut found = Vec::new();
+    let mut dropping = false;
+    for line in spec.lines() {
+        let trimmed = line.trim_start();
+        if let Some(caps) = LINE.captures(line) {
+            let id = caps.get(1).map_or("", |m| m.as_str());
+            dropping = !ids.iter().any(|x| x == id);
+            if !dropping && !found.contains(&id) {
+                found.push(id);
+            }
+        } else if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+        {
+            dropping = false;
+        }
+        if !dropping {
+            kept.push(line);
+        }
+    }
+    if found.is_empty() {
+        return None;
+    }
+    let level = |line: &str| {
+        let hashes = line.len() - line.trim_start_matches('#').len();
+        (hashes > 0 && line[hashes..].starts_with(' ')).then_some(hashes)
+    };
+    let mut out: Vec<&str> = Vec::new();
+    for (i, line) in kept.iter().enumerate() {
+        if let Some(own) = level(line) {
+            let has_content = kept[i + 1..]
+                .iter()
+                .take_while(|next| level(next).is_none_or(|l| l > own))
+                .any(|next| level(next).is_none() && !next.trim().is_empty());
+            if !has_content {
+                continue;
+            }
+        }
+        if line.trim().is_empty() && out.last().is_none_or(|last| last.trim().is_empty()) {
+            continue;
+        }
+        out.push(line);
+    }
+    let shown = found.join(", ");
+    Some(format!(
+        "{}\n\nOnly the requirements this task's card requires are shown ({shown}). The whole spec is `.tenaz/spec.md`.",
+        out.join("\n").trim_end()
+    ))
+}
+
 /// Which requirements have a task and which do not.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Coverage {
@@ -93,6 +150,25 @@ mod tests {
         assert!(reqs[3].manual);
         assert!(!reqs[0].manual);
         assert_eq!(reqs[1].text, "- R2: two again");
+    }
+
+    #[test]
+    fn cited_keeps_the_cited_requirements_prose_and_their_headings() {
+        let spec = "# Spec\n\nOne line per requirement.\n\n## World\n\n- R1: a town\n  that wraps\n- R2: a desert\n\n## Duel\n\nDuels are one on one.\n\n- R3: a duel\n\n### Draw\n\n- R4: a draw\n\n## Audio\n\n- R5: music\n";
+        let ids = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let shown = cited(spec, &ids(&["R2", "R4", "R9"])).unwrap();
+        assert_eq!(
+            shown,
+            "# Spec\n\nOne line per requirement.\n\n## World\n\n- R2: a desert\n\n## Duel\n\nDuels are one on one.\n\n### Draw\n\n- R4: a draw\n\nOnly the requirements this task's card requires are shown (R2, R4). The whole spec is `.tenaz/spec.md`."
+        );
+        let wrapped = cited(spec, &ids(&["R1"])).unwrap();
+        assert!(
+            wrapped.contains("- R1: a town\n  that wraps\n"),
+            "{wrapped}"
+        );
+        assert!(!wrapped.contains("## Audio"), "{wrapped}");
+        assert_eq!(cited(spec, &ids(&["R9"])), None);
+        assert_eq!(cited(spec, &[]), None);
     }
 
     fn card(id: &str, requires: &[&str], status: TaskStatus) -> TaskCard {

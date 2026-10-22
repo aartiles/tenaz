@@ -46,6 +46,25 @@ pub struct Briefing<'a> {
     pub extra: Vec<(String, String)>,
 }
 
+/// The title of the briefing's repository map section.
+const MAP_TITLE: &str = "Repository map (.tenaz/map.md)";
+
+/// A briefing without its repository map section. A session that continues
+/// stopped work starts from `git status` and the notes, and needs the room.
+pub fn without_map(prompt: &str) -> String {
+    let start_marker = format!("\n\n## {MAP_TITLE}\n\n");
+    let Some(start) = prompt.find(&start_marker) else {
+        return prompt.to_owned();
+    };
+    let Some(end) = prompt[start + start_marker.len()..]
+        .find("\n\n## Session\n\n")
+        .map(|at| start + start_marker.len() + at)
+    else {
+        return prompt.to_owned();
+    };
+    format!("{}{}", &prompt[..start], &prompt[end..])
+}
+
 /// Composes the prompt as the task loop did.
 pub fn build(role: Role, b: &Briefing<'_>) -> String {
     let mut text = String::new();
@@ -55,10 +74,7 @@ pub fn build(role: Role, b: &Briefing<'_>) -> String {
     text += b.role_prompt;
     if role != Role::Bootstrap && b.packed {
         text += &section("Spec (.tenaz/spec.md)", b.spec.unwrap_or(""));
-        text += &section(
-            "Repository map (.tenaz/map.md)",
-            &clip(b.map.unwrap_or(""), b.map_clip_bytes),
-        );
+        text += &section(MAP_TITLE, &clip(b.map.unwrap_or(""), b.map_clip_bytes));
     }
     let _ = write!(text, "\n\n## Session\n\n{}", header(role, &b.fields));
     if let Some((path, card)) = b.card {
@@ -89,7 +105,7 @@ pub const EXISTING_PROJECT: &str = "This project already has code, conventions a
 - Plan as many tasks as the change needs, even one; the 6 to 40 range does not apply.";
 
 /// The note a fresh session gets when it continues work stopped at the context budget.
-pub const CONTINUATION: &str = "## Continuation\n\nAn earlier session on this same work was stopped because its context grew past the budget. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Do not reread large files whole.";
+pub const CONTINUATION: &str = "## Continuation\n\nAn earlier session on this same work was stopped because its context grew past the budget. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Do not reread large files whole. The repository map is `.tenaz/map.md`, if you need it.";
 
 /// The note after the engine refused an image the earlier session read.
 pub fn image_continuation(refusal: &str) -> String {
@@ -210,6 +226,25 @@ mod tests {
             notes,
             "### BOOTSTRAP\nstack: shell\n\n### T002\nxxxxxxxxxxxx\n[... clipped 8 bytes]"
         );
+    }
+
+    #[test]
+    fn without_map_drops_only_the_map_section() {
+        let b = Briefing {
+            role_prompt: "P",
+            spec: Some("- R1: x"),
+            map: Some("## Root\n\nfiles"),
+            map_clip_bytes: 100,
+            packed: true,
+            card: Some((".tenaz/tasks/T001.md", "card")),
+            ..Default::default()
+        };
+        let prompt = build(Role::Builder, &b);
+        let trimmed = without_map(&prompt);
+        assert!(!trimmed.contains("Repository map") && !trimmed.contains("## Root"));
+        assert!(trimmed.contains("- R1: x") && trimmed.contains("## Session"));
+        assert!(trimmed.contains("## Task card"));
+        assert_eq!(without_map("no map here"), "no map here");
     }
 
     #[test]

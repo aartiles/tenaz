@@ -66,6 +66,9 @@ pub struct ScriptedHarness {
     pub crash_task: Option<String>,
     /// Where bootstrap writes `verify`; `None` is `verify` at the root.
     pub verify_path: Option<String>,
+    /// Every builder session for this task grows its context past the stop
+    /// without writing anything, so its attempt outgrows the budget.
+    pub outgrow_task: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -518,6 +521,23 @@ impl Player {
         self.finish("Done.");
     }
 
+    /// Reads until the context passes the stop and the session is aborted.
+    async fn outgrow(&mut self) {
+        let mut n = 1;
+        while !self.aborted() && n < 20 {
+            self.turn(
+                "read",
+                serde_json::json!({ "path": format!("src/part{n}.md") }),
+                |_| {},
+                "ok",
+                Some(30_000 * n),
+            )
+            .await;
+            n += 1;
+        }
+        self.finish("Done.");
+    }
+
     async fn builder(&mut self, task: &str, attempt: u32) {
         if self.script.slow_task.as_deref() == Some(task) {
             tokio::time::sleep(self.script.slow_for).await; // gives the test time to pause the run
@@ -539,6 +559,9 @@ impl Player {
                 .await;
             }
             return self.finish("Done.");
+        }
+        if self.script.outgrow_task.as_deref() == Some(task) {
+            return self.outgrow().await;
         }
         if task == "T003" {
             self.write_tool("checks/T003.exists.sh", "exit 1\n", false)
@@ -581,19 +604,7 @@ impl Player {
         }
         if task == "T001" && self.bump("context-T001") == 1 {
             // Context grows past 1.3x the budget: stopped and continued.
-            let mut n = 1;
-            while !self.aborted() && n < 20 {
-                self.turn(
-                    "read",
-                    serde_json::json!({ "path": format!("src/part{n}.md") }),
-                    |_| {},
-                    "ok",
-                    Some(30_000 * n),
-                )
-                .await;
-                n += 1;
-            }
-            return self.finish("Done.");
+            return self.outgrow().await;
         }
         if task == "T001" {
             self.write_tool(".tenaz/tasks/T001.md", "tampered\n", false)

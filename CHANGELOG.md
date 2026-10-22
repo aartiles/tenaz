@@ -87,6 +87,17 @@ uses [Semantic Versioning](https://semver.org/).
   default; 0 keeps it lowered) that the engine held without critical memory
   pressure. A raise the engine overflows again lowers it as before and
   doubles the sessions the next raise waits for.
+- A session is steered to wrap up when, at the pace its context grew over
+  the last requests, it would reach the context stop within
+  `contextSteerTurns` turns (10 by default; 0 steers only at the budget), so
+  a slow-to-react model can still write its handoff before it is stopped.
+- An attempt that uses up its context continuations and still fails
+  `verify` is split at once instead of retried against the same budget
+  (`contextSplit`, on by default), when the split depth allows.
+- A builder's briefing shows only the spec requirements its card requires,
+  with a pointer to the whole spec (`citedSpec`, on by default; a card that
+  names none the spec has gets the whole spec). A session that continues
+  stopped work no longer gets the repository map in its prompt.
 
 ### Fixed
 

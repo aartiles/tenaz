@@ -1,7 +1,9 @@
 ROLE: PLANNER (split)
 
-The task in this briefing failed every allowed attempt. The briefing shows
-the failure history. Its partial work has been reverted.
+The task in this briefing failed every allowed attempt, or one attempt used
+up every fresh session it was allowed and still did not pass: the work is too
+big for one session's context. "Why this session" says which. The briefing
+shows the failure history. Its partial work has been reverted.
 
 Replace it with 2–4 smaller cards that together reach the same acceptance.
 Name them `<TASK>a`, `<TASK>b`, and so on, with `parent: <TASK>` and

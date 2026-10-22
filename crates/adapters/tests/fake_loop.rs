@@ -223,15 +223,34 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
         )),
         "context-stopped session was not continued"
     );
-    let continued = std::fs::read_dir(project.private_dir())
+    let t001_prompts: Vec<String> = std::fs::read_dir(project.private_dir())
         .unwrap()
         .filter_map(Result::ok)
-        .any(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            name.ends_with("-builder-T001.prompt.md")
-                && std::fs::read_to_string(e.path()).is_ok_and(|t| t.contains("## Continuation"))
-        });
-    assert!(continued, "continuation note missing from the next prompt");
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .ends_with("-builder-T001.prompt.md")
+        })
+        .map(|e| std::fs::read_to_string(e.path()).unwrap())
+        .collect();
+    let continued = t001_prompts
+        .iter()
+        .find(|t| t.contains("## Continuation"))
+        .expect("continuation note missing from the next prompt");
+    assert!(
+        !continued.contains("## Repository map"),
+        "continuation kept the map"
+    );
+    for prompt in &t001_prompts {
+        assert!(
+            prompt.contains("- R1: one") && !prompt.contains("- R2: two"),
+            "builder spec not cut to the card's requirements:\n{prompt}"
+        );
+    }
+    assert!(
+        t001_prompts.iter().any(|t| t.contains("## Repository map")),
+        "first builder prompt lost the map"
+    );
     let t001_first_verifies = records.iter().filter(|r| matches!(r, JournalRecord::Verify { task, attempt: 1, .. } if task.as_str() == "T001")).count();
     assert_eq!(t001_first_verifies, 1, "context stop counted as an attempt");
     assert!(
@@ -393,4 +412,115 @@ async fn a_stop_during_the_preflight_pauses_the_run() {
     let ledger = project.load_ledger().unwrap();
     assert!(ledger.preflight.is_some_and(|p| p.ok));
     assert_eq!(ledger.phase, Phase::Complete);
+}
+
+/// Runs a fake project whose T003 always grows past its context stop.
+async fn run_outgrowing(context_split: bool) -> (tempfile::TempDir, Project) {
+    let work = tempfile::tempdir().unwrap();
+    let brief = work.path().join("brief.md");
+    std::fs::write(&brief, "# Fake brief\n\nBuild four trivial files.\n").unwrap();
+    let project = Project::new(work.path().join("project"));
+    let mut params = RunParams::default();
+    for pair in [
+        "notify=false",
+        "engineRetryBaseSec=0",
+        "contextContinuations=1",
+        &format!("contextSplit={context_split}"),
+    ] {
+        params.apply_override(pair).unwrap();
+    }
+    let config = ModelConfig {
+        harness: "fake".into(),
+        harness_version: "fake-pi 0.0.1".into(),
+        model: "fake/fake".into(),
+        provider: Some("fake".into()),
+        id: "fake".into(),
+        base_url: None,
+        context_window: 131072,
+        input: vec!["text".into()],
+        thinking: Some("medium".into()),
+    };
+    let options = InitOptions {
+        launch: tenaz_core::ledger::Launch::default(),
+        brief: Some(brief),
+        config,
+        params,
+        skills: vec![],
+        runner_version: "test".into(),
+    };
+    init(
+        &project,
+        &GitRepo::new(project.root()),
+        &FastClock::new(100),
+        &templates(),
+        options,
+    )
+    .unwrap();
+    let harness = ScriptedHarness {
+        outgrow_task: Some("T003".into()),
+        ..Default::default()
+    };
+    let mut runner = Runner::open(
+        project.clone(),
+        deps(&project, harness),
+        CancellationToken::new(),
+    )
+    .unwrap();
+    runner
+        .run(RunOptions {
+            runner_version: "test".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    (work, project)
+}
+
+fn t003_verifies(project: &Project) -> Vec<u32> {
+    project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Verify { task, attempt, .. } if task.as_str() == "T003" => {
+                Some(*attempt)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// An attempt that uses up its context continuations and still fails is
+/// split at once; with `contextSplit=false` it is retried as before.
+#[tokio::test]
+async fn an_attempt_that_outgrows_its_context_is_split_at_once() {
+    let (_work, project) = run_outgrowing(true).await;
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    assert_eq!(t003_verifies(&project), vec![1], "T003 was retried:\n{log}");
+    assert!(log.contains("T003 outgrew its context budget"), "{log}");
+    assert!(project.journal().iter().any(|e| matches!(
+        &e.record,
+        JournalRecord::Task { task, outcome: TaskOutcome::Split, .. } if task.as_str() == "T003"
+    )));
+    let split_prompt = std::fs::read_dir(project.private_dir())
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .ends_with("-split-T003.prompt.md")
+        })
+        .map(|e| std::fs::read_to_string(e.path()).unwrap())
+        .unwrap();
+    assert!(
+        split_prompt.contains("outgrew its context budget"),
+        "{split_prompt}"
+    );
+
+    let (_work, project) = run_outgrowing(false).await;
+    assert_eq!(t003_verifies(&project), vec![1, 2, 3]);
 }

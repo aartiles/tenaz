@@ -60,6 +60,17 @@ pub struct RunParams {
     pub context_abort: f64,
     /// Stopped sessions are continued by a fresh session, uncounted, this many times.
     pub context_continuations: u32,
+    /// A session is steered to wrap up once, at the pace its context has
+    /// grown so far, it would reach the stop within this many turns
+    /// (0: steer only at the budget).
+    pub context_steer_turns: u32,
+    /// An attempt that used up its context continuations and still fails
+    /// `verify` is split at once, when the split depth allows, instead of
+    /// being retried against the same budget.
+    pub context_split: bool,
+    /// A builder's briefing shows only the spec requirements its card
+    /// requires (the whole spec when the card names none the spec has).
+    pub cited_spec: bool,
     /// Wall-clock limit of one session.
     pub session_minutes: u64,
     /// Time limit of one `verify` run.
@@ -131,6 +142,9 @@ impl Default for RunParams {
             big_output_tokens: 8000,
             context_abort: 1.3,
             context_continuations: 3,
+            context_steer_turns: 10,
+            context_split: true,
+            cited_spec: true,
             session_minutes: 90,
             verify_timeout_sec: 120,
             max_bootstrap_attempts: 3,

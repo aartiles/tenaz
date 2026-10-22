@@ -8,7 +8,7 @@ use crate::briefing::{self, Briefing};
 use crate::ledger::{CurrentTask, JournalRecord, Phase, StoppedAttempt, TaskOutcome};
 use crate::project::BRIEF;
 use crate::role::Role;
-use crate::spec::coverage;
+use crate::spec::{self, coverage};
 use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
 use crate::verify::{VerifyOutcome, interpret, retarget};
@@ -41,7 +41,11 @@ struct Built {
 /// How a builder attempt ended.
 enum Attempt {
     Passed(Box<Built>),
-    Failed(String),
+    /// `outgrown`: its session used up the context continuations.
+    Failed {
+        failure: String,
+        outgrown: bool,
+    },
 }
 
 /// The reviewer's verdict.
@@ -80,6 +84,7 @@ impl Runner {
         fields: Vec<(String, String)>,
         card: Option<(&str, &str)>,
         extra: Vec<(String, String)>,
+        cites: &[String],
     ) -> Result<String, RunError> {
         let mut fields = fields;
         let root = self.project.root().display().to_string();
@@ -94,7 +99,10 @@ impl Runner {
         }
         let protocol = self.project.protocol()?;
         let role_prompt = self.project.role_prompt(role)?;
-        let spec = self.project.read_if(".tenaz/spec.md");
+        let spec = self
+            .project
+            .read_if(".tenaz/spec.md")
+            .map(|spec| spec::cited(&spec, cites).unwrap_or(spec));
         let map = self.project.read_if(".tenaz/map.md");
         let b = Briefing {
             protocol: &protocol,
@@ -211,7 +219,7 @@ impl Runner {
                 self.ledger.bootstrap_attempts, self.params.max_bootstrap_attempts
             ),
         )];
-        let prompt = self.briefing(Role::Bootstrap, fields, None, extra)?;
+        let prompt = self.briefing(Role::Bootstrap, fields, None, extra, &[])?;
         let s = self
             .session(Role::Bootstrap, &prompt, &SessionCtx::default())
             .await?;
@@ -340,6 +348,7 @@ impl Runner {
             fields,
             card.as_ref().map(|(p, t)| (p.as_str(), t.as_str())),
             extra,
+            &[],
         )?;
         self.session(
             role,
@@ -420,8 +429,13 @@ impl Runner {
         Ok(true)
     }
 
-    /// A task out of attempts: split it, or block it.
-    async fn escalate(&mut self, task: &TaskCard, history: Vec<String>) -> Result<(), RunError> {
+    /// A task out of attempts, or too big for its context budget: split it, or block it.
+    async fn escalate(
+        &mut self,
+        task: &TaskCard,
+        history: Vec<String>,
+        why: &str,
+    ) -> Result<(), RunError> {
         let base = self
             .ledger
             .current
@@ -436,11 +450,7 @@ impl Runner {
                 history: history.clone(),
             };
             let ok = self
-                .planner_session(
-                    Role::Split,
-                    Some(&planner),
-                    &format!("{} failed {} attempts.", task.id, self.params.max_attempts),
-                )
+                .planner_session(Role::Split, Some(&planner), why)
                 .await?;
             let children: Vec<TaskId> = self
                 .project
@@ -535,13 +545,14 @@ impl Runner {
                     .as_ref()
                     .map(|c| c.history.clone())
                     .unwrap_or_default();
-                self.escalate(task, history).await?;
+                let why = format!("{} failed {} attempts.", task.id, self.params.max_attempts);
+                self.escalate(task, history, &why).await?;
                 self.ledger.current = None;
                 return self.save();
             }
             let attempt = attempts + 1;
             match self.build_attempt(backlog, task, attempt).await? {
-                Attempt::Failed(failure) => {
+                Attempt::Failed { failure, outgrown } => {
                     if let Some(current) = &mut self.ledger.current {
                         current
                             .history
@@ -549,6 +560,26 @@ impl Runner {
                         current.failure = Some(failure);
                     }
                     self.save()?;
+                    // Another attempt would meet the same budget: the task is too big for it.
+                    if outgrown
+                        && self.params.context_split
+                        && task.id.split_depth() < self.params.max_split_depth
+                    {
+                        let why = format!(
+                            "{} outgrew its context budget: attempt {attempt} used all {} context continuations and still fails verify.",
+                            task.id, self.params.context_continuations
+                        );
+                        self.log(&format!("  {why} Splitting it instead of retrying."));
+                        let history = self
+                            .ledger
+                            .current
+                            .as_ref()
+                            .map(|c| c.history.clone())
+                            .unwrap_or_default();
+                        self.escalate(task, history, &why).await?;
+                        self.ledger.current = None;
+                        return self.save();
+                    }
                 }
                 Attempt::Passed(built) => {
                     self.deps.vcs.commit_all(&format!(
@@ -691,7 +722,10 @@ impl Runner {
             task_json: own.json.clone(),
         });
         Ok(match failure {
-            Some(failure) => Attempt::Failed(failure),
+            Some(failure) => Attempt::Failed {
+                failure,
+                outgrown: s.metrics.context_stopped(),
+            },
             None => Attempt::Passed(Box::new(Built {
                 card,
                 card_text,
@@ -814,7 +848,18 @@ impl Runner {
                 format!("{attempt} of {}", self.params.max_attempts),
             ),
         ];
-        self.briefing(Role::Builder, fields, Some((&card.file, card_text)), extra)
+        let cites: &[String] = if self.params.cited_spec {
+            &card.requires
+        } else {
+            &[]
+        };
+        self.briefing(
+            Role::Builder,
+            fields,
+            Some((&card.file, card_text)),
+            extra,
+            cites,
+        )
     }
 
     /// Fresh-context review of a task's diff. A reviewer that ends without
@@ -871,6 +916,7 @@ impl Runner {
                 fields,
                 Some((&input.card.file, input.card_text)),
                 extra,
+                &[],
             )?;
             let s = self
                 .session(
@@ -1027,7 +1073,7 @@ impl Runner {
             ("Coverage".to_owned(), report),
             ("./verify --all".to_owned(), all.summary.clone()),
         ];
-        let prompt = self.briefing(Role::FinalReviewer, fields, None, extra)?;
+        let prompt = self.briefing(Role::FinalReviewer, fields, None, extra, &[])?;
         self.session(
             Role::FinalReviewer,
             &prompt,

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::briefing::{CONTINUATION, image_continuation};
+use crate::briefing::{CONTINUATION, image_continuation, without_map};
 use crate::ledger::{Inflight, JournalRecord, SessionRecord};
 use crate::memory::MemoryWindow;
 use crate::metrics::{EngineCounters, RequestRecord, delta, engine_summary};
@@ -392,7 +392,7 @@ impl Runner {
                 .as_deref()
                 .map_or_else(|| CONTINUATION.to_owned(), image_continuation);
             let text = if continued > 0 || resumed {
-                format!("{prompt}\n\n{note}")
+                format!("{}\n\n{note}", without_map(prompt))
             } else {
                 prompt.to_owned()
             };

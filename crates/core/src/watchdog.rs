@@ -10,6 +10,9 @@ use crate::session::{
 };
 use crate::util::{approx_tokens, sha256_hex};
 
+/// Requests the context pace is measured over.
+const PACE_WINDOW: usize = 6;
+
 /// What a watched session is held to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WatchConfig {
@@ -371,8 +374,38 @@ impl Watchdog {
                     self.metrics.context_peak, watch.context_tokens
                 );
                 self.steer("context", &message, elapsed_ms, actions);
+            } else if let Some(turns) = self.turns_to_stop(hard)
+                && turns <= u64::from(self.params.context_steer_turns)
+            {
+                let message = format!(
+                    "This session has used {} tokens of context. At its pace so far it reaches the stop at {hard} tokens in about {turns} turns, and a stopped session leaves no handoff. Finish the smallest coherent step, run ./verify, write your handoff notes, and stop. The next session continues from the repository.",
+                    self.metrics.context_peak
+                );
+                self.steer("context-pace", &message, elapsed_ms, actions);
             }
         }
+    }
+
+    /// Turns until the context reaches `stop` at the pace of the last few
+    /// requests; `None` until three requests have reported their context.
+    fn turns_to_stop(&self, stop: u64) -> Option<u64> {
+        let contexts: Vec<u64> = self
+            .metrics
+            .assistant
+            .iter()
+            .map(|turn| turn.usage.context())
+            .filter(|&context| context > 0)
+            .collect();
+        let window = &contexts[contexts.len().saturating_sub(PACE_WINDOW)..];
+        let (&first, &last) = (window.first()?, window.last()?);
+        if window.len() < 3 || last <= first {
+            return None;
+        }
+        let pace = (last - first) / (window.len() as u64 - 1);
+        (pace > 0).then(|| {
+            stop.saturating_sub(self.metrics.context_peak)
+                .div_ceil(pace)
+        })
     }
 
     fn turn_end(
@@ -608,6 +641,38 @@ mod tests {
         assert!(w.metrics().context_stopped());
         assert_eq!(w.metrics().reasoning_chars, 28);
         assert_eq!(w.metrics().texts.len(), 4);
+    }
+
+    #[test]
+    fn a_fast_growing_context_is_steered_before_the_budget() {
+        let mut w = watched();
+        assert!(message(&mut w, 40_000, StopReason::ToolUse, None).is_empty());
+        assert!(message(&mut w, 44_000, StopReason::ToolUse, None).is_empty());
+        let pace = message(&mut w, 48_000, StopReason::ToolUse, None);
+        assert!(is_steer(&pace, "context-pace"), "{pace:?}");
+        let Action::Steer { message: text, .. } = &pace[0] else {
+            unreachable!()
+        };
+        assert!(text.contains("about 8 turns"), "{text}");
+        assert!(message(&mut w, 52_000, StopReason::ToolUse, None).is_empty());
+        assert!(is_steer(
+            &message(&mut w, 61_000, StopReason::ToolUse, None),
+            "context"
+        ));
+    }
+
+    #[test]
+    fn a_slow_context_is_steered_only_at_the_budget() {
+        let mut w = watched();
+        for input in [40_000, 41_000, 42_000, 43_000] {
+            assert!(message(&mut w, input, StopReason::ToolUse, None).is_empty());
+        }
+        let mut params = RunParams::default();
+        params.context_steer_turns = 0;
+        let mut off = Watchdog::new(params, w.watch);
+        for input in [40_000, 44_000, 48_000, 52_000] {
+            assert!(message(&mut off, input, StopReason::ToolUse, None).is_empty());
+        }
     }
 
     #[test]
