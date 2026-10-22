@@ -8,15 +8,16 @@
 //!
 //! The other repair is a `command` sent without the `action` that selects
 //! the variant: models drop it from fx's `shell` call. It is added only when
-//! exactly one variant of the object argument takes a `command` and fixes its
-//! `action` to one value.
+//! every variant of the object argument that takes a `command` fixes its
+//! `action` to the same value (fx has two `run` variants, one with a custom
+//! shell).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
 /// Per tool name, the top-level arguments whose schema accepts only objects,
-/// and the `action` of the one variant that takes a `command`, if any.
+/// and the `action` that every variant taking a `command` fixes, if any.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ObjectArgs {
     fields: BTreeMap<String, BTreeSet<String>>,
@@ -48,11 +49,11 @@ impl ObjectArgs {
                 .flatten()
                 .filter(|(_, schema)| only_objects(schema))
                 .collect();
-            let actions: Vec<String> = objects
+            let actions: BTreeSet<String> = objects
                 .iter()
                 .flat_map(|(_, schema)| command_actions_of(schema))
                 .collect();
-            if let [action] = actions.as_slice() {
+            if let Some(action) = actions.first().filter(|_| actions.len() == 1) {
                 command_actions.insert(name.to_owned(), action.clone());
             }
             let fields: BTreeSet<String> = objects
@@ -466,12 +467,30 @@ mod tests {
         assert!(fixed(r#"{"action":"run","command":"ls"}"#).is_none());
         assert!(fixed(r#"{"action":"poll"}"#).is_none());
         assert!(fixed(r#"{"command":["ls"]}"#).is_none());
-        // Two variants that take a command: no way to tell which was meant.
+        // Two actions that take a command: no way to tell which was meant.
         let two = serde_json::json!({"tools": [{"type": "function", "function": {"name": "shell", "parameters": {"type": "object", "properties": {"request": {"oneOf": [
             {"type": "object", "properties": {"action": {"const": "run"}, "command": {"type": "string"}}},
             {"type": "object", "properties": {"action": {"const": "spawn"}, "command": {"type": "string"}}}
         ]}}}}}]});
         assert_eq!(ObjectArgs::from_request(&two).command_action("shell"), None);
+    }
+
+    #[test]
+    fn fx_0_0_14_shell_calls_without_an_action_are_repaired() {
+        let tools: Value =
+            serde_json::from_str(include_str!("../testdata/fx-0.0.14-shell.json")).unwrap();
+        let watched = ObjectArgs::from_request(&tools);
+        assert_eq!(
+            watched.fields("shell"),
+            Some(&BTreeSet::from(["request".to_owned()]))
+        );
+        assert_eq!(watched.command_action("shell"), Some("run"));
+        let (fixed, fields) = watched.repair("shell", r#"{"command":"ls"}"#).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&fixed).unwrap(),
+            serde_json::json!({"action": "run", "command": "ls"})
+        );
+        assert_eq!(fields, ["action"]);
     }
 
     #[test]

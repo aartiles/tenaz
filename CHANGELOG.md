@@ -117,8 +117,9 @@ uses [Semantic Versioning](https://semver.org/).
   per-request usage is no longer occasionally lost or attributed to the
   wrong turn.
 - The engine proxy adds the missing `action` to a tool call that sends a
-  `command` without it, when exactly one variant of the argument takes a
-  `command` (models drop it from fx's `shell` call, which fx then rejects).
+  `command` without it, when every variant of the argument that takes a
+  `command` fixes the same `action` (models drop it from fx's `shell` call,
+  which fx then rejects).
 
 ### Security
 
