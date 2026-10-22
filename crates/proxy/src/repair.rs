@@ -16,6 +16,10 @@
 //! (`{"request": {...}, "timeout_ms": 5000}`): they are moved in only when
 //! the variant its `action` selects takes every one of them and the argument
 //! does not already hold them.
+//!
+//! Finally, an integer outside the range that variant declares for it is
+//! clamped to the range: models ask fx's `shell` for a `yield_time_ms` above
+//! its 30000 and, once rejected, retry with 30000.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,8 +38,16 @@ struct ToolArgs {
     command_action: Option<String>,
 }
 
-/// Per fixed `action`, the properties of the variants that select it.
-type Actions = BTreeMap<String, BTreeSet<String>>;
+/// Per fixed `action`, the properties of the variants that select it, with
+/// the integer range each declares.
+type Actions = BTreeMap<String, BTreeMap<String, Bounds>>;
+
+/// A property's `minimum` and `maximum`, when they are integers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Bounds {
+    minimum: Option<i64>,
+    maximum: Option<i64>,
+}
 
 impl ObjectArgs {
     /// Reads the `tools` of a chat completion request.
@@ -68,7 +80,7 @@ impl ObjectArgs {
             let commands: BTreeSet<&String> = fields
                 .values()
                 .flatten()
-                .filter(|(_, properties)| properties.contains("command"))
+                .filter(|(_, properties)| properties.contains_key("command"))
                 .map(|(action, _)| action)
                 .collect();
             let command_action = commands
@@ -109,7 +121,8 @@ impl ObjectArgs {
 }
 
 /// The variants of `schema` that fix `action` to a single value (`const`,
-/// or an `enum` of one), with the properties each value's variants take.
+/// or an `enum` of one), with the properties each value's variants take and
+/// their integer ranges (the first variant's, if two disagree).
 fn actions_of(schema: &Value) -> Actions {
     let mut actions = Actions::new();
     for variant in ["oneOf", "anyOf"]
@@ -131,10 +144,13 @@ fn actions_of(schema: &Value) -> Actions {
             },
             _ => continue,
         };
-        actions
-            .entry(value.clone())
-            .or_default()
-            .extend(properties.keys().cloned());
+        let taken = actions.entry(value.clone()).or_default();
+        for (name, property) in properties {
+            taken.entry(name.clone()).or_insert(Bounds {
+                minimum: property.get("minimum").and_then(Value::as_i64),
+                maximum: property.get("maximum").and_then(Value::as_i64),
+            });
+        }
     }
     actions
 }
@@ -158,9 +174,10 @@ fn only_objects(schema: &Value) -> bool {
 /// The arguments with each watched field that holds a JSON object as text
 /// parsed back into that object, the tool's `command_action` added to a
 /// `command` sent without an `action` (at the top level or in a watched
-/// field), and properties sent beside a watched field moved into it when
-/// its variant takes them all; the repaired fields, `None` when nothing
-/// needed repair (or the arguments are not a JSON object).
+/// field), properties sent beside a watched field moved into it when its
+/// variant takes them all, and integers outside their variant's range
+/// clamped to it; the repaired fields, `None` when nothing needed repair (or
+/// the arguments are not a JSON object).
 fn repair_arguments(arguments: &str, tool: &ToolArgs) -> Option<(String, Vec<String>)> {
     let mut object: Map<String, Value> = serde_json::from_str(arguments).ok()?;
     let mut repaired = Vec::new();
@@ -209,7 +226,7 @@ fn repair_arguments(arguments: &str, tool: &ToolArgs) -> Option<(String, Vec<Str
         if stray.is_empty()
             || !stray
                 .iter()
-                .all(|key| properties.contains(key) && !inner.contains_key(key))
+                .all(|key| properties.contains_key(key) && !inner.contains_key(key))
         {
             continue;
         }
@@ -224,10 +241,49 @@ fn repair_arguments(arguments: &str, tool: &ToolArgs) -> Option<(String, Vec<Str
             }
         }
     }
+    if tool.fields.keys().any(|f| object.contains_key(f)) {
+        for (field, actions) in &tool.fields {
+            if let Some(Value::Object(inner)) = object.get_mut(field) {
+                clamp(inner, actions, &format!("{field}."), &mut repaired);
+            }
+        }
+    } else {
+        for actions in tool.fields.values() {
+            clamp(&mut object, actions, "", &mut repaired);
+        }
+    }
     if repaired.is_empty() {
         return None;
     }
     Some((serde_json::to_string(&object).ok()?, repaired))
+}
+
+/// Clamps each integer in `object` to the range that the variant its
+/// `action` selects declares for it, recording `<prefix><property>`.
+fn clamp(
+    object: &mut Map<String, Value>,
+    actions: &Actions,
+    prefix: &str,
+    repaired: &mut Vec<String>,
+) {
+    let Some(properties) = object
+        .get("action")
+        .and_then(Value::as_str)
+        .and_then(|action| actions.get(action))
+    else {
+        return;
+    };
+    for (key, value) in object.iter_mut() {
+        let (Some(number), Some(bounds)) = (value.as_i64(), properties.get(key)) else {
+            continue;
+        };
+        let minimum = bounds.minimum.unwrap_or(i64::MIN);
+        let maximum = bounds.maximum.unwrap_or(i64::MAX);
+        if minimum <= maximum && !(minimum..=maximum).contains(&number) {
+            *value = Value::from(number.clamp(minimum, maximum));
+            repaired.push(format!("{prefix}{key}"));
+        }
+    }
 }
 
 /// One repaired tool call.
@@ -575,6 +631,45 @@ mod tests {
         );
         // `chars` belongs to `interact`, not `run`.
         assert!(fixed(r#"{"request":{"action":"run","command":"ls"},"chars":"y"}"#).is_none());
+    }
+
+    #[test]
+    fn integers_outside_their_variants_range_are_clamped_to_it() {
+        let tools: Value =
+            serde_json::from_str(include_str!("../testdata/fx-0.0.14-shell.json")).unwrap();
+        let watched = ObjectArgs::from_request(&tools);
+        let fixed = |args: &str| {
+            watched
+                .repair("shell", args)
+                .map(|(fixed, fields)| (serde_json::from_str::<Value>(&fixed).unwrap(), fields))
+        };
+        let (nested, fields) = fixed(
+            r#"{"request":{"action":"run","command":"./verify --all","yield_time_ms":120000}}"#,
+        )
+        .unwrap();
+        assert_eq!(nested["request"]["yield_time_ms"], 30000);
+        assert_eq!(fields, ["request.yield_time_ms"]);
+        let (flat, fields) =
+            fixed(r#"{"action":"run","command":"ls","yield_time_ms":-5,"timeout_ms":0}"#).unwrap();
+        assert_eq!(flat["yield_time_ms"], 0);
+        assert_eq!(flat["timeout_ms"], 1);
+        assert_eq!(fields, ["yield_time_ms", "timeout_ms"]);
+        // Moved beside the request first, then clamped.
+        let (moved, fields) =
+            fixed(r#"{"request":{"action":"run","command":"ls"},"yield_time_ms":90000}"#).unwrap();
+        assert_eq!(moved["request"]["yield_time_ms"], 30000);
+        assert_eq!(fields, ["request.yield_time_ms", "request.yield_time_ms"]);
+        // In range, not an integer, or no range declared: untouched.
+        assert!(
+            fixed(r#"{"request":{"action":"run","command":"ls","yield_time_ms":30000}}"#).is_none()
+        );
+        assert!(
+            fixed(r#"{"request":{"action":"run","command":"ls","yield_time_ms":"90000"}}"#)
+                .is_none()
+        );
+        assert!(
+            fixed(r#"{"request":{"action":"run","command":"ls","timeout_ms":999999}}"#).is_none()
+        );
     }
 
     #[test]

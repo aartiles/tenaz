@@ -124,6 +124,9 @@ uses [Semantic Versioning](https://semver.org/).
   `shell.request` (such as `timeout_ms` or `cwd`) into it, when the variant
   its `action` selects takes them all and the request does not already hold
   them; fx rejected those calls.
+- The engine proxy clamps an integer argument outside the range its schema
+  declares (such as fx's `yield_time_ms` above 30000) to that range; after
+  fx's rejection models retried with the limit anyway.
 - The protocol tells every session that commands run at the project root
   and to use relative paths: models guessed the project's absolute path for
   `cwd` or `cd`, and the guess was often wrong.
