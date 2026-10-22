@@ -1,3 +1,5 @@
 .DS_Store
 /target/
 /local-runs/
+/.claude/worktrees/
+/.claude/settings.local.json
