@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::params::RunParams;
 use crate::session::{
     SessionEvent, SessionMetrics, StopReason, WatchdogEvent, capacity_limit, is_image_refusal,
-    is_write_tool,
+    is_read_tool, is_write_tool,
 };
 use crate::util::{approx_tokens, sha256_hex};
 
@@ -41,6 +41,8 @@ pub struct Watchdog {
     idle_turns: i64,
     recent: VecDeque<String>,
     call_args: HashMap<String, (String, serde_json::Value)>,
+    /// Arguments of every read so far: a read of something new is progress.
+    reads: HashSet<String>,
     fingerprint: Option<String>,
 }
 
@@ -57,6 +59,7 @@ impl Watchdog {
             idle_turns: 0,
             recent: VecDeque::new(),
             call_args: HashMap::new(),
+            reads: HashSet::new(),
             fingerprint: None,
         }
     }
@@ -244,6 +247,8 @@ impl Watchdog {
         if is_write_tool(name) {
             self.metrics.writes += 1;
             self.idle_turns = -1;
+        } else if is_read_tool(name) && self.reads.insert(args.to_string()) {
+            self.idle_turns = -1;
         }
     }
 
@@ -427,13 +432,13 @@ impl Watchdog {
             let idle = u32::try_from(self.idle_turns).unwrap_or(0);
             if idle >= self.params.idle_abort {
                 self.abort(
-                    &format!("{idle} turns without changing any file"),
+                    &format!("{idle} turns without changing or reading anything new"),
                     elapsed_ms,
                     actions,
                 );
             } else if idle >= self.params.idle_steer {
                 let message = format!(
-                    "You have gone {idle} turns without changing any file. Stop investigating and make the change the task needs, or write your notes explaining what blocks you and stop."
+                    "You have gone {idle} turns without changing any file or reading anything new. Write down what you already know in your task's notes file, `.tenaz/notes/<task id>.md`: the files and facts the change depends on, and your plan. Then make the change, or explain in the notes what blocks you and stop."
                 );
                 self.steer("idle", &message, elapsed_ms, actions);
             }
@@ -755,19 +760,32 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(w.metrics().writes, 1);
+        // So does a read of something not read before, but not a repeat.
+        let read = |path: &str| SessionEvent::ToolCallStart {
+            id: "r".into(),
+            name: "read".into(),
+            args: serde_json::json!({ "path": path }),
+        };
+        w.handle(&read("src/lib.rs"), 0, String::new);
+        assert!(
+            w.handle(&SessionEvent::TurnEnd, 0, || "b".into())
+                .is_empty()
+        );
+        w.handle(&read("src/lib.rs"), 0, String::new);
         assert!(
             w.handle(&SessionEvent::TurnEnd, 0, || "b".into())
                 .is_empty()
         );
         assert!(
             w.handle(&SessionEvent::TurnEnd, 0, || "b".into())
-                .is_empty()
+                .is_empty(),
+            "the idle steer is sent once"
         );
         let abort = w.handle(&SessionEvent::TurnEnd, 0, || "b".into());
         assert_eq!(
             abort,
             vec![Action::Abort {
-                reason: "3 turns without changing any file".into()
+                reason: "3 turns without changing or reading anything new".into()
             }]
         );
     }

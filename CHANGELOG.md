@@ -98,6 +98,12 @@ uses [Semantic Versioning](https://semver.org/).
   with a pointer to the whole spec (`citedSpec`, on by default; a card that
   names none the spec has gets the whole spec). A session that continues
   stopped work no longer gets the repository map in its prompt.
+- A session steered for going idle is asked to write what it already knows
+  (the files and facts the change depends on, and its plan) in its task's
+  notes before making the change, and the next attempt's briefing includes
+  those notes.
+- Reading something not read before counts as progress for the idle rule,
+  like a file change; repeated reads of the same thing still count as idle.
 
 ### Fixed
 
@@ -110,6 +116,9 @@ uses [Semantic Versioning](https://semver.org/).
 - An ACP session handles a proxy observation before the prompt's end, so
   per-request usage is no longer occasionally lost or attributed to the
   wrong turn.
+- The engine proxy adds the missing `action` to a tool call that sends a
+  `command` without it, when exactly one variant of the argument takes a
+  `command` (models drop it from fx's `shell` call, which fx then rejects).
 
 ### Security
 

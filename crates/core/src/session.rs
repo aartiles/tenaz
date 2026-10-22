@@ -163,6 +163,12 @@ pub fn is_write_tool(name: &str) -> bool {
     )
 }
 
+/// Tool names that read files: a read of something new counts as progress
+/// for the idle rule.
+pub fn is_read_tool(name: &str) -> bool {
+    matches!(name, "read" | "Read" | "read_file" | "fs_read")
+}
+
 /// A watchdog event recorded in the session's journal record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchdogEvent {

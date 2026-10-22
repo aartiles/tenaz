@@ -40,7 +40,10 @@ text when its schema has no `type` (a `oneOf` of objects, as fx declares
 rejects every shell call. The engine proxy repairs exactly that: an
 argument whose schema accepts only objects and whose value is a string
 holding a JSON object is parsed back, in streamed and whole responses;
-anything else passes through untouched. Each repair is logged in
+anything else passes through untouched. It also adds the `action` that
+models drop from fx's `shell` call: when a call sends a `command` without
+an `action` and exactly one variant of the argument takes a `command`, the
+proxy sets that variant's fixed `action`. Each repair is logged in
 `.tenaz/private/tool-repairs.jsonl` and counted by `tenaz status`;
 `--set repairToolArgs=false` turns it off. Pi's tools take flat
 arguments, so nothing of theirs is repaired; with `--no-proxy` nothing

@@ -793,8 +793,9 @@ impl Runner {
         Ok(())
     }
 
-    /// The builder's briefing: notes from the dependencies, the previous
-    /// failure and what it left, and the latest `verify` result.
+    /// The builder's briefing: notes from the dependencies and from the task
+    /// itself, the previous failure and what it left, and the latest
+    /// `verify` result.
     async fn builder_prompt(
         &self,
         backlog: &Backlog,
@@ -820,6 +821,12 @@ impl Runner {
         );
         if !notes.is_empty() && self.params.briefing {
             extra.push(("Notes from earlier tasks".to_owned(), notes));
+        }
+        if let Some(own) = self.project.note(card.id.as_str()) {
+            extra.push((
+                "Your notes from earlier attempts".to_owned(),
+                crate::util::clip(own.trim(), self.params.note_clip_bytes),
+            ));
         }
         let (base, failure) = self
             .ledger
