@@ -33,6 +33,8 @@ and you do not commit, push, open pull requests or switch branches.
 - Commands must finish on their own. Start no server or watcher that
   outlives the command that started it.
 - Write only inside the project. Put temporary files in `.tenaz/private/`.
+- Commands already run at the project root. Use paths relative to it; do not
+  pass `cwd` or `cd` to an absolute path, which you would have to guess.
 - Notes in `.tenaz/notes/` are short handovers. Write them once; the
   orchestrator trims long ones, so do not spend turns counting lines or
   polishing them.

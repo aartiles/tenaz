@@ -120,6 +120,13 @@ uses [Semantic Versioning](https://semver.org/).
   `command` without it, when every variant of the argument that takes a
   `command` fixes the same `action` (models drop it from fx's `shell` call,
   which fx then rejects).
+- The engine proxy moves properties a model sends beside fx's
+  `shell.request` (such as `timeout_ms` or `cwd`) into it, when the variant
+  its `action` selects takes them all and the request does not already hold
+  them; fx rejected those calls.
+- The protocol tells every session that commands run at the project root
+  and to use relative paths: models guessed the project's absolute path for
+  `cwd` or `cd`, and the guess was often wrong.
 
 ### Security
 

@@ -44,7 +44,10 @@ anything else passes through untouched. It also adds the `action` that
 models drop from fx's `shell` call: when a call sends a `command` without
 an `action` and every variant of the argument that takes a `command` fixes
 the same `action` (`run` in fx 0.0.14, whose two `run` variants differ in
-the shell), the proxy sets it. Each repair is logged in
+the shell), the proxy sets it. Properties sent beside `request` instead of
+inside it (`{"request": {...}, "timeout_ms": 5000}`) are moved in when the
+variant its `action` selects takes them all and `request` does not already
+hold them. Each repair is logged in
 `.tenaz/private/tool-repairs.jsonl` and counted by `tenaz status`;
 `--set repairToolArgs=false` turns it off. Pi's tools take flat
 arguments, so nothing of theirs is repaired; with `--no-proxy` nothing

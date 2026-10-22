@@ -11,24 +11,36 @@
 //! every variant of the object argument that takes a `command` fixes its
 //! `action` to the same value (fx has two `run` variants, one with a custom
 //! shell).
+//!
+//! The last is properties sent beside that argument instead of inside it
+//! (`{"request": {...}, "timeout_ms": 5000}`): they are moved in only when
+//! the variant its `action` selects takes every one of them and the argument
+//! does not already hold them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-/// Per tool name, the top-level arguments whose schema accepts only objects,
-/// and the `action` that every variant taking a `command` fixes, if any.
+/// Per tool name, what the repairs need to know about its arguments.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ObjectArgs {
-    fields: BTreeMap<String, BTreeSet<String>>,
-    command_actions: BTreeMap<String, String>,
+pub struct ObjectArgs(BTreeMap<String, ToolArgs>);
+
+/// One tool's arguments whose schema accepts only objects, with the
+/// properties their variants take per fixed `action`, and the `action` that
+/// every variant taking a `command` fixes, if any.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ToolArgs {
+    fields: BTreeMap<String, Actions>,
+    command_action: Option<String>,
 }
+
+/// Per fixed `action`, the properties of the variants that select it.
+type Actions = BTreeMap<String, BTreeSet<String>>;
 
 impl ObjectArgs {
     /// Reads the `tools` of a chat completion request.
     pub fn from_request(request: &Value) -> Self {
-        let mut map = BTreeMap::new();
-        let mut command_actions = BTreeMap::new();
+        let mut tools = BTreeMap::new();
         for tool in request
             .get("tools")
             .and_then(Value::as_array)
@@ -41,76 +53,90 @@ impl ObjectArgs {
             let Some(name) = function.get("name").and_then(Value::as_str) else {
                 continue;
             };
-            let objects: Vec<(&String, &Value)> = function
+            let fields: BTreeMap<String, Actions> = function
                 .get("parameters")
                 .and_then(|p| p.get("properties"))
                 .and_then(Value::as_object)
                 .into_iter()
                 .flatten()
                 .filter(|(_, schema)| only_objects(schema))
+                .map(|(field, schema)| (field.clone(), actions_of(schema)))
                 .collect();
-            let actions: BTreeSet<String> = objects
-                .iter()
-                .flat_map(|(_, schema)| command_actions_of(schema))
-                .collect();
-            if let Some(action) = actions.first().filter(|_| actions.len() == 1) {
-                command_actions.insert(name.to_owned(), action.clone());
+            if fields.is_empty() {
+                continue;
             }
-            let fields: BTreeSet<String> = objects
-                .into_iter()
-                .map(|(field, _)| field.clone())
+            let commands: BTreeSet<&String> = fields
+                .values()
+                .flatten()
+                .filter(|(_, properties)| properties.contains("command"))
+                .map(|(action, _)| action)
                 .collect();
-            if !fields.is_empty() {
-                map.insert(name.to_owned(), fields);
-            }
+            let command_action = commands
+                .first()
+                .filter(|_| commands.len() == 1)
+                .map(|action| (*action).clone());
+            tools.insert(
+                name.to_owned(),
+                ToolArgs {
+                    fields,
+                    command_action,
+                },
+            );
         }
-        Self {
-            fields: map,
-            command_actions,
-        }
+        Self(tools)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.fields.is_empty()
+        self.0.is_empty()
     }
 
     /// The fields to watch for `tool`, if any.
-    pub fn fields(&self, tool: &str) -> Option<&BTreeSet<String>> {
-        self.fields.get(tool)
+    pub fn fields(&self, tool: &str) -> Option<BTreeSet<&str>> {
+        self.0
+            .get(tool)
+            .map(|args| args.fields.keys().map(String::as_str).collect())
     }
 
     /// The `action` a `command` without one selects for `tool`.
     pub fn command_action(&self, tool: &str) -> Option<&str> {
-        self.command_actions.get(tool).map(String::as_str)
+        self.0.get(tool)?.command_action.as_deref()
     }
 
     /// Repairs one call of `tool`; `None` when it needs nothing.
     fn repair(&self, tool: &str, arguments: &str) -> Option<(String, Vec<String>)> {
-        repair_arguments(arguments, self.fields(tool)?, self.command_action(tool))
+        repair_arguments(arguments, self.0.get(tool)?)
     }
 }
 
-/// The `action` values of the variants of `schema` that take a `command`
-/// and fix `action` to a single value (`const`, or an `enum` of one).
-fn command_actions_of(schema: &Value) -> Vec<String> {
-    ["oneOf", "anyOf"]
+/// The variants of `schema` that fix `action` to a single value (`const`,
+/// or an `enum` of one), with the properties each value's variants take.
+fn actions_of(schema: &Value) -> Actions {
+    let mut actions = Actions::new();
+    for variant in ["oneOf", "anyOf"]
         .iter()
         .filter_map(|key| schema.get(key).and_then(Value::as_array))
         .flatten()
-        .filter_map(|variant| {
-            let properties = variant.get("properties")?;
-            properties.get("command")?;
-            let action = properties.get("action")?;
-            match (action.get("const"), action.get("enum")) {
-                (Some(Value::String(value)), _) => Some(value.clone()),
-                (None, Some(Value::Array(values))) => match values.as_slice() {
-                    [Value::String(value)] => Some(value.clone()),
-                    _ => None,
-                },
-                _ => None,
-            }
-        })
-        .collect()
+    {
+        let Some(properties) = variant.get("properties").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(action) = properties.get("action") else {
+            continue;
+        };
+        let value = match (action.get("const"), action.get("enum")) {
+            (Some(Value::String(value)), _) => value,
+            (None, Some(Value::Array(values))) => match values.as_slice() {
+                [Value::String(value)] => value,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        actions
+            .entry(value.clone())
+            .or_default()
+            .extend(properties.keys().cloned());
+    }
+    actions
 }
 
 /// A schema that accepts objects and nothing else: `type: object`, or a
@@ -130,18 +156,15 @@ fn only_objects(schema: &Value) -> bool {
 }
 
 /// The arguments with each watched field that holds a JSON object as text
-/// parsed back into that object, and `command_action` added to a `command`
-/// sent without an `action` (at the top level or in a watched field); the
-/// repaired fields, `None` when nothing needed repair (or the arguments are
-/// not a JSON object).
-pub fn repair_arguments(
-    arguments: &str,
-    fields: &BTreeSet<String>,
-    command_action: Option<&str>,
-) -> Option<(String, Vec<String>)> {
+/// parsed back into that object, the tool's `command_action` added to a
+/// `command` sent without an `action` (at the top level or in a watched
+/// field), and properties sent beside a watched field moved into it when
+/// its variant takes them all; the repaired fields, `None` when nothing
+/// needed repair (or the arguments are not a JSON object).
+fn repair_arguments(arguments: &str, tool: &ToolArgs) -> Option<(String, Vec<String>)> {
     let mut object: Map<String, Value> = serde_json::from_str(arguments).ok()?;
     let mut repaired = Vec::new();
-    for field in fields {
+    for field in tool.fields.keys() {
         let Some(Value::String(text)) = object.get(field) else {
             continue;
         };
@@ -150,20 +173,54 @@ pub fn repair_arguments(
             repaired.push(field.clone());
         }
     }
-    if let Some(action) = command_action {
+    if let Some(action) = &tool.command_action {
         let missing = |o: &Map<String, Value>| {
             !o.contains_key("action") && o.get("command").is_some_and(Value::is_string)
         };
-        if !fields.iter().any(|f| object.contains_key(f)) && missing(&object) {
-            object.insert("action".to_owned(), Value::String(action.to_owned()));
+        if !tool.fields.keys().any(|f| object.contains_key(f)) && missing(&object) {
+            object.insert("action".to_owned(), Value::String(action.clone()));
             repaired.push("action".to_owned());
         }
-        for field in fields {
+        for field in tool.fields.keys() {
             if let Some(Value::Object(inner)) = object.get_mut(field)
                 && missing(inner)
             {
-                inner.insert("action".to_owned(), Value::String(action.to_owned()));
+                inner.insert("action".to_owned(), Value::String(action.clone()));
                 repaired.push(format!("{field}.action"));
+            }
+        }
+    }
+    for (field, actions) in &tool.fields {
+        let Some(Value::Object(inner)) = object.get(field) else {
+            continue;
+        };
+        let Some(properties) = inner
+            .get("action")
+            .and_then(Value::as_str)
+            .and_then(|action| actions.get(action))
+        else {
+            continue;
+        };
+        let stray: Vec<String> = object
+            .keys()
+            .filter(|key| !tool.fields.contains_key(*key))
+            .cloned()
+            .collect();
+        if stray.is_empty()
+            || !stray
+                .iter()
+                .all(|key| properties.contains(key) && !inner.contains_key(key))
+        {
+            continue;
+        }
+        let moved: Vec<(String, Value)> = stray
+            .into_iter()
+            .filter_map(|key| object.remove_entry(&key))
+            .collect();
+        if let Some(Value::Object(inner)) = object.get_mut(field) {
+            for (key, value) in moved {
+                repaired.push(format!("{field}.{key}"));
+                inner.insert(key, value);
             }
         }
     }
@@ -414,10 +471,7 @@ mod tests {
     #[test]
     fn only_arguments_that_cannot_be_strings_are_watched() {
         let watched = ObjectArgs::from_request(&fx_tools());
-        assert_eq!(
-            watched.fields("shell"),
-            Some(&BTreeSet::from(["request".to_owned()]))
-        );
+        assert_eq!(watched.fields("shell"), Some(BTreeSet::from(["request"])));
         assert_eq!(
             watched.fields("read_file"),
             None,
@@ -428,21 +482,18 @@ mod tests {
 
     #[test]
     fn a_stringified_object_is_parsed_back_and_nothing_else_is_touched() {
-        let fields = BTreeSet::from(["request".to_owned()]);
-        let (fixed, repaired) = repair_arguments(
-            r#"{"request":"{\"action\": \"run\", \"command\": \"ls\"}"}"#,
-            &fields,
-            None,
-        )
-        .unwrap();
+        let watched = ObjectArgs::from_request(&fx_tools());
+        let repair = |args: &str| watched.repair("shell", args);
+        let (fixed, repaired) =
+            repair(r#"{"request":"{\"action\": \"run\", \"command\": \"ls\"}"}"#).unwrap();
         assert_eq!(repaired, ["request"]);
         let fixed: Value = serde_json::from_str(&fixed).unwrap();
         assert_eq!(fixed["request"]["command"], "ls");
         // Already an object, a string that is not a JSON object, not JSON at all.
-        assert!(repair_arguments(r#"{"request":{"action":"run"}}"#, &fields, None).is_none());
-        assert!(repair_arguments(r#"{"request":"ls -la"}"#, &fields, None).is_none());
-        assert!(repair_arguments(r#"{"request":"[1, 2]"}"#, &fields, None).is_none());
-        assert!(repair_arguments("not json", &fields, None).is_none());
+        assert!(repair(r#"{"request":{"action":"run"}}"#).is_none());
+        assert!(repair(r#"{"request":"ls -la"}"#).is_none());
+        assert!(repair(r#"{"request":"[1, 2]"}"#).is_none());
+        assert!(repair("not json").is_none());
     }
 
     #[test]
@@ -480,17 +531,50 @@ mod tests {
         let tools: Value =
             serde_json::from_str(include_str!("../testdata/fx-0.0.14-shell.json")).unwrap();
         let watched = ObjectArgs::from_request(&tools);
-        assert_eq!(
-            watched.fields("shell"),
-            Some(&BTreeSet::from(["request".to_owned()]))
-        );
+        assert_eq!(watched.fields("shell"), Some(BTreeSet::from(["request"])));
         assert_eq!(watched.command_action("shell"), Some("run"));
-        let (fixed, fields) = watched.repair("shell", r#"{"command":"ls"}"#).unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&fixed).unwrap(),
-            serde_json::json!({"action": "run", "command": "ls"})
-        );
+        let fixed = |args: &str| {
+            watched
+                .repair("shell", args)
+                .map(|(fixed, fields)| (serde_json::from_str::<Value>(&fixed).unwrap(), fields))
+        };
+        let (flat, fields) = fixed(r#"{"command":"ls"}"#).unwrap();
+        assert_eq!(flat, serde_json::json!({"action": "run", "command": "ls"}));
         assert_eq!(fields, ["action"]);
+    }
+
+    #[test]
+    fn properties_beside_the_request_are_moved_into_it_when_its_variant_takes_them() {
+        let tools: Value =
+            serde_json::from_str(include_str!("../testdata/fx-0.0.14-shell.json")).unwrap();
+        let watched = ObjectArgs::from_request(&tools);
+        let fixed = |args: &str| {
+            watched
+                .repair("shell", args)
+                .map(|(fixed, fields)| (serde_json::from_str::<Value>(&fixed).unwrap(), fields))
+        };
+        let (moved, fields) =
+            fixed(r#"{"request":{"action":"run","command":"ls"},"timeout_ms":5000,"cwd":"src"}"#)
+                .unwrap();
+        assert_eq!(
+            moved,
+            serde_json::json!({"request": {"action": "run", "command": "ls", "timeout_ms": 5000, "cwd": "src"}})
+        );
+        assert_eq!(fields, ["request.timeout_ms", "request.cwd"]);
+        // The missing action is added first, and selects the variant.
+        let (moved, fields) = fixed(r#"{"request":{"command":"ls"},"timeout_ms":5000}"#).unwrap();
+        assert_eq!(moved["request"]["action"], "run");
+        assert_eq!(moved["request"]["timeout_ms"], 5000);
+        assert_eq!(fields, ["request.action", "request.timeout_ms"]);
+        // A property the variant does not take, or one the request already holds.
+        assert!(
+            fixed(r#"{"request":{"action":"run","command":"ls"},"timeout_ms":1,"x":1}"#).is_none()
+        );
+        assert!(
+            fixed(r#"{"request":{"action":"run","command":"ls","cwd":"a"},"cwd":"b"}"#).is_none()
+        );
+        // `chars` belongs to `interact`, not `run`.
+        assert!(fixed(r#"{"request":{"action":"run","command":"ls"},"chars":"y"}"#).is_none());
     }
 
     #[test]
