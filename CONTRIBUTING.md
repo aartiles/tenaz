@@ -4,7 +4,15 @@ Thanks for looking. Issues and pull requests are welcome.
 
 ## Before you open a pull request
 
-Run the same three commands CI runs; all three must pass:
+Enable the repository's git hooks once; `pre-commit` checks formatting and
+the crate boundaries (`scripts/check-architecture.sh`), `pre-push` runs
+everything CI runs:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Or run the same commands CI runs by hand; all must pass:
 
 ```bash
 cargo fmt --all -- --check

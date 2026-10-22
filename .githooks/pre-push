@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# The same gates as CI. Enable with: git config core.hooksPath .githooks
+set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo fmt --all -- --check
+scripts/check-architecture.sh
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+if command -v cargo-deny >/dev/null; then
+  cargo deny check licenses bans sources
+else
+  echo "pre-push: cargo-deny not installed, skipping (CI runs it)" >&2
+fi

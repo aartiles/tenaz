@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Fast checks. Enable with: git config core.hooksPath .githooks
+set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo fmt --all -- --check
+scripts/check-architecture.sh

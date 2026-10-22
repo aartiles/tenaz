@@ -26,6 +26,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Architecture
+        run: scripts/check-architecture.sh
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       # The CLI end-to-end test (crates/cli/tests/cli.rs) runs the fake
@@ -33,7 +35,7 @@ jobs:
       # memory probe test is ignored off macOS (cfg_attr in probe_macos.rs),
       # so it only runs on the macos-14 job.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
   msrv:
     name: MSRV (1.91)
@@ -44,3 +46,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check
         run: cargo check --workspace --all-targets --locked
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources
