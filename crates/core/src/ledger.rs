@@ -330,10 +330,11 @@ impl Ledger {
 
     /// The configured share of the context window, before any cap.
     pub fn configured_budget_tokens(&self) -> u64 {
-        #[allow(
+        #[expect(
             clippy::cast_precision_loss,
             clippy::cast_possible_truncation,
-            clippy::cast_sign_loss
+            clippy::cast_sign_loss,
+            reason = "a context window times a fraction is far below 2^53 and floors to a positive u64"
         )]
         let budget =
             (self.config.context_window as f64 * self.params.context_budget).floor() as u64;
@@ -396,7 +397,10 @@ pub enum TaskOutcome {
 
 /// One line of `journal.jsonl`, tagged by `type`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one record is built and written at a time; boxing the session variant buys nothing"
+)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum JournalRecord {
     Session(SessionRecord),
@@ -581,7 +585,10 @@ impl JournalEntry {
     }
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes fields by reference
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
 fn is_zero(n: &u32) -> bool {
     *n == 0
 }

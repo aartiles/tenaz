@@ -56,10 +56,11 @@ pub fn status_text(project: &Project) -> String {
         .as_ref()
         .map(|i| format!(", in flight {}", i.label))
         .unwrap_or_default();
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
+        clippy::cast_sign_loss,
+        reason = "a context window times a fraction is far below 2^53 and floors to a positive u64"
     )]
     let budget =
         (ledger.config.context_window as f64 * ledger.params.context_budget).floor() as u64;

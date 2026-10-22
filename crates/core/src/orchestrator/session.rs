@@ -486,10 +486,11 @@ impl Runner {
 
     /// Lowers the run's context budget to a share of what the engine said it can hold.
     fn lower_context_cap(&mut self, label: &str, limit: u64, retry: u32) -> Result<(), RunError> {
-        #[allow(
+        #[expect(
             clippy::cast_precision_loss,
             clippy::cast_possible_truncation,
-            clippy::cast_sign_loss
+            clippy::cast_sign_loss,
+            reason = "a context limit times a fraction is far below 2^53 and floors to a positive u64"
         )]
         let cap = (limit as f64 * self.params.capacity_headroom).floor() as u64;
         if self.ledger.context_cap.is_none_or(|current| cap < current) {

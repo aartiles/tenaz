@@ -46,7 +46,10 @@ impl MemoryReading {
         session: Option<String>,
         previous: Option<&MemorySample>,
     ) -> MemorySample {
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "page counts stay far below 2^53, so the GiB figures are exact enough"
+        )]
         let gib = |pages: Option<u64>| {
             pages.map(|p| round2(p as f64 * self.page_bytes as f64 / f64::from(1u32 << 30)))
         };
@@ -102,7 +105,10 @@ impl MemoryWindow {
         self.swap_used_max_gib = self
             .swap_used_max_gib
             .max(sample.swap_used_gib.unwrap_or(0.0));
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "page counts stay far below 2^53, so the GiB figures are exact enough"
+        )]
         let gib =
             |pages: u64| round2(pages as f64 * sample.page_bytes as f64 / f64::from(1u32 << 30));
         self.swap_in_gib = gib(self.swapins);
@@ -163,7 +169,10 @@ pub fn memory_line(samples: &[MemorySample]) -> String {
         None => "null".to_owned(),
     };
     let worst = samples.iter().filter_map(|s| s.pressure_level).max();
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "page counts stay far below 2^53, so the GiB figures are exact enough"
+    )]
     let swap_in: f64 = samples.iter().map(|s| s.swapins_delta).sum::<u64>() as f64
         * last.page_bytes as f64
         / f64::from(1u32 << 30);

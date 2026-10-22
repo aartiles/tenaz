@@ -314,7 +314,10 @@ impl Watchdog {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate field of the harness's message-end event"
+    )]
     fn message_end(
         &mut self,
         usage: &crate::session::Usage,
@@ -358,10 +361,11 @@ impl Watchdog {
             }
         }
         if let Some(watch) = self.watch {
-            #[allow(
+            #[expect(
                 clippy::cast_precision_loss,
                 clippy::cast_possible_truncation,
-                clippy::cast_sign_loss
+                clippy::cast_sign_loss,
+                reason = "a context window times a fraction is far below 2^53 and truncates to a positive u64"
             )]
             let hard = (watch.context_tokens as f64 * self.params.context_abort) as u64;
             if self.metrics.context_peak > hard {

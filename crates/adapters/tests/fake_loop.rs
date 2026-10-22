@@ -46,7 +46,10 @@ fn card_line(project: &Project, id: &str, prefix: &str) -> Option<String> {
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one test walks a whole run in order, so its steps read top to bottom"
+)]
 async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     let work = tempfile::tempdir().unwrap();
     let brief = work.path().join("brief.md");

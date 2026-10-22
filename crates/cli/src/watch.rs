@@ -310,7 +310,10 @@ pub fn render(event: &SessionEvent, level: Level) -> Vec<String> {
             if let Some(decode) = server.and_then(|s| s.decode_ms)
                 && decode > 0.0
             {
-                #[allow(clippy::cast_precision_loss)]
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "display only: a decode speed rounded to whole tokens per second"
+                )]
                 let speed = usage.output as f64 / decode * 1000.0;
                 let _ = write!(stats, " · {speed:.0} tok/s");
             }
@@ -434,7 +437,10 @@ fn thousands(n: u64) -> String {
     if n < 1000 {
         return n.to_string();
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "display only: a count shown in thousands to one place"
+    )]
     let k = n as f64 / 1000.0;
     format!("{k:.1}k")
 }

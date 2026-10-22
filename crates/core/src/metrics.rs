@@ -114,7 +114,10 @@ impl RequestRecord {
     #[must_use]
     pub fn with_engine(mut self, engine: Option<EngineCounters>) -> Self {
         let get = |e: &EngineCounters, k: &str| e.get(k).copied();
-        #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Prometheus counters hold whole token counts, exact in f64"
+        )]
         let matched = engine.as_ref().is_some_and(|e| {
             get(e, "requests") == Some(1.0)
                 && get(e, "prompt_tokens") == Some(self.prompt_tokens as f64)
@@ -180,7 +183,10 @@ pub fn engine_summary(requests: &[RequestRecord]) -> Option<EngineSummary> {
         .collect();
     let drafted: u64 = drafts.iter().map(|(d, _)| d).sum();
     let draft_accepted: u64 = drafts.iter().map(|(_, a)| a).sum();
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "token counts stay far below 2^53; the ratio is rounded to three places"
+    )]
     let draft_acceptance =
         (drafted > 0).then(|| (draft_accepted as f64 / drafted as f64 * 1000.0).round() / 1000.0);
     Some(EngineSummary {
@@ -211,7 +217,10 @@ pub fn engine_line(requests: &[RequestRecord]) -> String {
     };
     let prompt: u64 = requests.iter().map(|r| r.prompt_tokens).sum();
     let cached: u64 = requests.iter().map(|r| r.cached_tokens).sum();
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "token counts stay far below 2^53; the share is printed to one place"
+    )]
     let share = cached as f64 / prompt.max(1) as f64 * 100.0;
     let mut line = format!(
         "Engine: {} requests ({} with engine timings), prompt cache {share:.1}%",
@@ -248,7 +257,6 @@ mod tests {
     const METRICS: &str = "# HELP x\ntime_to_first_token_seconds_count 3\ntime_to_first_token_seconds_sum 1.5\nrequest_decode_seconds_sum{model=\"a\"} 2.0\nrequest_decode_seconds_sum{model=\"b\"} 1.0\nprompt_tokens_total 1000\ngeneration_tokens_total 90\nvllm:prefix_cache_tokens_total 400\nunrelated 7\n";
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn parses_known_series_and_sums_labels() {
         let c = parse_prometheus(METRICS).unwrap();
         assert_eq!(c["requests"], 3.0);
@@ -259,7 +267,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn deltas_and_matching() {
         let before = parse_prometheus(METRICS).unwrap();
         let now = parse_prometheus(

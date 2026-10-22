@@ -425,7 +425,10 @@ async fn start_proxy(
 /// The harness named in the ledger: fx over ACP with its profile written
 /// into the project, Pi in RPC mode with the pinned skills, or the scripted
 /// fake (writing `verify` where the run expects it).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the harnesses need different subsets of these; a struct would only move the list"
+)]
 fn build_harness(
     project: &Project,
     config: &tenaz_core::ledger::ModelConfig,

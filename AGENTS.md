@@ -21,8 +21,9 @@ until a goal's `verify` passes. Read before changing code:
   with a fake or a recorded transcript. Checks against real tools are written
   up in `docs/COMPATIBILITY.md`, not added to `cargo test`.
 - A flaky test is a bug: find the race, do not retry or sleep around it.
-- Fix a clippy lint instead of allowing it. When an `#[allow]` is right, say
-  why in a comment on the same line.
+- Fix a clippy lint instead of silencing it. When an exception is right,
+  clippy only accepts `#[expect(lint, reason = "...")]`: make the reason say
+  why the code is correct, not that the lint is noisy.
 - Keep stable what scripts read: field names in `run.json` and
   `journal.jsonl`, `tenaz status --json`, and the exit codes of `tenaz run`.
 - Prompt templates (`crates/cli/templates/`) and the agent skill

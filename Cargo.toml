@@ -64,3 +64,5 @@ struct_excessive_bools = "allow"
 unnecessary_literal_bound = "allow"
 # `#[tool_handler]` (rmcp) expands to async trait methods without awaits.
 unused_async_trait_impl = "allow"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"

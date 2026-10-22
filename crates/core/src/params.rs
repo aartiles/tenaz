@@ -167,7 +167,10 @@ impl Default for RunParams {
 }
 
 /// An integral `f64` as `i64`, saturating at the ends of the range.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the cast saturates at the ends of the range, which is what this wants"
+)]
 fn integral(n: f64) -> i64 {
     n as i64
 }

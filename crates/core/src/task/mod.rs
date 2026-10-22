@@ -225,15 +225,20 @@ impl TaskCard {
 
 /// A non-negative whole number, or nothing: a card value such as `-3` or `2.5`
 /// is ignored rather than guessed.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is checked to be whole and within u32 before the cast"
+)]
 fn whole_u32(n: f64) -> Option<u32> {
     (n >= 0.0 && n.fract() == 0.0 && n <= f64::from(u32::MAX)).then_some(n as u32)
 }
 
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    reason = "the value is checked to be whole and within u64 before the cast"
 )]
 fn whole_u64(n: f64) -> Option<u64> {
     (n >= 0.0 && n.fract() == 0.0 && n <= u64::MAX as f64).then_some(n as u64)

@@ -58,7 +58,10 @@ impl Value {
     }
 }
 
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "only whole numbers below 1e15 are cast, and they fit i64 exactly"
+)]
 fn format_number(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1e15 {
         format!("{}", n as i64)

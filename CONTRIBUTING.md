@@ -27,8 +27,10 @@ cargo test --workspace
 ```
 
 Clippy runs with the `pedantic` group enabled (see `[workspace.lints]` in
-`Cargo.toml`), so fix the lint rather than allowing it unless the allow is
-justified in a comment. The CLI end-to-end test takes about two minutes. The
+`Cargo.toml`), so fix the lint rather than silencing it. An exception has to
+be `#[expect(lint, reason = "...")]`: clippy rejects `#[allow]` and an
+expectation without a reason, and fails when an expected lint no longer
+fires. The CLI end-to-end test takes about two minutes. The
 macOS memory probe test is ignored on other platforms.
 
 ## Crate map
