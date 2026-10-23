@@ -1,12 +1,13 @@
 //! What the setup wizard finds on this machine: coding agents on `PATH`,
 //! OpenAI-compatible engines on their usual ports with the models they
-//! serve, and `ComfyUI`. Every probe is short and failing to find something
-//! is not an error.
+//! serve, `ComfyUI`, and git for `tenaz doctor`. Every probe is short and
+//! failing to find something is not an error.
 
 use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
+use tenaz_core::doctor;
 use tenaz_core::ledger::EngineApi;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(800);
@@ -35,6 +36,72 @@ pub fn agents() -> Vec<Agent> {
         });
     }
     found
+}
+
+/// `git --version`, or `None` when git is not on `PATH`.
+pub fn git() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// What `tenaz doctor` judges: git, the agents, and the engines on the
+/// usual ports plus `base_url` when given.
+pub async fn machine(base_url: Option<&str>) -> doctor::Machine {
+    let client = client();
+    let mut engines = local_engines(&client).await;
+    if let Some(url) = base_url
+        && !engines
+            .iter()
+            .any(|e| e.base_url == normalize_base_url(url))
+        && let Some(engine) = engine_at(&client, url).await
+    {
+        engines.push(engine);
+    }
+    let mut looked_at = ENGINE_PORTS
+        .iter()
+        .map(|(port, label, _)| format!("{port} {label}"))
+        .collect::<Vec<_>>();
+    if let Some(url) = base_url {
+        looked_at.push(normalize_base_url(url));
+    }
+    doctor::Machine {
+        os: doctor::Os::from_name(std::env::consts::OS),
+        git: git(),
+        agents: agents()
+            .into_iter()
+            .map(|a| doctor::Tool {
+                name: a.name.to_owned(),
+                version: a.version,
+            })
+            .collect(),
+        engines: engines.iter().map(Engine::seen).collect(),
+        looked_at,
+    }
+}
+
+impl Engine {
+    /// What `tenaz doctor` needs to know about it.
+    pub fn seen(&self) -> doctor::EngineSeen {
+        doctor::EngineSeen {
+            label: self.label.clone(),
+            provider: self.provider.clone(),
+            base_url: self.base_url.clone(),
+            models: self
+                .models
+                .iter()
+                .map(|m| doctor::ModelSeen {
+                    id: m.id.clone(),
+                    context_window: m.context_window,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Where engines usually listen, with the name to show and the provider

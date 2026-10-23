@@ -7,6 +7,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
+use tenaz_core::doctor;
 use tenaz_core::ledger::EngineApi;
 
 use crate::detect::{self, Engine};
@@ -137,6 +138,12 @@ pub async fn run<R: BufRead, W: Write>(
              remove .tenaz/ first; to start another project, run tenaz init in another \
              folder or pass --project.",
             here.display()
+        );
+    }
+    if detect::git().is_none() {
+        bail!(
+            "Tenaz needs git, and git is not on PATH. {}",
+            doctor::git_fix(doctor::Os::from_name(std::env::consts::OS)).join(" ")
         );
     }
     p.say("Tenaz setup. Press Enter to take the [default].\n")?;
@@ -343,8 +350,9 @@ fn ask_agent<R: BufRead, W: Write>(
     let agents = detect::agents();
     match agents.as_slice() {
         [] => bail!(
-            "No coding agent found on PATH. Install fx (https://github.com/vercel-labs/fx) \
-             or Pi (https://github.com/earendil-works/pi), then run tenaz init again."
+            "No coding agent found on PATH.\n{}\nAfter that, run tenaz init again \
+             (tenaz doctor shows anything else missing).",
+            doctor::agent_fix().join("\n")
         ),
         [only] => {
             p.say(&format!("Agent: {} ({})", only.name, only.version))?;
@@ -493,7 +501,8 @@ fn ask_context<R: BufRead, W: Write>(
     let floor = tenaz_core::params::RunParams::default().context_floor;
     if context_window < floor {
         p.say(&format!(
-            "  Warning: below {floor} tokens the sessions will not fit; raise the engine's context if you can."
+            "  Warning: below {floor} tokens the sessions will not fit. {}",
+            doctor::context_fix(engine.map_or("", |e| e.provider.as_str()), floor)
         ))?;
     }
     Ok(context_window)
@@ -643,9 +652,13 @@ async fn choose_engine<R: BufRead, W: Write>(
             .map(|(port, label, _)| format!("{port} {label}"))
             .collect();
         p.say(&format!(
-            "No engine answers on the usual ports ({}). Start yours, or type its address.",
+            "No engine answers on the usual ports ({}).",
             ports.join(", ")
         ))?;
+        for line in doctor::engine_fix() {
+            p.say(&format!("  {line}"))?;
+        }
+        p.say("Start it now and type its address, or type the address it will have.")?;
     } else {
         let mut options: Vec<String> = found
             .iter()

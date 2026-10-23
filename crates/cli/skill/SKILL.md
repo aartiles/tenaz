@@ -20,7 +20,9 @@ is small, when it hinges on taste or on knowledge the brief cannot carry, or
 when the user wants it now: a run takes hours and holds the machine's memory.
 
 Tenaz needs an engine serving a model with tool calling (`tenaz init` without
-`--model`, in a terminal, finds one). If none is running, ask the user to
+`--model`, in a terminal, finds one). `tenaz doctor` says whether git, a
+coding agent, an engine and a model with enough context are there, and exits
+with 1 when something is missing. If no engine is running, ask the user to
 start one; do not start or stop engines yourself.
 
 ## Write the brief

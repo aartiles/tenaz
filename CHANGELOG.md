@@ -22,6 +22,12 @@ uses [Semantic Versioning](https://semver.org/).
   from one that was killed or failed (`interrupted`).
 - `tenaz guide` prints an Agent Skill for delegating goals to Tenaz from
   another agent.
+- `tenaz doctor` checks git, a coding agent, an engine and a model with
+  enough context, and says how to install or fix what is missing (the
+  install commands for Pi and fx, LM Studio or Ollama, the context setting
+  of each engine). It exits with 0 when a real run can start and 1
+  otherwise. The setup wizard gives the same advice when it finds no git,
+  no agent, no engine or too small a context.
 - Setup wizard: `tenaz init` without `--model`, in a terminal, finds the
   coding agents on `PATH`, the engines on their usual ports with their
   models, context windows and vision, and ComfyUI, then prints the

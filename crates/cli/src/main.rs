@@ -70,7 +70,8 @@ fn templates() -> Templates {
 /// How the commands fit together, after `tenaz --help`.
 const WORKFLOW_HELP: &str = "\
 Workflow:
-  1. Start the engine with the model loaded.
+  1. Start the engine with the model loaded. tenaz doctor checks that git, an
+     agent, the engine and the model are ready, and says how to fix what is not.
   2. tenaz init       writes the brief and pins the setup. In a repository with
                       commits it works on a new branch in a worktree next to it
                       and prints that directory; use it as --project from here on.
@@ -766,6 +767,15 @@ enum Command {
         #[arg(long, default_value = ".")]
         project: PathBuf,
     },
+    /// Check what a real run needs on this machine (git, a coding agent, an
+    /// engine and a model with enough context) and say how to install or
+    /// fix what is missing. Exits with 0 when ready, 1 when something is
+    /// missing.
+    Doctor {
+        /// Also look for an engine at this address (default: the usual ports).
+        #[arg(long)]
+        base_url: Option<String>,
+    },
     /// The tunable parameters and their defaults.
     Params,
     /// Print the agent skill for delegating goals to Tenaz (a SKILL.md).
@@ -1104,6 +1114,7 @@ async fn main() -> anyhow::Result<ExitCode> {
             print!("{}", include_str!("../skill/SKILL.md"));
             Ok(ExitCode::SUCCESS)
         }
+        Command::Doctor { base_url } => Ok(doctor(base_url.as_deref()).await),
         Command::Params => {
             let json = serde_json::to_value(RunParams::default())?;
             if let Some(map) = json.as_object() {
@@ -1113,6 +1124,21 @@ async fn main() -> anyhow::Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
+    }
+}
+
+/// `tenaz doctor`: prints what is ready and what is missing, with how to
+/// fix it; succeeds only when a real run can start.
+async fn doctor(base_url: Option<&str>) -> ExitCode {
+    let checks = tenaz_core::doctor::examine(
+        &detect::machine(base_url).await,
+        RunParams::default().context_floor,
+    );
+    print!("{}", tenaz_core::doctor::render(&checks));
+    if tenaz_core::doctor::ready(&checks) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 

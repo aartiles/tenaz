@@ -88,6 +88,10 @@ How much memory depends on the model you choose, not on Tenaz.
 [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) lists what has been
 tested and what has not.
 
+Once Tenaz is installed, `tenaz doctor` checks all of this (git, the agent,
+the engine and the model's context) and says how to install or fix what is
+missing.
+
 ## Install
 
 With the install script, which puts `tenaz` in `~/.local/bin` and adds
@@ -113,6 +117,8 @@ source with Rust 1.91 or later:
 ```bash
 cargo install --locked --git https://github.com/aartiles/tenaz tenaz
 ```
+
+Then run `tenaz doctor` to see what else a real run needs.
 
 ## Try it without a model
 

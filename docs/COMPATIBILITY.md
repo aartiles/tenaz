@@ -65,9 +65,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - The engine is wherever `--base-url` points. Without it the default is
   `http://127.0.0.1:12345/v1` (Sushi's default).
 - ComfyUI is wherever `--comfyui` points, usually `http://127.0.0.1:8188`.
-- `tenaz init`'s wizard looks for engines on 12345 (Sushi), 8080
-  (llama.cpp, llama-swap), 1234 (LM Studio), 11434 (Ollama) and 8000 (vLLM),
-  and for ComfyUI on 8188, with an 800 ms timeout each. The context window
+- `tenaz init`'s wizard and `tenaz doctor` look for engines on 12345
+  (Sushi), 8080 (llama.cpp, llama-swap), 1234 (LM Studio), 11434 (Ollama)
+  and 8000 (vLLM), and the wizard for ComfyUI on 8188, with an 800 ms
+  timeout each. The context window
   comes from the engine where it reports one (Sushi, vLLM, llama.cpp's
   `/props`, LM Studio's `/api/v0/models`); Ollama does not, so the wizard
   asks. Detection is tested against recorded answers, not live engines.
@@ -137,6 +138,11 @@ above), so a 32k context is the practical floor (`contextFloor`).
   no `sha256sum`. The Homebrew formula and the job that pushes it to the
   tap have not run yet, and need the `aartiles/homebrew-tap` repository
   and a `HOMEBREW_TAP_TOKEN` secret that can push to it.
+- **`tenaz doctor`'s advice** has been checked on macOS with Sushi running
+  and with nothing on `PATH`. The install commands it gives for Pi and fx
+  come from their READMEs and were not run; the context settings it gives
+  for LM Studio, Ollama, llama.cpp and vLLM were not tried against those
+  engines.
 
 ## Model and engine behaviour seen in testing
 
