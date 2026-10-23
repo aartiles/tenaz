@@ -23,7 +23,9 @@ Tenaz needs an engine serving a model with tool calling (`tenaz init` without
 `--model`, in a terminal, finds one). `tenaz doctor` says whether git, a
 coding agent, an engine and a model with enough context are there, and exits
 with 1 when something is missing. If no engine is running, ask the user to
-start one; do not start or stop engines yourself.
+start one; do not start or stop engines yourself. `tenaz demo` runs a
+scripted goal with no model, in about a minute, to show the user what a
+run looks like; it does not check the setup.
 
 ## Write the brief
 

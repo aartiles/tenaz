@@ -83,6 +83,8 @@ Workflow:
   5. tenaz finish     puts the result in one commit on a new branch of the
                       original repository. Nothing is pushed.
 
+To see a whole run first, without a model or an agent: tenaz demo.
+
 Agents delegating a goal: tenaz guide prints a skill with when to delegate,
 how to write the brief and how to check the result.
 
@@ -776,6 +778,14 @@ enum Command {
         #[arg(long)]
         base_url: Option<String>,
     },
+    /// See a whole run without a model or an agent: the scripted harness
+    /// builds a small goal in a new directory, with engine failures,
+    /// watchdog stops and a review rejection on the way.
+    Demo {
+        /// The directory to create (it must not exist or be empty).
+        #[arg(long, default_value = "tenaz-demo")]
+        project: PathBuf,
+    },
     /// The tunable parameters and their defaults.
     Params,
     /// Print the agent skill for delegating goals to Tenaz (a SKILL.md).
@@ -998,70 +1008,7 @@ async fn main() -> anyhow::Result<ExitCode> {
             execute_init(plan)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Run(args) => {
-            let project = initialized(args.project.clone())?;
-            let mut ledger = project.load_ledger()?;
-            if let Some(origin) = &ledger.origin {
-                tracing::info!("{}", worktree::describe(origin));
-            }
-            let launch = args.apply(&ledger.launch, &ledger.config.harness)?;
-            if launch != ledger.launch {
-                ledger.launch = launch.clone();
-                project.save_ledger(&ledger)?;
-                tracing::info!("saved the new launch settings in .tenaz/run.json");
-            }
-            let stop = CancellationToken::new();
-            spawn_signal_handler(stop.clone());
-            let workflow_specs: Vec<String> = launch
-                .workflows
-                .iter()
-                .map(|(name, path)| format!("{name}={path}"))
-                .collect();
-            let media = wiring::MediaOptions {
-                comfyui: launch.comfyui.clone(),
-                workflows: wiring::parse_workflows(&workflow_specs)?,
-                timeout: std::time::Duration::from_secs(launch.media_timeout_sec.unwrap_or(1800)),
-            };
-            let engine = wiring::EngineOptions {
-                kind: match launch.engine {
-                    EngineApi::Sushi => wiring::EngineChoice::Sushi,
-                    EngineApi::Generic => wiring::EngineChoice::Generic {
-                        start: launch.engine_start.clone(),
-                        stop: launch.engine_stop.clone(),
-                    },
-                },
-                proxy: !launch.no_proxy,
-            };
-            let bin = |name: &str| {
-                PathBuf::from(
-                    launch
-                        .harness_bin
-                        .clone()
-                        .filter(|_| ledger.config.harness == name)
-                        .unwrap_or_else(|| name.to_owned()),
-                )
-            };
-            let harness = wiring::HarnessOptions {
-                fx_bin: bin("fx"),
-                fx_args: launch
-                    .fx_args
-                    .clone()
-                    .unwrap_or_else(|| vec!["acp".to_owned()]),
-                pi_bin: bin("pi"),
-            };
-            let wired = wiring::wire(&project, &engine, &harness, &media).await?;
-            let mut runner = Runner::open(project.clone(), wired.deps, stop)?;
-            let options = RunOptions {
-                resume: args.resume,
-                allow_weak_engine: args.allow_weak_engine,
-                refresh_templates: args.refresh_templates.then(templates),
-                runner_version: runner_version(),
-            };
-            let outcome = runner.run(options).await;
-            wired.services.stop().await;
-            outcome?;
-            Ok(run_exit_code(&project.load_ledger()?))
-        }
+        Command::Run(args) => run(args).await,
         Command::Status { project, json } => {
             let project = Project::new(project);
             if json {
@@ -1114,6 +1061,7 @@ async fn main() -> anyhow::Result<ExitCode> {
             print!("{}", include_str!("../skill/SKILL.md"));
             Ok(ExitCode::SUCCESS)
         }
+        Command::Demo { project } => demo(project).await,
         Command::Doctor { base_url } => Ok(doctor(base_url.as_deref()).await),
         Command::Params => {
             let json = serde_json::to_value(RunParams::default())?;
@@ -1125,6 +1073,133 @@ async fn main() -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+/// `tenaz run`: works on the goal until it ends, pauses or fails.
+async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
+    let project = initialized(args.project.clone())?;
+    let mut ledger = project.load_ledger()?;
+    if let Some(origin) = &ledger.origin {
+        tracing::info!("{}", worktree::describe(origin));
+    }
+    let launch = args.apply(&ledger.launch, &ledger.config.harness)?;
+    if launch != ledger.launch {
+        ledger.launch = launch.clone();
+        project.save_ledger(&ledger)?;
+        tracing::info!("saved the new launch settings in .tenaz/run.json");
+    }
+    let stop = CancellationToken::new();
+    spawn_signal_handler(stop.clone());
+    let workflow_specs: Vec<String> = launch
+        .workflows
+        .iter()
+        .map(|(name, path)| format!("{name}={path}"))
+        .collect();
+    let media = wiring::MediaOptions {
+        comfyui: launch.comfyui.clone(),
+        workflows: wiring::parse_workflows(&workflow_specs)?,
+        timeout: std::time::Duration::from_secs(launch.media_timeout_sec.unwrap_or(1800)),
+    };
+    let engine = wiring::EngineOptions {
+        kind: match launch.engine {
+            EngineApi::Sushi => wiring::EngineChoice::Sushi,
+            EngineApi::Generic => wiring::EngineChoice::Generic {
+                start: launch.engine_start.clone(),
+                stop: launch.engine_stop.clone(),
+            },
+        },
+        proxy: !launch.no_proxy,
+    };
+    let bin = |name: &str| {
+        PathBuf::from(
+            launch
+                .harness_bin
+                .clone()
+                .filter(|_| ledger.config.harness == name)
+                .unwrap_or_else(|| name.to_owned()),
+        )
+    };
+    let harness = wiring::HarnessOptions {
+        fx_bin: bin("fx"),
+        fx_args: launch
+            .fx_args
+            .clone()
+            .unwrap_or_else(|| vec!["acp".to_owned()]),
+        pi_bin: bin("pi"),
+    };
+    let wired = wiring::wire(&project, &engine, &harness, &media).await?;
+    let mut runner = Runner::open(project.clone(), wired.deps, stop)?;
+    let options = RunOptions {
+        resume: args.resume,
+        allow_weak_engine: args.allow_weak_engine,
+        refresh_templates: args.refresh_templates.then(templates),
+        runner_version: runner_version(),
+    };
+    let outcome = runner.run(options).await;
+    wired.services.stop().await;
+    outcome?;
+    Ok(run_exit_code(&project.load_ledger()?))
+}
+
+/// The goal `tenaz demo` gives the scripted harness.
+const DEMO_GOAL: &str = "Build four trivial files.";
+
+/// `tenaz demo`: a whole run with the scripted harness, which needs no
+/// agent and no engine, in a new directory; then what to look at.
+async fn demo(project: PathBuf) -> anyhow::Result<ExitCode> {
+    if std::fs::read_dir(&project).is_ok_and(|mut entries| entries.next().is_some()) {
+        anyhow::bail!(
+            "{} already exists and is not empty; remove it or pass another --project",
+            project.display()
+        );
+    }
+    let dir = project.display().to_string();
+    eprintln!("A scripted run in {dir}: no model and no agent needed. It takes about a minute.\n");
+    let init_line = [
+        "tenaz",
+        "init",
+        "--project",
+        &dir,
+        "--harness",
+        "fake",
+        "--model",
+        "fake",
+        "--provider",
+        "fake",
+        "--set",
+        "engineRetryBaseSec=0",
+        "--set",
+        "notify=false",
+    ];
+    let Command::Init(args) = Cli::try_parse_from(init_line)?.command else {
+        anyhow::bail!("the demo's init line did not parse as init");
+    };
+    let mut plan = plan_from_flags(*args).await?;
+    plan.brief_text = Some(DEMO_GOAL.to_owned());
+    execute_init(plan)?;
+    let Command::Run(args) = Cli::try_parse_from(["tenaz", "run", "--project", &dir])?.command
+    else {
+        anyhow::bail!("the demo's run line did not parse as run");
+    };
+    let code = run(args).await?;
+    let look = [
+        (format!("tenaz status --project {dir}"), "how it ended"),
+        (format!("git -C {dir} log --oneline"), "one commit per step"),
+        (
+            format!("{dir}/.tenaz/"),
+            "the brief, spec, task cards, notes and journal",
+        ),
+    ];
+    let width = look.iter().map(|(what, _)| what.len()).max().unwrap_or(0);
+    eprintln!(
+        "\nThat was a whole run with the scripted harness: no model and no agent, but the \
+         same runner, verify script and git commits as a real run. Look at:"
+    );
+    for (what, why) in &look {
+        eprintln!("  {what:<width$}   {why}");
+    }
+    eprintln!("For a real run, tenaz doctor says what this machine still needs.");
+    Ok(code)
 }
 
 /// `tenaz doctor`: prints what is ready and what is missing, with how to

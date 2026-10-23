@@ -22,6 +22,10 @@ uses [Semantic Versioning](https://semver.org/).
   from one that was killed or failed (`interrupted`).
 - `tenaz guide` prints an Agent Skill for delegating goals to Tenaz from
   another agent.
+- `tenaz demo` shows a whole run in about a minute with no model and no
+  agent: the scripted harness builds a small goal in a new `tenaz-demo`
+  folder. It replaces the three commands the README gave for that, and
+  `tenaz doctor` offers it while something is still missing.
 - `tenaz doctor` checks git, a coding agent, an engine and a model with
   enough context, and says how to install or fix what is missing (the
   install commands for Pi and fx, LM Studio or Ollama, the context setting

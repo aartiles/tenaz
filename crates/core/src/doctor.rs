@@ -296,9 +296,7 @@ pub fn render(checks: &[Check]) -> String {
         out.push_str("Ready. Next: tenaz init, in the folder where the work should happen.\n");
     } else {
         out.push_str("Not ready yet. Fix what is missing, then run tenaz doctor again.\n");
-        out.push_str(
-            "To see Tenaz work without a model first, see \"Try it without a model\" in the README.\n",
-        );
+        out.push_str("Meanwhile, tenaz demo shows a whole run without a model or an agent.\n");
     }
     out
 }
@@ -360,6 +358,7 @@ mod tests {
         assert!(text.contains("xcode-select --install"));
         assert!(text.contains("https://pi.dev/install.sh"));
         assert!(text.contains("Not ready yet"));
+        assert!(text.contains("tenaz demo"));
         m.os = Os::Linux;
         assert!(render(&examine(&m, FLOOR)).contains("sudo apt install git"));
     }

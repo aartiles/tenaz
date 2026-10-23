@@ -118,27 +118,26 @@ source with Rust 1.91 or later:
 cargo install --locked --git https://github.com/aartiles/tenaz tenaz
 ```
 
-Then run `tenaz doctor` to see what else a real run needs.
+Then try `tenaz demo` (below), and run `tenaz doctor` to see what else a
+real run needs.
 
 ## Try it without a model
 
-The scripted harness plays a fixed session script, with engine failures,
-watchdog stops and a review rejection, against a real git repository. It
-needs no agent and no engine:
+Right after installing, this shows a whole run in about a minute. It needs
+no agent and no engine:
 
 ```bash
-echo "Build four trivial files." > brief.md
+tenaz demo
 ```
 
-```bash
-tenaz init --project demo --brief brief.md --harness fake --model fake --provider fake --set engineRetryBaseSec=0 --set notify=false
-```
+A scripted harness plays a fixed session script, with engine failures,
+watchdog stops and a review rejection, against a real git repository in a
+new `tenaz-demo` folder (`--project` picks another). The runner, the
+`verify` script and the commits are the real ones. Then look at
+`tenaz-demo/.tenaz/` and `git -C tenaz-demo log --oneline`.
 
-```bash
-tenaz run --project demo
-```
-
-Then look at `demo/.tenaz/` and `git -C demo log --oneline`.
+`tenaz demo` is `tenaz init` with `--harness fake --model fake --provider
+fake --set engineRetryBaseSec=0 --set notify=false`, then `tenaz run`.
 
 ## Before a real run
 
