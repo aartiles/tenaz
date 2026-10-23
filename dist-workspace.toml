@@ -1,0 +1,21 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The version of dist that generated .github/workflows/release.yml
+cargo-dist-version = "0.32.0"
+ci = "github"
+# A script that installs the right archive and puts tenaz on PATH, and a
+# formula pushed to the tap for `brew install aartiles/tap/tenaz`.
+installers = ["shell", "homebrew"]
+tap = "aartiles/homebrew-tap"
+publish-jobs = ["homebrew"]
+formula = "tenaz"
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Same place the manual install used, and where uv puts its binaries.
+install-path = ["$XDG_BIN_HOME/", "$XDG_DATA_HOME/../bin", "~/.local/bin"]
+# Keep the archive names the releases already use.
+unix-archive = ".tar.gz"
+install-updater = false
+pr-run-mode = "plan"

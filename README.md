@@ -90,15 +90,25 @@ tested and what has not.
 
 ## Install
 
-Download the archive for your platform from the
-[releases page](https://github.com/aartiles/tenaz/releases), unpack it and
-put `tenaz` on your `PATH`:
+With the install script, which puts `tenaz` in `~/.local/bin` and adds
+that directory to your `PATH`. It needs no Rust:
 
 ```bash
-tar -xzf tenaz-*.tar.gz && install -m 755 tenaz-*/tenaz ~/.local/bin/tenaz
+curl -LsSf https://github.com/aartiles/tenaz/releases/latest/download/tenaz-installer.sh | sh
 ```
 
-Or build from source with Rust 1.91 or later:
+Open a new terminal afterwards, or run `source ~/.local/bin/env`. To leave
+your shell profile alone, run the script with `TENAZ_NO_MODIFY_PATH=1`.
+
+With Homebrew, on macOS:
+
+```bash
+brew install aartiles/tap/tenaz
+```
+
+The [releases page](https://github.com/aartiles/tenaz/releases) also has
+the archive for each platform with its SHA-256 checksum. Or build from
+source with Rust 1.91 or later:
 
 ```bash
 cargo install --locked --git https://github.com/aartiles/tenaz tenaz

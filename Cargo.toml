@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
 repository = "https://github.com/aartiles/tenaz"
+homepage = "https://github.com/aartiles/tenaz"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -66,3 +67,8 @@ unnecessary_literal_bound = "allow"
 unused_async_trait_impl = "allow"
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
+
+# The profile that dist builds release archives with.
+[profile.dist]
+inherits = "release"
+lto = "thin"

@@ -75,6 +75,9 @@ uses [Semantic Versioning](https://semver.org/).
 - The README and `docs/COMPATIBILITY.md` name MLX's `mlx_lm.server` and
   TensorFold as engines to use with `--engine generic`, untested.
 - CI on macOS and Linux and a tagged release workflow.
+- Releases are built with dist and come with an install script
+  (`curl ... | sh`) that puts `tenaz` in `~/.local/bin` and on `PATH`, and
+  a Homebrew formula in `aartiles/homebrew-tap`.
 - `requests.jsonl` rows carry the engine's own `timings` per request
   (`server`: prefill and decode milliseconds, cached tokens, and draft
   counts when the engine reports them), and `status` prints the draft

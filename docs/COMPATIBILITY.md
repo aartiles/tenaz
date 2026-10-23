@@ -131,6 +131,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
   not yet with a real model.
 - Whether fx loads the project's `AGENTS.md` by itself has not been
   checked; Pi does. The Tenaz protocol is in every prompt either way.
+- **Install script and Homebrew formula.** The install script has been run
+  on macOS against a local copy of the release files, not against a
+  published release. It skips the checksum check on macOS, where there is
+  no `sha256sum`. The Homebrew formula and the job that pushes it to the
+  tap have not run yet, and need the `aartiles/homebrew-tap` repository
+  and a `HOMEBREW_TAP_TOKEN` secret that can push to it.
 
 ## Model and engine behaviour seen in testing
 
