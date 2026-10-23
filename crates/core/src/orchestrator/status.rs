@@ -127,7 +127,7 @@ pub fn status_text(project: &Project) -> String {
         let _ = write!(
             text,
             "
-Tool-call repairs: {repairs} (the engine sent object arguments as text; .tenaz/private/{TOOL_REPAIRS})"
+Tool-call repairs: {repairs} (tool-call arguments the proxy fixed before the harness saw them; .tenaz/private/{TOOL_REPAIRS})"
         );
     }
     format!("{text}\n")
