@@ -17,12 +17,27 @@ counting them against the work.
                       └──────────── retry, split, block or replan ◀──┘
 ```
 
+You write the goal as a short brief. The first session, the **bootstrap**,
+turns it into numbered requirements, a list of small tasks and a `verify`
+script. Each task then gets its own session: the agent builds it, Tenaz runs
+`verify`, and a fresh session of the same model reviews the diff. A task
+that passes is committed; one that fails is undone and retried, split into
+smaller tasks or marked blocked. When every task is done, a final review
+checks the whole goal against the brief.
+
+**`verify` decides when the work is done.** It is an executable at the
+project root, in any language, that runs every check and ends its output
+with a one-line JSON result. The bootstrap writes it with at least one
+check that passes from the start, and each task adds the checks for what it
+builds. The model saying it is done counts for nothing; only `verify`
+passing does. In an existing project it is a thin wrapper around the
+project's own tests.
+
 - **Fresh sessions, state on disk.** Every unit of work is a new agent
   session with a short context. The spec, task cards, notes and progress live
   in the project under `.tenaz/`, and every step is a git commit.
-- **The runner decides, not the model.** Tenaz runs the project's `verify`
-  script itself, commits or reverts, and decides when to retry, split a task,
-  block or replan.
+- **The runner decides, not the model.** Tenaz runs `verify` itself, commits
+  or reverts, and decides when to retry, split a task, block or replan.
 - **Engine failures are not task failures.** A crash, a refused connection or
   a smaller context than expected is retried with backoff without charging
   the task.
@@ -34,15 +49,33 @@ counting them against the work.
 - **Pause and resume.** Ctrl-C pauses after the current session; run again
   to continue.
 
+### Terms
+
+- **Engine**: the server that runs the model and answers OpenAI-compatible
+  requests (llama.cpp, LM Studio, Ollama, ...). Sushi is one such engine,
+  and the one Tenaz has been tested with most.
+- **Harness**: the coding agent Tenaz drives in each session, fx or Pi.
+  Tenaz talks to fx over ACP (the Agent Client Protocol) and to Pi over its
+  RPC mode.
+- **Brief**: the goal in your words, in `.tenaz/brief.md`. It does not
+  change after `init`.
+- **Task card**: one small task in `.tenaz/tasks/`, with the requirements it
+  covers and the `verify` checks that prove it. Check IDs start with the
+  task's ID (`T007.import-quoted-csv`); the bootstrap's start with `T000.`.
+- **Blocked**: the run stopped on something it cannot get past by itself,
+  such as a task that failed its retries and splits. `tenaz status` says
+  why; fix the cause and run again with `--resume`.
+
 ## What you need
 
 - macOS on Apple silicon or Linux x86_64, and `git`.
 - **A coding agent** Tenaz can drive: [fx](https://github.com/vercel-labs/fx)
-  (over ACP) or [Pi](https://github.com/earendil-works/pi) (over its RPC mode).
+  or [Pi](https://github.com/earendil-works/pi).
 - **An OpenAI-compatible engine** serving a model with tool calling:
   llama.cpp's `llama-server`, LM Studio, Ollama, vLLM, MLX's
-  `mlx_lm.server`, TensorFold, Sushi or similar.
-  Reasoning and prefix caching are checked before the first session.
+  `mlx_lm.server`, TensorFold, Sushi or similar. A context window of 32k
+  tokens is the practical minimum. Reasoning and prefix caching are checked
+  before the first session.
 - Optional: [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for images.
 
 How much memory depends on the model you choose, not on Tenaz.
@@ -52,7 +85,8 @@ tested and what has not.
 ## Install
 
 Download the archive for your platform from the
-[releases page](../../releases), unpack it and put `tenaz` on your `PATH`:
+[releases page](https://github.com/aartiles/tenaz/releases), unpack it and
+put `tenaz` on your `PATH`:
 
 ```bash
 tar -xzf tenaz-*.tar.gz && install -m 755 tenaz-*/tenaz ~/.local/bin/tenaz
@@ -84,28 +118,74 @@ tenaz run --project demo
 
 Then look at `demo/.tenaz/` and `git -C demo log --oneline`.
 
+## Before a real run
+
+> **By default Tenaz does not sandbox the agent.** The agent runs the shell
+> commands and writes the files the model asks for, as your user, and Tenaz
+> approves every permission request it makes; the project's `verify` script
+> runs the same way. A model that misreads the goal can touch anything your
+> user can. `init --set sandbox=true` limits that: see [Sandbox](#sandbox).
+> Either way, run Tenaz in a container, a VM or a user account that holds
+> nothing you would miss, and do not point it at a brief or a repository you
+> do not trust. While a run works, the engine proxy and the media MCP server
+> listen on `127.0.0.1` without authentication, so any local process can
+> reach them. See [`SECURITY.md`](SECURITY.md).
+
+> **Tenaz commits to the project's repository.** Every step of a run is a
+> commit, and a failed attempt is undone with `git reset --hard` and
+> `git clean -fd`, which deletes untracked files that are not ignored. So
+> in a repository that already has commits, the run never touches your
+> checkout: it works on a branch `tenaz/<goal>` in a worktree next to it.
+> See [Where the run works](#where-the-run-works).
+
 ## Run it on a real goal
 
-Start your engine with a model loaded, then:
+Write the goal in a brief of one page or less. Say what a person can run and
+see when it is done, what must not change, how the project is built and
+tested today, and any constraint the code does not show. Leave out the plan:
+Tenaz makes its own. Goals that can be checked by running the program suit
+it best; a run takes hours.
 
-```bash
-tenaz init
-```
+1. Start your engine with a model loaded, then create the project:
 
-It asks what to build, finds the coding agents on your `PATH`, the engines
-on their usual ports (Sushi 12345, llama.cpp 8080, LM Studio 1234, Ollama
-11434, vLLM 8000) with the models they serve and their context windows,
-and ComfyUI on 8188 when it runs. It shows what it found, prints the same
-setup as a `tenaz init` command line for next time, and creates the project.
-Then, from the project directory:
+   ```bash
+   tenaz init
+   ```
 
-```bash
-tenaz run
-```
+   It asks what to build, finds the coding agents on your `PATH`, the
+   engines on their usual ports with the models they serve and their
+   context windows, and ComfyUI when it runs. It shows what it found,
+   prints the same setup as a `tenaz init` command line for next time, and
+   creates the project.
 
-```bash
-tenaz status
-```
+2. From the project directory, start the run:
+
+   ```bash
+   tenaz run
+   ```
+
+   It probes the engine, then works until the goal is met or a task blocks.
+
+3. From another terminal, check on it:
+
+   ```bash
+   tenaz status
+   ```
+
+   `tenaz watch` follows it session by session instead.
+
+4. When the run is done (or stopped), turn it into something to review:
+
+   ```bash
+   tenaz finish
+   ```
+
+   This creates a branch in your repository, named after the goal, with the
+   project's changes as one commit and without `.tenaz/`. Nothing is pushed.
+
+## Reference
+
+### The commands
 
 - `init` creates the project (or uses the directory you point it at),
   writes the goal to `.tenaz/brief.md`, adds the working protocol
@@ -113,61 +193,43 @@ tenaz status
   model, the agent, how to start the engine and the run parameters in
   `.tenaz/run.json`, and makes the first commit. Everything it writes is
   under `.tenaz/`, with its own `.tenaz/.gitignore`; the project's
-  `AGENTS.md`, `CLAUDE.md` and `.gitignore` are left as they are.
-- `run` reads all of that from `run.json`, probes the engine, then works
-  until the goal is met or a task blocks. A launch flag given to `run`
+  `AGENTS.md`, `CLAUDE.md` and `.gitignore` are left as they are. The
+  wizard looks for engines on Sushi's port 12345, llama.cpp's 8080, LM
+  Studio's 1234, Ollama's 11434 and vLLM's 8000, and for ComfyUI on 8188.
+- `run` reads all of that from `run.json`. A launch flag given to `run`
   (`--comfyui`, `--engine-start`, ...) replaces the pinned value and is
   saved. `--resume` continues a blocked run after you have fixed what
-  blocked it.
+  blocked it. A second `run` on a project that is already running is
+  refused.
 - `status` reads files only and is safe while a run works.
-- `tenaz watch` follows the run as it works, session by session: with
+- `watch` follows the run as it works, session by session: with
   `--level summary` the run log only, with `actions` (the default) also each
   tool call and model reply on one line with the context it used and the
   decode speed, with `full` whole replies and the start of tool results, and
   with `debug` the harness's own log too. It reads files only; Ctrl-C stops
   watching, not the run.
+- `finish` creates a branch in your repository (named after the goal, or
+  `--branch`) with one commit on top of the commit the run started from:
+  the project's changes, without `.tenaz/`. One commit, because the run's
+  own history interleaves bookkeeping with steps that later steps rework;
+  that history stays on `tenaz/<goal>`. `--remove-worktree` then removes
+  the worktree (its uncommitted `run.json` and journal go with it).
+- `params` lists the run parameters that `--set key=value` overrides.
 
-> **Tenaz commits to the project's repository.** Every step of a run is a
-> commit, and a failed attempt is undone with `git reset --hard` and
-> `git clean -fd`, which deletes untracked files that are not ignored. So
-> on a repository that already has commits, `init` leaves your checkout
-> alone: it creates a branch `tenaz/<goal>` from your HEAD, checks it out in
-> a worktree next to the repository (`../<repo>-tenaz-<goal>`; `--worktree`
-> and `--name` change them), records the starting branch and commit in
-> `.tenaz/run.json`, and the run works there. `run` and `status` say where,
-> and point to the worktree when started from your checkout. `init` refuses
-> a tree with uncommitted changes (an untracked `.tenaz/brief.md` is taken
-> as the brief) rather than leave them behind. `--in-place` keeps the old
-> behaviour: the run commits on your current branch, and its first commit
-> takes everything uncommitted (`git add -A`). A new or empty directory
-> becomes a new repository, as before.
+### Where the run works
 
-> **By default Tenaz does not sandbox the agent.** The agent runs the shell
-> commands and writes the files the model asks for, as your user, and Tenaz
-> approves every permission request it makes; the project's `verify` script
-> runs the same way. A model that misreads the goal can touch anything your
-> user can. `init --set sandbox=true` (or `"sandbox": true` in the params
-> of `.tenaz/run.json`) limits that: see [Sandbox](#sandbox). Either way,
-> run Tenaz in a container, a VM or a user account that holds nothing you
-> would miss, and do not point it at a brief or a repository you do not
-> trust. While a run works, the engine proxy and the media MCP server listen
-> on `127.0.0.1` without authentication, so any local process can reach
-> them. See [`SECURITY.md`](SECURITY.md).
+In a repository that already has commits, `init` creates a branch
+`tenaz/<goal>` from your HEAD and checks it out in a worktree next to the
+repository (`../<repo>-tenaz-<goal>`; `--worktree` and `--name` change
+them). It records the starting branch and commit in `.tenaz/run.json`, and
+the run works there. `run` and `status` say where, and point to the
+worktree when started from your checkout. `init` refuses a tree with
+uncommitted changes rather than leave them behind; an untracked
+`.tenaz/brief.md` is taken as the brief.
 
-When the run is done (or stopped), turn it into something to review:
-
-```bash
-tenaz finish
-```
-
-`finish` creates a branch in your repository (named after the goal, or
-`--branch`) with one commit on top of the commit the run started from: the
-project's changes, without `.tenaz/` (and, for runs from older layouts,
-without the root files and `.gitignore` lines Tenaz's first commit
-added). One commit, because the run's own history interleaves bookkeeping
-with steps that later steps rework; that history stays on `tenaz/<goal>`. `--remove-worktree` then
-removes the worktree (its uncommitted `run.json` and journal go with it).
-Nothing is pushed.
+`--in-place` makes the run commit on your current branch instead, and its
+first commit takes everything uncommitted (`git add -A`). A new or empty
+directory becomes a new repository.
 
 ### Without questions
 
@@ -178,16 +240,25 @@ scripts and CI. With llama.cpp's server on its default port:
 tenaz init --project my-goal --brief brief.md --model my-model --base-url http://127.0.0.1:8080/v1 --context-window 65536
 ```
 
+`--vision` says the model reads images. `--set key=value` overrides a
+parameter; `tenaz params` lists them.
+
+### Pi instead of fx
+
 `--harness pi` uses Pi instead of fx. Pi needs no setup of its own: like
 fx, it runs with a configuration Tenaz writes for the run, so the engine
 and model are the same answers or flags. When your `~/.pi/agent/models.json`
 lists the model, the wizard offers it and the run keeps its settings there
-(API key, thinking map); the file is only read. `--vision` says the model reads
-images. `--set key=value` overrides a parameter; `tenaz params` lists them.
+(API key, thinking map); the file is only read.
+
+### Images
+
 To give the agent an image tool, point it at ComfyUI and an API-format
-workflow (`--comfyui http://127.0.0.1:8188 --workflow default=txt2img.json`);
-with an engine other than Sushi, `--engine-stop` and `--engine-start` let
+workflow (`--comfyui http://127.0.0.1:8188 --workflow default=txt2img.json`).
+With an engine other than Sushi, `--engine-stop` and `--engine-start` let
 Tenaz free the memory while images render.
+
+### Protocol, prompts and skills
 
 The protocol in `.tenaz/protocol.md` and the prompts in `.tenaz/prompts/`
 are plain Markdown in your project; edit them to change how the agent works.
@@ -196,16 +267,18 @@ the agent finding a context file. The project's own `AGENTS.md` or
 `CLAUDE.md`, which agents such as Pi load by themselves, still apply to how
 the code is written; where they disagree with the protocol about how the
 work is done (commits, branches, scope), the protocol wins. Sessions may not
-edit either file. Skill
-directories passed with `--skill` at `init` are pinned read-only into
+edit either file.
+
+Skill directories passed with `--skill` at `init` are pinned read-only into
 `.tenaz/skills/`, and are the only skills the agent sees; `--set
 agentSkills=true` also lets it load the ones it finds by itself.
 
 ### Sandbox
 
-With `--set sandbox=true` at `init`, the agent and `verify` run in an OS
-sandbox: Seatbelt on macOS, Landlock on Linux (5.13 or later). Nothing to
-install. Everything they start inherits it.
+With `--set sandbox=true` at `init` (or `"sandbox": true` in the params of
+`.tenaz/run.json`), the agent and `verify` run in an OS sandbox: Seatbelt on
+macOS, Landlock on Linux (5.13 or later). Nothing to install. Everything
+they start inherits it.
 
 - They can write only to the project, its git directory (for a worktree,
   the repository's shared `.git` too), the temporary directories, `/dev`
@@ -240,18 +313,18 @@ Pointed at a repository that already has commits, `init` sets
 The run then treats the brief as a change to that project:
 
 - `verify` is `.tenaz/verify`, a thin wrapper that runs the project's own
-  tests and reports them under the contract, so nothing is added at the
+  tests and reports them in the `verify` format, so nothing is added at the
   root and the wrapper is not part of the change.
 - Checks for new behaviour go into the project's own test suite, written
   like its existing tests, so they ship with the change; its existing tests
-  are the `T000.` checks and must keep passing.
+  are the bootstrap's `T000.` checks and must keep passing.
 - Bootstrap maps only what the change touches and plans as few tasks as the
   change needs, instead of a skeleton and 6 to 40 tasks.
-- The run works on its own branch in a worktree (above), and
-  `tenaz finish` puts the change on a branch of your repository as one
-  commit, without `.tenaz/`.
+- The run works on its own branch in a worktree (see
+  [Where the run works](#where-the-run-works)), and `tenaz finish` puts the
+  change on a branch of your repository as one commit, without `.tenaz/`.
 
-## From a script or another agent
+### From a script or another agent
 
 A frontier agent (Claude Code, Codex and the like) can hand a long goal to
 Tenaz and check the result afterwards. Everything it needs is in the binary:
@@ -269,8 +342,6 @@ Tenaz and check the result afterwards. Everything it needs is in the binary:
 ```bash
 mkdir -p ~/.claude/skills/tenaz && tenaz guide > ~/.claude/skills/tenaz/SKILL.md
 ```
-
-A second `tenaz run` on a project that is already running is refused.
 
 ## How it compares
 
