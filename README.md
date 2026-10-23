@@ -10,6 +10,11 @@ restarts, the model loops on the same tool call, and an image or speech model
 cannot be loaded next to the LLM. Tenaz handles those failures instead of
 counting them against the work.
 
+You can start a run yourself, or let a frontier agent such as Claude Code
+or Codex hand it a long goal through Tenaz's
+[companion skill](#delegate-from-another-agent) and check the result when
+it is done.
+
 ## How it works
 
 ```text
@@ -45,15 +50,16 @@ project's own tests.
   steering message first, then the session is stopped.
 - **One resident model.** When the agent asks for an image, Tenaz unloads the
   LLM, runs the image model, frees it and reloads the LLM. The agent's
-  requests wait meanwhile instead of failing.
+  requests wait meanwhile instead of failing. See [Images](#images) for
+  what that needs from your engine.
 - **Pause and resume.** Ctrl-C pauses after the current session; run again
   to continue.
 
 ### Terms
 
 - **Engine**: the server that runs the model and answers OpenAI-compatible
-  requests (llama.cpp, LM Studio, Ollama, ...). Sushi is one such engine,
-  and the one Tenaz has been tested with most.
+  requests (llama.cpp, LM Studio, Ollama, ...). Tenaz needs only that API
+  to run; freeing memory for images needs more (see [Images](#images)).
 - **Harness**: the coding agent Tenaz drives in each session, fx or Pi.
   Tenaz talks to fx over ACP (the Agent Client Protocol) and to Pi over its
   RPC mode.
@@ -183,6 +189,32 @@ it best; a run takes hours.
    This creates a branch in your repository, named after the goal, with the
    project's changes as one commit and without `.tenaz/`. Nothing is pushed.
 
+## Delegate from another agent
+
+A frontier agent (Claude Code, Codex and the like) can hand a long goal to
+Tenaz, keep working on other things, and check the result when the run is
+done. The local model does the hours of work; the frontier agent writes the
+brief and reviews what comes back.
+
+Tenaz ships a companion [Agent Skill](crates/cli/skill/SKILL.md) for that.
+It tells the agent when to delegate and when not to, how to write the
+brief, how to start and follow the run, and how to check the result before
+reporting it. `tenaz guide` prints it; to install it for Claude Code:
+
+```bash
+mkdir -p ~/.claude/skills/tenaz && tenaz guide > ~/.claude/skills/tenaz/SKILL.md
+```
+
+Then ask the agent to hand the goal to Tenaz. Scripts can use the same
+interface the skill relies on:
+
+- `tenaz --help` gives the workflow and a non-interactive example.
+- `tenaz run` exits with 0 when the goal is met, 3 when it completes with
+  gaps, 4 when it is blocked and 5 when it pauses; 1 is an error.
+- `tenaz status --json` prints the phase, the state (`running`, `paused`,
+  `blocked`, `interrupted`, `complete`, `complete_with_gaps`), the block
+  reason and the tasks as one JSON object.
+
 ## Reference
 
 ### The commands
@@ -255,8 +287,27 @@ lists the model, the wizard offers it and the run keeps its settings there
 
 To give the agent an image tool, point it at ComfyUI and an API-format
 workflow (`--comfyui http://127.0.0.1:8188 --workflow default=txt2img.json`).
-With an engine other than Sushi, `--engine-stop` and `--engine-start` let
-Tenaz free the memory while images render.
+
+Tenaz does not assume the LLM and the image model fit in memory together.
+Before each image it frees the LLM, and after it loads the LLM again. The
+OpenAI API has no standard way to unload a model, so how Tenaz does that
+depends on the engine:
+
+- **An engine with a load and unload API.** Tenaz uses it. Sushi is the one
+  it supports today (`--engine sushi`); `init` detects it from the engine's
+  answers.
+- **Any other engine** (`--engine generic`). Give Tenaz two
+  commands at `init`, or let the wizard ask for them:
+  - `--engine-stop` frees the memory, for example by stopping the engine's
+    process. Tenaz runs it, then waits until the model is no longer listed
+    at `/v1/models` (or the engine stops answering).
+  - `--engine-start` brings the engine back with the same model. It must
+    return once the engine is launched, so start a server process in the
+    background. Tenaz then waits up to 20 minutes for the model to be
+    listed again.
+
+  Both are whole command lines, run as your user. Without them, a generic
+  engine cannot free the LLM, and image requests fail.
 
 ### Protocol, prompts and skills
 
@@ -323,25 +374,6 @@ The run then treats the brief as a change to that project:
 - The run works on its own branch in a worktree (see
   [Where the run works](#where-the-run-works)), and `tenaz finish` puts the
   change on a branch of your repository as one commit, without `.tenaz/`.
-
-### From a script or another agent
-
-A frontier agent (Claude Code, Codex and the like) can hand a long goal to
-Tenaz and check the result afterwards. Everything it needs is in the binary:
-
-- `tenaz --help` gives the workflow and a non-interactive example.
-- `tenaz run` exits with 0 when the goal is met, 3 when it completes with
-  gaps, 4 when it is blocked and 5 when it pauses; 1 is an error.
-- `tenaz status --json` prints the phase, the state (`running`, `paused`,
-  `blocked`, `interrupted`, `complete`, `complete_with_gaps`), the block
-  reason and the tasks as one JSON object.
-- `tenaz guide` prints an [Agent Skill](crates/cli/skill/SKILL.md): when to
-  delegate, how to write the brief, how to check what comes back. To install
-  it for Claude Code:
-
-```bash
-mkdir -p ~/.claude/skills/tenaz && tenaz guide > ~/.claude/skills/tenaz/SKILL.md
-```
 
 ## How it compares
 
