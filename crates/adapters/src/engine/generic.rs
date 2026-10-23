@@ -97,6 +97,12 @@ impl EngineAdapter for GenericEngine {
         )
         .await
     }
+
+    /// Only with both commands: a stop without a start could not bring the
+    /// LLM back.
+    fn can_unload(&self) -> bool {
+        self.commands.start.is_some() && self.commands.stop.is_some()
+    }
 }
 
 #[cfg(test)]
@@ -152,5 +158,24 @@ mod tests {
             failing.load("m").await.unwrap_err(),
             EngineError::Refused(_)
         ));
+    }
+
+    #[test]
+    fn can_unload_only_with_both_commands() {
+        let engine = |start: bool, stop: bool| {
+            GenericEngine::new(
+                "g",
+                "http://127.0.0.1:1/v1",
+                Commands {
+                    start: start.then(|| vec!["start".into()]),
+                    stop: stop.then(|| vec!["stop".into()]),
+                },
+                Duration::from_secs(1),
+            )
+        };
+        assert!(engine(true, true).can_unload());
+        assert!(!engine(true, false).can_unload());
+        assert!(!engine(false, true).can_unload());
+        assert!(!engine(false, false).can_unload());
     }
 }

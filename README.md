@@ -316,8 +316,9 @@ depends on the engine:
     background. Tenaz then waits up to 20 minutes for the model to be
     listed again.
 
-  Both are whole command lines, run as your user. Without them, a generic
-  engine cannot free the LLM, and image requests fail.
+  Both are whole command lines, run as your user. Without both, the LLM
+  stays loaded and serving while the image renders, so the memory has to
+  hold the two models together.
 
 ### Protocol, prompts and skills
 

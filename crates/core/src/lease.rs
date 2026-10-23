@@ -1,6 +1,7 @@
 //! The lease: one resident engine. The LLM holds it by default; a media job
 //! borrows it (unload LLM, load media, run, unload media, reload LLM). The
-//! proxy's gate holds LLM requests while the LLM is away.
+//! proxy's gate holds LLM requests while the LLM is away. An engine that
+//! cannot unload keeps the LLM loaded, and the job runs next to it.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -74,7 +75,7 @@ impl std::fmt::Display for Holder {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeaseTransition {
     pub holder: Holder,
-    /// `unload`, `load`, `job`, `ready`, `failed`.
+    /// `unload`, `load`, `job`, `ready`, `kept`, `failed`.
     pub transition: String,
     pub ms: u64,
     pub detail: Option<String>,
@@ -179,9 +180,27 @@ impl LeaseManager {
             .ok_or_else(|| LeaseError::UnknownMedia(name.to_owned()))?;
         let mut holder = self.holder.lock().await;
         let media_holder = Holder::Media(name.to_owned());
+        if !self.llm.can_unload() {
+            // The LLM stays loaded and serving; the media engine loads next
+            // to it, so the memory has to hold both.
+            self.observe(
+                Holder::Llm,
+                "kept",
+                0,
+                Some("the engine cannot unload the LLM".to_owned()),
+            );
+            return self.media_cycle(&media_holder, adapter.as_ref(), job).await;
+        }
         self.gate.close();
-        self.timed(Holder::Llm, "unload", self.llm.unload(&self.llm_model))
-            .await?;
+        let unloaded = self
+            .timed(Holder::Llm, "unload", self.llm.unload(&self.llm_model))
+            .await;
+        if let Err(error) = unloaded {
+            // The LLM may still be serving; if it is not, requests meet the
+            // engine retry like any engine failure instead of waiting here.
+            self.gate.open();
+            return Err(error.into());
+        }
         *holder = media_holder.clone();
         let result = self.media_cycle(&media_holder, adapter.as_ref(), job).await;
         let reload = self
@@ -271,6 +290,16 @@ mod tests {
         log: Arc<Log>,
         loaded: StdMutex<bool>,
         fail_reload: bool,
+        unload: Unload,
+    }
+
+    /// How the fake LLM engine answers an unload.
+    #[derive(Clone, Copy)]
+    enum Unload {
+        Works,
+        Fails,
+        /// The engine has no way to unload (a generic engine without commands).
+        Unsupported,
     }
     #[async_trait]
     impl EngineAdapter for FakeLlm {
@@ -295,9 +324,15 @@ mod tests {
             Ok(())
         }
         async fn unload(&self, _model: &str) -> Result<(), EngineError> {
+            if matches!(self.unload, Unload::Fails) {
+                return Err(EngineError::Refused("stop command failed".into()));
+            }
             self.log.push("llm unload");
             *self.loaded.lock().unwrap() = false;
             Ok(())
+        }
+        fn can_unload(&self) -> bool {
+            !matches!(self.unload, Unload::Unsupported)
         }
     }
 
@@ -339,10 +374,13 @@ mod tests {
         }
     }
 
-    fn setup(
-        fail_job: bool,
-        fail_reload: bool,
-    ) -> (LeaseManager, Arc<Log>, Arc<StdMutex<Vec<LeaseTransition>>>) {
+    type Setup = (LeaseManager, Arc<Log>, Arc<StdMutex<Vec<LeaseTransition>>>);
+
+    fn setup(fail_job: bool, fail_reload: bool) -> Setup {
+        setup_llm(fail_job, fail_reload, Unload::Works)
+    }
+
+    fn setup_llm(fail_job: bool, fail_reload: bool, unload: Unload) -> Setup {
         let log = Arc::new(Log::default());
         let transitions = Arc::new(StdMutex::new(Vec::new()));
         let seen = transitions.clone();
@@ -351,6 +389,7 @@ mod tests {
             log: log.clone(),
             loaded: StdMutex::new(true),
             fail_reload,
+            unload,
         });
         let gate = Gate::new();
         let manager =
@@ -446,6 +485,37 @@ mod tests {
         log.0.lock().unwrap().retain(|l| l != "llm unload");
         manager.ensure_llm().await.unwrap();
         assert!(manager.gate().is_open());
+    }
+
+    #[tokio::test]
+    async fn an_engine_that_cannot_unload_keeps_the_llm_loaded_and_the_gate_open() {
+        let (manager, log, transitions) = setup_llm(false, false, Unload::Unsupported);
+        manager.run_media("comfyui", job()).await.unwrap();
+        assert_eq!(
+            log.lines(),
+            vec!["comfy load", "comfy job image (gate open)", "comfy unload"]
+        );
+        assert!(manager.gate().is_open());
+        assert_eq!(manager.holder().await, Holder::Llm);
+        assert_eq!(
+            transitions.lock().unwrap()[0].transition,
+            "kept",
+            "the journal says why the LLM stayed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_unload_reopens_the_gate_and_skips_the_job() {
+        let (manager, log, _) = setup_llm(false, false, Unload::Fails);
+        let error = manager.run_media("comfyui", job()).await.unwrap_err();
+        assert!(matches!(error, LeaseError::Engine(EngineError::Refused(_))));
+        assert!(
+            log.lines().is_empty(),
+            "nothing loaded or run: {:?}",
+            log.lines()
+        );
+        assert!(manager.gate().is_open());
+        assert_eq!(manager.holder().await, Holder::Llm);
     }
 
     #[tokio::test]

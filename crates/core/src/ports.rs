@@ -191,6 +191,11 @@ pub trait EngineAdapter: Send + Sync {
     async fn load(&self, model: &str) -> Result<(), EngineError>;
     /// Returns when the memory is released.
     async fn unload(&self, model: &str) -> Result<(), EngineError>;
+    /// Whether `unload` and a later `load` can work. When they cannot, a
+    /// media job runs with the LLM still loaded.
+    fn can_unload(&self) -> bool {
+        true
+    }
 }
 
 /// A request to a media engine.

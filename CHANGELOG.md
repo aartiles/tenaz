@@ -135,6 +135,10 @@ uses [Semantic Versioning](https://semver.org/).
 - The protocol tells every session that commands run at the project root
   and to use relative paths: models guessed the project's absolute path for
   `cwd` or `cd`, and the guess was often wrong.
+- With a generic engine and no `--engine-stop` and `--engine-start`, an
+  image now renders with the LLM still loaded, as the wizard says; before,
+  the image request failed. A stop command that fails no longer leaves the
+  agent's requests waiting until the next session.
 
 ### Security
 

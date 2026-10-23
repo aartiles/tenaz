@@ -551,7 +551,8 @@ async fn ask_media<R: BufRead, W: Write>(
     {
         p.say(
             "To free the memory for images, Tenaz stops the engine and starts it again after. \
-             Leave both empty to keep the model loaded.",
+             Leave both empty to keep the model loaded next to the image model, \
+             if the memory holds both.",
         )?;
         engine_stop =
             Some(p.ask("Command that stops the engine", Some(""))?).filter(|s| !s.is_empty());
