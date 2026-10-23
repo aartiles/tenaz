@@ -1,6 +1,6 @@
 ---
 name: tenaz
-description: Delegate a long, verifiable coding goal to Tenaz, which plans it and drives a local model session by session until the goal is met, on its own branch. Use when the user asks to hand work to Tenaz or to a local model, or to run a goal unattended for hours; not for small edits or work that needs judgment at every step.
+description: Delegate a long, verifiable coding goal to Tenaz, which plans it and drives a local model session by session until the goal is met, on its own branch. Use when the user asks to hand work to Tenaz or to a local model, or to run a goal unattended for hours, and when they want to install Tenaz, set it up or check why it is not ready (tenaz doctor, tenaz demo); not for small edits or work that needs judgment at every step.
 ---
 
 # Delegating a goal to Tenaz
@@ -9,7 +9,9 @@ Tenaz runs a coding agent on a local model for hours: it plans the goal,
 splits it into tasks, verifies each one with a `verify` script it writes, and
 commits. You stay the one who decides what to build and whether the result
 is good enough. `tenaz --help` has the commands, flags and exit codes; this
-file is about the judgment around them.
+file is about the judgment around them. If a command named here is not in
+`tenaz --help`, the installed Tenaz is older than this skill: tell the user
+to update it the way they installed it.
 
 ## When to delegate
 
@@ -19,13 +21,41 @@ port, a batch of similar changes, a test suite. Do the work yourself when it
 is small, when it hinges on taste or on knowledge the brief cannot carry, or
 when the user wants it now: a run takes hours and holds the machine's memory.
 
-Tenaz needs an engine serving a model with tool calling (`tenaz init` without
-`--model`, in a terminal, finds one). `tenaz doctor` says whether git, a
-coding agent, an engine and a model with enough context are there, and exits
-with 1 when something is missing. If no engine is running, ask the user to
-start one; do not start or stop engines yourself. `tenaz demo` runs a
-scripted goal with no model, in about a minute, to show the user what a
-run looks like; it does not check the setup.
+## Set it up
+
+Do this once, and again whenever a run fails before its first session.
+
+1. `tenaz --version`. If it is not found, give the user one of these and
+   let them run it (it changes their machine):
+   - `curl -LsSf https://github.com/aartiles/tenaz/releases/latest/download/tenaz-installer.sh | sh`
+     installs to `~/.local/bin` and adds it to `PATH`; a new terminal
+     picks it up.
+   - `brew install aartiles/tap/tenaz` on macOS with Homebrew.
+2. `tenaz doctor`. It checks git, a coding agent (Pi or fx), an engine on
+   the usual ports (`--base-url` adds another address) and a model with at
+   least 32k tokens of context, prints `ok`, `check` or `missing` for each
+   with the fix under it, and exits with 1 while something is missing.
+   Work through the fixes in order:
+   - git or the agent missing: the fix is an install command. Show it and
+     ask before running it; installing software is the user's call.
+   - no engine, no model, or too small a context: the user starts the
+     engine, loads the model and sets its context (doctor names the
+     setting for LM Studio, Ollama, llama.cpp and vLLM). Do not start,
+     stop or reconfigure engines yourself.
+   - `check` on the model means the engine does not report its context
+     (Ollama): ask the user what it runs with, and pass it to `init` as
+     `--context-window`.
+   Run `tenaz doctor` again until it says Ready. Whether the model calls
+   tools is checked by `tenaz run` before its first session, not here.
+3. To show the user what a run looks like before the setup is done,
+   `tenaz demo --project <empty scratch dir>` runs a scripted goal with no
+   model and no agent in about a minute. Put it outside the user's
+   repository. It proves nothing about their engine or model.
+
+For the `init` line, take the engine address and the model id from what
+doctor found, or ask the user when it lists several. A person at a
+terminal can instead run `tenaz init` with no `--model` and answer the
+setup wizard's questions; you cannot, because it needs a terminal.
 
 ## Write the brief
 

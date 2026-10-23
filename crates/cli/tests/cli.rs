@@ -26,7 +26,7 @@ fn guide_prints_the_skill() {
         text.starts_with("---\nname: tenaz\ndescription: "),
         "{text}"
     );
-    assert_eq!(text, include_str!("../skill/SKILL.md"));
+    assert_eq!(text, include_str!("../../../skills/tenaz/SKILL.md"));
 }
 
 #[test]

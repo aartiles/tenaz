@@ -211,10 +211,17 @@ Tenaz, keep working on other things, and check the result when the run is
 done. The local model does the hours of work; the frontier agent writes the
 brief and reviews what comes back.
 
-Tenaz ships a companion [Agent Skill](crates/cli/skill/SKILL.md) for that.
-It tells the agent when to delegate and when not to, how to write the
-brief, how to start and follow the run, and how to check the result before
-reporting it. `tenaz guide` prints it; to install it for Claude Code:
+Tenaz ships a companion [Agent Skill](skills/tenaz/SKILL.md) for that.
+It tells the agent how to install and set up Tenaz with `tenaz doctor`,
+when to delegate and when not to, how to write the brief, how to start and
+follow the run, and how to check the result before reporting it. Install
+it with [skills](https://skills.sh), which asks which agents to add it to:
+
+```bash
+npx skills add aartiles/tenaz
+```
+
+Or take the copy that matches your `tenaz` binary; for Claude Code:
 
 ```bash
 mkdir -p ~/.claude/skills/tenaz && tenaz guide > ~/.claude/skills/tenaz/SKILL.md

@@ -22,6 +22,10 @@ uses [Semantic Versioning](https://semver.org/).
   from one that was killed or failed (`interrupted`).
 - `tenaz guide` prints an Agent Skill for delegating goals to Tenaz from
   another agent.
+- The agent skill moved to `skills/tenaz/SKILL.md`, so `npx skills add
+  aartiles/tenaz` installs it. It now also covers installing and setting
+  up Tenaz: `tenaz doctor` and its fixes, what to ask the user to do
+  rather than doing it, and `tenaz demo`.
 - `tenaz demo` shows a whole run in about a minute with no model and no
   agent: the scripted harness builds a small goal in a new `tenaz-demo`
   folder. It replaces the three commands the README gave for that, and

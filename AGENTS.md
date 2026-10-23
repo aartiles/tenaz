@@ -27,8 +27,9 @@ until a goal's `verify` passes. Read before changing code:
 - Keep stable what scripts read: field names in `run.json` and
   `journal.jsonl`, `tenaz status --json`, and the exit codes of `tenaz run`.
 - Prompt templates (`crates/cli/templates/`) and the agent skill
-  (`crates/cli/skill/SKILL.md`) are compiled into the binary. A change to the
-  CLI's behaviour or flags updates `SKILL.md` and the README with it.
+  (`skills/tenaz/SKILL.md`, where `npx skills add` finds it) are compiled
+  into the binary. A change to the CLI's behaviour or flags updates
+  `SKILL.md` and the README with it.
 - A decision with real alternatives gets an ADR in `docs/adr/`.
 
 ## Every change

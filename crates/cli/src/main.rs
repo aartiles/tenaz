@@ -1058,7 +1058,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         Command::FxShim { command } => fx_shim(&command),
         Command::SandboxExec(args) => Ok(sandbox_exec(args)),
         Command::Guide => {
-            print!("{}", include_str!("../skill/SKILL.md"));
+            print!("{}", include_str!("../../../skills/tenaz/SKILL.md"));
             Ok(ExitCode::SUCCESS)
         }
         Command::Demo { project } => demo(project).await,
