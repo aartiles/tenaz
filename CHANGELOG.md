@@ -72,6 +72,8 @@ uses [Semantic Versioning](https://semver.org/).
   fake harness.
 - Engine adapters for Sushi and generic OpenAI-compatible engines; ComfyUI
   media adapter; MCP server exposing `generate_image`.
+- The README and `docs/COMPATIBILITY.md` name MLX's `mlx_lm.server` and
+  TensorFold as engines to use with `--engine generic`, untested.
 - CI on macOS and Linux and a tagged release workflow.
 - `requests.jsonl` rows carry the engine's own `timings` per request
   (`server`: prefill and decode milliseconds, cached tokens, and draft

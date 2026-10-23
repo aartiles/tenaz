@@ -40,7 +40,8 @@ counting them against the work.
 - **A coding agent** Tenaz can drive: [fx](https://github.com/vercel-labs/fx)
   (over ACP) or [Pi](https://github.com/earendil-works/pi) (over its RPC mode).
 - **An OpenAI-compatible engine** serving a model with tool calling:
-  llama.cpp's `llama-server`, LM Studio, Ollama, vLLM, Sushi or similar.
+  llama.cpp's `llama-server`, LM Studio, Ollama, vLLM, MLX's
+  `mlx_lm.server`, TensorFold, Sushi or similar.
   Reasoning and prefix caching are checked before the first session.
 - Optional: [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for images.
 
