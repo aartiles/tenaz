@@ -218,6 +218,9 @@ pub struct SessionMetrics {
     /// The harness ended before the turn settled, without the runner
     /// stopping it: what happened, with the tail of its stderr.
     pub harness_exit: Option<String>,
+    /// A tool call that had started and not ended when the harness exited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_in_flight: Option<String>,
 }
 
 impl SessionMetrics {
@@ -239,8 +242,10 @@ impl SessionMetrics {
     }
 
     /// The session ended because of the engine or the harness, not the task.
+    /// A harness that ended while one of the session's tool calls ran is not
+    /// counted: that call is what ended it, and a rerun would make it again.
     pub fn engine_failed(&self) -> bool {
-        self.harness_exit.is_some()
+        (self.harness_exit.is_some() && self.tool_in_flight.is_none())
             || self.last_stop_reason == Some(StopReason::Error)
             || self
                 .abort_reason
@@ -347,6 +352,14 @@ mod tests {
             ..early
         };
         assert!(noted.engine_failed());
+        let in_tool = SessionMetrics {
+            tool_in_flight: Some(r#"shell {"command":"head -c 400 x.json"}"#.into()),
+            ..noted.clone()
+        };
+        assert!(
+            !in_tool.engine_failed(),
+            "a crash during a tool call is the call's, not the engine's"
+        );
         let aborted = SessionMetrics {
             abort_reason: Some("same bash call 5 times in a row".into()),
             ..Default::default()

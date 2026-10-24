@@ -108,6 +108,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
   and a Pi session against a local model. The Landlock version for Linux
   compiles and its rules are unit-tested, but it has not run on a Linux
   kernel yet; neither has fx in the sandbox.
+- **fx and output that is not UTF-8.** fx 0.0.14 exits with "stream did
+  not contain valid UTF-8" when a shell command prints such bytes (`head -c`
+  cutting a character in half, for example). Tenaz charges the attempt and
+  tells the next session not to cut output by bytes; the session's work in
+  progress is lost. The fake harness reproduces the crash; it has not been
+  rerun against fx itself.
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
 - A pause during a bootstrap session counts as one of its attempts. An

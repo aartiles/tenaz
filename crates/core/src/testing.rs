@@ -61,9 +61,12 @@ pub struct ScriptedHarness {
     /// A builder session for this task waits before acting, so a test can pause the run.
     pub slow_task: Option<String>,
     pub slow_for: Duration,
-    /// The first builder session for this task dies mid-turn, as fx did while
-    /// waiting for a permission: it writes to stderr and exits with code 1.
+    /// The first builder session for this task dies mid-turn between tool
+    /// calls: it writes to stderr and exits with code 1.
     pub crash_task: Option<String>,
+    /// The first builder session for this task dies while a shell call runs,
+    /// as fx does on output that is not UTF-8.
+    pub crash_in_tool_task: Option<String>,
     /// Where bootstrap writes `verify`; `None` is `verify` at the root.
     pub verify_path: Option<String>,
     /// Every builder session for this task grows its context past the stop
@@ -426,25 +429,22 @@ impl Player {
         }
     }
 
-    /// Dies mid-turn while a shell call waits for permission: stderr, then exit 1.
-    async fn crash(&mut self) {
-        self.call += 1;
-        let id = format!("call_{}", self.call);
+    /// Dies mid-turn, during a shell call when `in_tool`: stderr, then exit 1.
+    async fn crash(&mut self, in_tool: bool) {
         self.emit(SessionEvent::TurnStart);
-        let args = serde_json::json!({ "command": "./verify --all" });
-        self.emit(SessionEvent::ToolCallStart {
-            id: id.clone(),
-            name: "shell".to_owned(),
-            args: args.clone(),
-        });
-        self.emit(SessionEvent::PermissionRequest {
-            id,
-            tool: "shell".to_owned(),
-            args,
-            options: Vec::new(),
-        });
+        let stderr = if in_tool {
+            self.call += 1;
+            self.emit(SessionEvent::ToolCallStart {
+                id: format!("call_{}", self.call),
+                name: "shell".to_owned(),
+                args: serde_json::json!({ "command": "head -c 400 checks/result.json" }),
+            });
+            "Error: stream did not contain valid UTF-8\n"
+        } else {
+            "fake harness: panic: reached unreachable code\n"
+        };
         if let Some(log) = &self.stderr_log {
-            let _ = std::fs::write(log, "fake harness: panic: reached unreachable code\n");
+            let _ = std::fs::write(log, stderr);
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
         self.emit(SessionEvent::Exited { code: Some(1) });
@@ -545,7 +545,12 @@ impl Player {
         if self.script.crash_task.as_deref() == Some(task)
             && self.bump(&format!("crash-{task}")) == 1
         {
-            return self.crash().await;
+            return self.crash(false).await;
+        }
+        if self.script.crash_in_tool_task.as_deref() == Some(task)
+            && self.bump(&format!("crash-in-tool-{task}")) == 1
+        {
+            return self.crash(true).await;
         }
         if task == "T002" && attempt == 1 {
             while !self.aborted() {

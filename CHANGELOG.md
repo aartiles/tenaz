@@ -131,6 +131,11 @@ uses [Semantic Versioning](https://semver.org/).
 - A harness that ends before its turn settles is retried like an engine
   failure instead of being charged as a task attempt, and its exit code and
   stderr tail are journaled (`harness_exit`).
+- A harness that ends while one of the session's tool calls runs counts as
+  a failed attempt instead of an engine failure, and the next briefing
+  names the call: a rerun made the same call and the harness died again
+  until the run blocked. When the output was not valid UTF-8 (fx dies on
+  it), the briefing also says not to cut output by bytes.
 - fx writes one ACP log per session instead of overwriting a shared one.
 - An ACP session handles a proxy observation before the prompt's end, so
   per-request usage is no longer occasionally lost or attributed to the

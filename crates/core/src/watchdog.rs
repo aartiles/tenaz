@@ -13,6 +13,9 @@ use crate::util::{approx_tokens, sha256_hex};
 /// Requests the context pace is measured over.
 const PACE_WINDOW: usize = 6;
 
+/// How much of a tool call still running at exit the metrics keep.
+const IN_FLIGHT_CHARS: usize = 400;
+
 /// What a watched session is held to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WatchConfig {
@@ -94,6 +97,17 @@ impl Watchdog {
     pub fn finish(&mut self, exit_code: Option<i32>, duration_ms: u64) {
         self.metrics.exit_code = exit_code;
         self.metrics.duration_ms = duration_ms;
+        self.metrics.tool_in_flight =
+            self.call_args
+                .iter()
+                .min_by_key(|(id, _)| id.as_str())
+                .map(|(_, (name, args))| {
+                    let call = format!("{name} {args}");
+                    match call.char_indices().nth(IN_FLIGHT_CHARS) {
+                        Some((cut, _)) => format!("{}…", &call[..cut]),
+                        None => call,
+                    }
+                });
     }
 
     /// Feeds one event. `fingerprint` is evaluated only when the idle rule
@@ -873,6 +887,27 @@ mod tests {
         w.finish(Some(0), 1);
         assert!(w.metrics().ok());
         assert_eq!(w.metrics().tool_calls, 8);
+        assert_eq!(w.metrics().tool_in_flight, None, "every call ended");
+    }
+
+    #[test]
+    fn a_tool_call_still_running_at_exit_is_kept() {
+        let mut w = watched();
+        call(&mut w, 1, "read", &serde_json::json!({"path": "a"}), "x");
+        w.handle(
+            &SessionEvent::ToolCallStart {
+                id: "c9".into(),
+                name: "shell".into(),
+                args: serde_json::json!({"command": "head -c 400 x.json"}),
+            },
+            0,
+            String::new,
+        );
+        w.finish(Some(1), 1);
+        assert_eq!(
+            w.metrics().tool_in_flight.as_deref(),
+            Some(r#"shell {"command":"head -c 400 x.json"}"#)
+        );
     }
 
     #[test]

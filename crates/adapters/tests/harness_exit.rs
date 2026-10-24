@@ -1,7 +1,9 @@
-//! A harness that dies mid-turn (fx exited with code 1 while a shell call
-//! waited for permission, in the Pocket Ledger run of 2026-10-18) is an
-//! engine-side failure: the session is journaled with its exit and stderr,
-//! rerun without charging the task an attempt, and the run still completes.
+//! A harness that dies mid-turn between tool calls is an engine-side
+//! failure: the session is journaled with its exit and stderr, rerun without
+//! charging the task an attempt, and the run still completes. One that dies
+//! while a tool call runs (fx on output that is not UTF-8, in the Wild West
+//! run of 2026-10-24) would die again on a rerun that makes the same call, so
+//! the attempt counts and the next briefing names the call.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -16,15 +18,16 @@ use tenaz_core::project::Project;
 use tenaz_core::testing::{FastClock, ScriptedHarness};
 use tokio_util::sync::CancellationToken;
 
-#[tokio::test]
-async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
+/// Runs the fake goal to the end with `harness` and `maxAttempts`; the
+/// project and its log.
+async fn run(harness: ScriptedHarness, max_attempts: u32) -> (tempfile::TempDir, Project, String) {
     let work = tempfile::tempdir().unwrap();
     let brief = work.path().join("brief.md");
     std::fs::write(&brief, "# Fake brief\n\nBuild four trivial files.\n").unwrap();
     let project = Project::new(work.path().join("project"));
     let mut params = RunParams::default();
     for pair in [
-        "maxAttempts=2",
+        &format!("maxAttempts={max_attempts}"),
         "replanEvery=2",
         "engineRetryBaseSec=0",
         "notify=false",
@@ -55,10 +58,6 @@ async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
     };
     init(&project, &vcs, &FastClock::new(100), &templates, options).unwrap();
 
-    let harness = ScriptedHarness {
-        crash_task: Some("T001".into()),
-        ..Default::default()
-    };
     let deps = Deps {
         harness: Arc::new(harness),
         vcs: Arc::new(GitRepo::new(project.root())),
@@ -84,7 +83,19 @@ async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
         Phase::Complete,
         "{log}"
     );
+    (work, project, log)
+}
 
+#[tokio::test]
+async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            crash_task: Some("T001".into()),
+            ..Default::default()
+        },
+        2,
+    )
+    .await;
     let journal = project.journal();
     let crashed = journal
         .iter()
@@ -125,4 +136,60 @@ async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
         log.contains("the harness ended before the turn settled; retrying the same session"),
         "{log}"
     );
+}
+
+#[tokio::test]
+async fn a_harness_exit_during_a_tool_call_charges_the_attempt_and_names_the_call() {
+    // The crash takes one of T001's attempts; the fake run needs two more.
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            crash_in_tool_task: Some("T001".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    let journal = project.journal();
+    let crashed = journal
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.harness_exit.is_some() => Some(s.clone()),
+            _ => None,
+        })
+        .expect("the crashed session is journaled with its harness exit");
+    assert_eq!(crashed.attempt, Some(1));
+    let note = crashed.harness_exit.as_deref().unwrap();
+    assert!(note.contains("did not contain valid UTF-8"), "{note}");
+    let reason = crashed.abort_reason.as_deref().unwrap();
+    assert!(
+        reason.contains("head -c 400 checks/result.json"),
+        "{reason}"
+    );
+    assert!(reason.contains("do not cut output by bytes"), "{reason}");
+    assert!(
+        !journal
+            .iter()
+            .any(|e| matches!(&e.record, JournalRecord::EngineRetry { label, .. } if *label == crashed.label)),
+        "a crash during a tool call is not retried as an engine failure:\n{log}"
+    );
+    let next = journal
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s)
+                if s.label.ends_with("-builder-T001") && s.label != crashed.label =>
+            {
+                Some(s.clone())
+            }
+            _ => None,
+        })
+        .expect("T001 runs again");
+    assert_eq!(next.attempt, Some(2), "the crash cost T001 an attempt");
+    let prompt = project
+        .read(&format!(".tenaz/private/{}.prompt.md", next.label))
+        .unwrap();
+    assert!(
+        prompt.contains("head -c 400 checks/result.json"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("do not cut output by bytes"), "{prompt}");
 }

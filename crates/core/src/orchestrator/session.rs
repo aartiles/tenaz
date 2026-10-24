@@ -206,11 +206,19 @@ impl Runner {
         watchdog.finish(exit.code, clock.monotonic_ms().saturating_sub(started));
         let requests = recorder.finish().await;
         let mut metrics = watchdog.into_metrics();
-        // The harness went away before its turn settled and nobody stopped it:
-        // that says nothing about the task, so it is handled like an engine
-        // failure (rerun, uncounted), and its stderr is kept for diagnosis.
+        // The harness went away before its turn settled and nobody stopped it.
+        // Between tool calls that says nothing about the task, so it is
+        // handled like an engine failure (rerun, uncounted). During a tool
+        // call, the call ended it and a rerun would make the same call (fx
+        // dies on output that is not UTF-8), so the session stops with that
+        // call as the reason and the attempt counts. The stderr is kept for
+        // diagnosis either way.
         if metrics.ended_early() && !self.stopping() {
-            metrics.harness_exit = Some(harness_exit_note(exit.code, stderr_log.as_deref()));
+            let note = harness_exit_note(exit.code, stderr_log.as_deref());
+            if let Some(call) = &metrics.tool_in_flight {
+                metrics.abort_reason = Some(crashed_running(call, &note));
+            }
+            metrics.harness_exit = Some(note);
         }
         Ok((metrics, requests))
     }
@@ -718,6 +726,17 @@ fn harness_exit_note(code: Option<i32>, stderr_log: Option<&std::path::Path>) ->
         }
         None => format!("the harness ended before the turn settled ({code}); its stderr was empty"),
     }
+}
+
+/// Why a session stopped when its harness crashed during `call`, for the
+/// next attempt's briefing.
+fn crashed_running(call: &str, note: &str) -> String {
+    let mut reason =
+        format!("the harness crashed while running this tool call; do not repeat it: {call}");
+    if note.contains("valid UTF-8") {
+        reason.push_str(". Its output had bytes that are not valid UTF-8, which the harness cannot read: do not cut output by bytes (`head -c`, `cut -b`, `dd`); cut by lines (`head -n`, `tail -n`) instead");
+    }
+    reason
 }
 
 /// Client-side timings of one turn, in monotonic milliseconds.
