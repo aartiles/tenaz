@@ -506,7 +506,10 @@ impl Runner {
         }
         self.ledger.cap_clean_sessions = 0;
         if std::mem::take(&mut self.ledger.cap_raised) {
+            // What the engine holds at a raised budget is what it holds
+            // without passing pressure: later raises stop there.
             self.ledger.cap_failed_raises += 1;
+            self.ledger.cap_ceiling = Some(self.ledger.cap_ceiling.map_or(cap, |c| c.max(cap)));
         }
         self.save()?;
         let current = self.ledger.context_cap.unwrap_or(cap);
@@ -522,9 +525,11 @@ impl Runner {
 
     /// Counts a session the engine held at a lowered budget and, after
     /// `capacityRecoverSessions` of them in a row, raises the budget halfway
-    /// back to the configured one. The engine only says how much it can hold
-    /// when a prompt overflows it, so memory freed later is found by trying;
-    /// each raise that overflows again doubles the sessions the next one waits for.
+    /// back to the configured one, or to the ceiling a failed raise set. The
+    /// engine only says how much it can hold when a prompt overflows it, so
+    /// memory freed later is found by trying. Each raise that overflows again
+    /// doubles the sessions the next one waits for, up to four times as many;
+    /// a raise the engine held starts the count again.
     fn note_engine_held(
         &mut self,
         label: &str,
@@ -541,17 +546,24 @@ impl Runner {
             return self.save();
         }
         self.ledger.cap_clean_sessions += 1;
-        let needed = self
-            .params
-            .capacity_recover_sessions
-            .saturating_mul(1 << self.ledger.cap_failed_raises.min(4));
+        let needed = raise_wait(
+            self.params.capacity_recover_sessions,
+            self.ledger.cap_failed_raises,
+        );
         let clean = self.ledger.cap_clean_sessions;
         if clean < needed {
             return self.save();
         }
         let full = self.ledger.configured_budget_tokens();
-        let raised = cap + full.saturating_sub(cap) / 2;
-        let new_cap = (full.saturating_sub(raised) >= RAISE_STEP_MIN).then_some(raised);
+        let Some(raised) = raised_cap(cap, full, self.ledger.cap_ceiling) else {
+            // Already at the ceiling: nothing to try.
+            self.ledger.cap_clean_sessions = 0;
+            return self.save();
+        };
+        let new_cap = (raised < full).then_some(raised);
+        if std::mem::take(&mut self.ledger.cap_raised) {
+            self.ledger.cap_failed_raises = 0;
+        }
         self.ledger.context_cap = new_cap;
         self.ledger.cap_clean_sessions = 0;
         self.ledger.cap_raised = true;
@@ -707,6 +719,29 @@ async fn engine_delta(
     Some(change)
 }
 
+/// Sessions the engine must hold before a lowered budget is raised: the
+/// configured count, doubled per raise that failed, at most four times it.
+fn raise_wait(recover_sessions: u32, failed_raises: u32) -> u32 {
+    recover_sessions.saturating_mul(1 << failed_raises.min(2))
+}
+
+/// The budget after a raise from `cap`: halfway to the configured `full`
+/// budget, or to `ceiling` when that is lower, and all the way when less
+/// than [`RAISE_STEP_MIN`] is left. `None` when `cap` is already there.
+fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
+    let target = ceiling.map_or(full, |c| c.min(full));
+    if cap >= target {
+        return None;
+    }
+    let raised = cap + (target - cap) / 2;
+    let raised = if target - raised < RAISE_STEP_MIN {
+        target
+    } else {
+        raised
+    };
+    Some(raised)
+}
+
 /// How much of the harness's stderr a harness-exit note quotes.
 const STDERR_TAIL_BYTES: usize = 2000;
 
@@ -817,6 +852,31 @@ fn describe(action: &Action) -> String {
 mod tests {
     use super::*;
     use crate::session::{StopReason, Usage};
+
+    #[test]
+    fn raises_go_halfway_and_stop_at_the_ceiling_a_failed_raise_set() {
+        // No ceiling: halfway to the configured budget, then all the way.
+        assert_eq!(raised_cap(49_190, 85_196, None), Some(67_193));
+        assert_eq!(raised_cap(83_000, 85_196, None), Some(85_196));
+        // The Wild West run: the engine held 86016 when a raise overflowed,
+        // so 68812 is the ceiling, and a passing low reading climbs back to it.
+        let ceiling = Some(68_812);
+        assert_eq!(raised_cap(38_215, 85_196, ceiling), Some(53_513));
+        assert_eq!(raised_cap(66_000, 85_196, ceiling), Some(68_812));
+        assert_eq!(raised_cap(68_812, 85_196, ceiling), None);
+        assert_eq!(raised_cap(70_000, 85_196, ceiling), None);
+        // A ceiling above the configured budget does not lift it further.
+        assert_eq!(raised_cap(60_000, 85_196, Some(90_000)), Some(72_598));
+    }
+
+    #[test]
+    fn the_wait_before_a_raise_doubles_at_most_twice() {
+        assert_eq!(raise_wait(4, 0), 4);
+        assert_eq!(raise_wait(4, 1), 8);
+        assert_eq!(raise_wait(4, 2), 16);
+        assert_eq!(raise_wait(4, 7), 16);
+        assert_eq!(raise_wait(0, 3), 0);
+    }
 
     /// Pi reports reasoning per message; the request row keeps it, and rows
     /// written before the field existed still read.

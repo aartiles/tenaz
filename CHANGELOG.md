@@ -105,7 +105,14 @@ uses [Semantic Versioning](https://semver.org/).
   halfway back after `capacityRecoverSessions` sessions in a row (4 by
   default; 0 keeps it lowered) that the engine held without critical memory
   pressure. A raise the engine overflows again lowers it as before and
-  doubles the sessions the next raise waits for.
+  doubles the sessions the next raise waits for, up to four times as many;
+  a raise the engine held starts that count again.
+- A raised context budget never goes above the headroom share of what the
+  engine said it could hold when an earlier raise overflowed it. Raising
+  past it only overflowed again: in the Wild West run the engine held
+  86016 tokens, yet the budget was raised above 68812 six times and lowered
+  back each time, and a low reading under passing memory pressure then
+  kept the budget at 38215 for seven hours while raises waited 64 sessions.
 - A session is steered to wrap up when, at the pace its context grew over
   the last requests, it would reach the context stop within
   `contextSteerTurns` turns (10 by default; 0 steers only at the budget), so
