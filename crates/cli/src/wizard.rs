@@ -209,6 +209,8 @@ pub async fn run<R: BufRead, W: Write>(
         engine_stop: media.engine_stop,
         comfyui: media.comfyui,
         workflows: media.workflows,
+        images: args.images.clone(),
+        image_model: args.image_model.clone(),
         brief_text: match &goal {
             Goal::Text(text) => Some(text.clone()),
             Goal::InProject | Goal::File(_) => None,
@@ -517,7 +519,7 @@ async fn ask_media<R: BufRead, W: Write>(
     p: &mut Prompter<R, W>,
 ) -> anyhow::Result<Media> {
     let mut comfyui = args.comfyui.clone();
-    if comfyui.is_none() {
+    if comfyui.is_none() && args.images.is_none() {
         let local = "http://127.0.0.1:8188";
         if detect::comfyui_at(client, local).await
             && p.confirm(

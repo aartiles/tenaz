@@ -117,6 +117,13 @@ pub struct Launch {
     /// Image workflows by name: absolute paths to API-format workflow files.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub workflows: BTreeMap<String, String>,
+    /// Base URL of an `OpenAI` Images API (`.../v1`); enables the image tool
+    /// instead of `ComfyUI`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images_url: Option<String>,
+    /// The image model to ask that API for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_model: Option<String>,
     /// Media job time limit, in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_timeout_sec: Option<u64>,

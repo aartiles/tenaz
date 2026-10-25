@@ -307,10 +307,18 @@ lists the model, the wizard offers it and the run keeps its settings there
 
 ### Images
 
-To give the agent an image tool, point it at ComfyUI and an API-format
-workflow (`--comfyui http://127.0.0.1:8188 --workflow default=txt2img.json`).
+The agent gets an image tool from one of two kinds of image engine:
 
-Tenaz does not assume the LLM and the image model fit in memory together.
+- **A server with the OpenAI Images API** (`POST /v1/images/generations`),
+  as several MLX servers, LocalAI and Atomic Chat serve it:
+  `--images http://127.0.0.1:1337/v1 --image-model <model>`. No workflow
+  is needed.
+- **ComfyUI** with an API-format workflow:
+  `--comfyui http://127.0.0.1:8188 --workflow default=txt2img.json`.
+
+When the image API is on the same server as the LLM, that server holds
+both models and Tenaz leaves the LLM loaded. Otherwise Tenaz does not
+assume the LLM and the image model fit in memory together.
 Before each image it frees the LLM, and after it loads the LLM again. The
 OpenAI API has no standard way to unload a model, so how Tenaz does that
 depends on the engine:

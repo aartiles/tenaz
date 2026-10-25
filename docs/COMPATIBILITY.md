@@ -19,6 +19,7 @@ below; this page is about the real ones.
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
 | Media | ComfyUI images (`generate_image` over MCP) | Tested against a mock. Needs an API-format workflow with `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}` and `{{height}}` placeholders. |
+| | OpenAI Images API (`--images`, `POST /v1/images/generations`): Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock only. Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Does not unload the image model after a job. On the LLM's own origin the LLM stays loaded. |
 | | TTS, STT, video | Not built. |
 
 ## What the model needs

@@ -180,15 +180,17 @@ impl LeaseManager {
             .ok_or_else(|| LeaseError::UnknownMedia(name.to_owned()))?;
         let mut holder = self.holder.lock().await;
         let media_holder = Holder::Media(name.to_owned());
-        if !self.llm.can_unload() {
-            // The LLM stays loaded and serving; the media engine loads next
-            // to it, so the memory has to hold both.
-            self.observe(
-                Holder::Llm,
-                "kept",
-                0,
-                Some("the engine cannot unload the LLM".to_owned()),
-            );
+        let kept = if adapter.shares_engine() {
+            // The engine renders the job itself and manages its memory.
+            Some("the LLM's engine serves the media model too")
+        } else if self.llm.can_unload() {
+            None
+        } else {
+            // The media engine loads next to the LLM, so the memory has to hold both.
+            Some("the engine cannot unload the LLM")
+        };
+        if let Some(why) = kept {
+            self.observe(Holder::Llm, "kept", 0, Some(why.to_owned()));
             return self.media_cycle(&media_holder, adapter.as_ref(), job).await;
         }
         self.gate.close();
@@ -340,6 +342,7 @@ mod tests {
         log: Arc<Log>,
         fail_job: bool,
         gate: Gate,
+        shares_engine: bool,
     }
     #[async_trait]
     impl MediaAdapter for FakeComfy {
@@ -372,6 +375,9 @@ mod tests {
             self.log.push("comfy unload");
             Ok(())
         }
+        fn shares_engine(&self) -> bool {
+            self.shares_engine
+        }
     }
 
     type Setup = (LeaseManager, Arc<Log>, Arc<StdMutex<Vec<LeaseTransition>>>);
@@ -381,6 +387,10 @@ mod tests {
     }
 
     fn setup_llm(fail_job: bool, fail_reload: bool, unload: Unload) -> Setup {
+        setup_media(fail_job, fail_reload, unload, false)
+    }
+
+    fn setup_media(fail_job: bool, fail_reload: bool, unload: Unload, shares: bool) -> Setup {
         let log = Arc::new(Log::default());
         let transitions = Arc::new(StdMutex::new(Vec::new()));
         let seen = transitions.clone();
@@ -397,6 +407,7 @@ mod tests {
                 log: log.clone(),
                 fail_job,
                 gate,
+                shares_engine: shares,
             }));
         (manager, log, transitions)
     }
@@ -501,6 +512,20 @@ mod tests {
             transitions.lock().unwrap()[0].transition,
             "kept",
             "the journal says why the LLM stayed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_media_model_on_the_llms_engine_leaves_the_llm_loaded() {
+        let (manager, log, transitions) = setup_media(false, false, Unload::Works, true);
+        manager.run_media("comfyui", job()).await.unwrap();
+        assert_eq!(
+            log.lines(),
+            vec!["comfy load", "comfy job image (gate open)", "comfy unload"]
+        );
+        assert_eq!(
+            transitions.lock().unwrap()[0].detail.as_deref(),
+            Some("the LLM's engine serves the media model too")
         );
     }
 

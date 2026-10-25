@@ -107,6 +107,11 @@ uses [Semantic Versioning](https://semver.org/).
   pressure. A raise the engine overflows again lowers it as before and
   doubles the sessions the next raise waits for, up to four times as many;
   a raise the engine held starts that count again.
+- `--images <base URL> --image-model <id>` gives the agent its image tool
+  through an OpenAI Images API (`POST /v1/images/generations`), as MLX
+  servers, LocalAI and Atomic Chat serve it, with no workflow to export.
+  When that API is on the LLM's own server, the LLM stays loaded while the
+  image renders (ADR 0002).
 - A builder session that answers its prompt while `./verify --task` runs no
   passing check of its task gets one more prompt asking it to add them,
   before the attempt is judged. In the Wild West run 32 of 197 attempts

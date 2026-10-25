@@ -233,4 +233,9 @@ pub trait MediaAdapter: Send + Sync {
     async fn run(&self, job: MediaJob) -> Result<MediaOutput, MediaError>;
     /// Frees the engine's models so the LLM can reload.
     async fn unload(&self) -> Result<(), MediaError>;
+    /// The media model is served by the LLM's own engine, which manages the
+    /// memory of both: the LLM is not unloaded for a job.
+    fn shares_engine(&self) -> bool {
+        false
+    }
 }

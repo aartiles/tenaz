@@ -1,6 +1,6 @@
 //! The media MCP server: tools the harness session can call that need
-//! another engine. Each call takes the lease (unload the LLM, run the job,
-//! reload the LLM) and returns the output paths.
+//! another engine. Each call takes the lease (unload the LLM when it must,
+//! run the job, reload the LLM) and returns the output paths.
 
 pub mod workflow;
 
@@ -58,14 +58,16 @@ pub struct GenerateImageArgs {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
-    /// A configured workflow name; the default workflow otherwise.
+    /// A configured `ComfyUI` workflow name; the default workflow otherwise.
     #[serde(default)]
     pub workflow: Option<String>,
 }
 
 #[tool_router]
 impl MediaTools {
-    /// `media_engine` names the lease's media adapter (`comfyui`).
+    /// `media_engine` names the lease's media adapter (`comfyui`,
+    /// `openai-images`). With no `workflows` the request goes to the engine
+    /// as it is; with them, it fills the chosen `ComfyUI` workflow.
     pub fn new(
         lease: Arc<LeaseManager>,
         output_root: impl Into<PathBuf>,
@@ -82,29 +84,12 @@ impl MediaTools {
     }
 
     #[tool(
-        description = "Generate an image with the local image engine. The LLM is unloaded while the image renders and reloaded afterwards; the call takes a few minutes. Returns the paths of the generated files."
+        description = "Generate an image with the local image engine. The call can take a few minutes. Returns the paths of the generated files."
     )]
     async fn generate_image(
         &self,
         Parameters(args): Parameters<GenerateImageArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let name = args
-            .workflow
-            .clone()
-            .unwrap_or_else(|| "default".to_owned());
-        let template = self.workflows.get(&name).ok_or_else(|| {
-            ErrorData::invalid_params(
-                format!(
-                    "no workflow named {name}; configured: {}",
-                    self.workflows
-                        .keys()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                None,
-            )
-        })?;
         let seed = args.seed.unwrap_or_else(|| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -121,12 +106,41 @@ impl MediaTools {
         if let Some(height) = args.height {
             vars.insert("height", height.to_string());
         }
-        let workflow = template.render(&vars);
+        let request = serde_json::json!({
+            "prompt": args.prompt,
+            "negative_prompt": args.negative_prompt,
+            "seed": seed,
+            "width": args.width,
+            "height": args.height,
+        });
+        let (params, name) = if self.workflows.is_empty() {
+            (serde_json::json!({ "request": request }), None)
+        } else {
+            let name = args.workflow.unwrap_or_else(|| "default".to_owned());
+            let template = self.workflows.get(&name).ok_or_else(|| {
+                ErrorData::invalid_params(
+                    format!(
+                        "no workflow named {name}; configured: {}",
+                        self.workflows
+                            .keys()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    None,
+                )
+            })?;
+            let workflow = template.render(&vars);
+            (
+                serde_json::json!({ "workflow": workflow, "request": request }),
+                Some(name),
+            )
+        };
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
         let output_dir = self.output_root.join(format!("{}-{sequence:04}", stamp()));
         let job = MediaJob {
             kind: "image".to_owned(),
-            params: serde_json::json!({ "workflow": workflow }),
+            params,
             output_dir: output_dir.clone(),
         };
         let output = self
@@ -176,7 +190,7 @@ impl ServerHandler for MediaTools {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("tenaz-media", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Media tools of the single-model runner. generate_image renders with the local image engine; it unloads and reloads the LLM, so call it once with a complete prompt.")
+            .with_instructions("Media tools of the single-model runner. generate_image renders with the local image engine and can take minutes (the runner may unload and reload the LLM around it), so call it once with a complete prompt.")
     }
 }
 

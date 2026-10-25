@@ -52,14 +52,23 @@ impl MediaAdapter for FakeComfy {
         Ok(())
     }
     async fn run(&self, job: MediaJob) -> Result<MediaOutput, MediaError> {
-        let text = job.params["workflow"]["1"]["inputs"]["text"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
-        self.0.0.lock().unwrap().push(format!(
-            "job: {text} seed={}",
-            job.params["workflow"]["1"]["inputs"]["seed"]
-        ));
+        // A ComfyUI job carries the filled workflow; any other, the request.
+        let (text, seed) = match job.params.get("workflow") {
+            Some(workflow) => (
+                &workflow["1"]["inputs"]["text"],
+                &workflow["1"]["inputs"]["seed"],
+            ),
+            None => (
+                &job.params["request"]["prompt"],
+                &job.params["request"]["seed"],
+            ),
+        };
+        let text = text.as_str().unwrap_or_default().to_owned();
+        self.0
+            .0
+            .lock()
+            .unwrap()
+            .push(format!("job: {text} seed={seed}"));
         if text.contains("fail") {
             return Err(MediaError::Failed("bad prompt".into()));
         }
@@ -174,6 +183,53 @@ async fn generate_image_takes_the_lease_and_returns_paths() {
         .unwrap()
         .to_owned();
     assert_eq!(text, "engines: comfyui\nworkflows: default");
+    client.cancel().await.unwrap();
+    handle.stop().await;
+}
+
+#[tokio::test]
+async fn without_workflows_the_request_goes_to_the_engine_as_it_is() {
+    let log = Arc::new(Log::default());
+    let lease = Arc::new(
+        LeaseManager::new(
+            Arc::new(FakeLlm(log.clone())),
+            "m",
+            Gate::new(),
+            Arc::new(|_| {}),
+        )
+        .with_media(Arc::new(FakeComfy(log.clone()))),
+    );
+    let out = tempfile::tempdir().unwrap();
+    let handle = serve(
+        MediaTools::new(lease, out.path(), BTreeMap::new(), "comfyui"),
+        "127.0.0.1:0".parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let transport = StreamableHttpClientTransport::from_uri(handle.url());
+    let client = ().serve(transport).await.unwrap();
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("generate_image").with_arguments(
+                serde_json::json!({"prompt": "a horse", "seed": 3, "workflow": "ignored"})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    assert!(
+        log.0
+            .lock()
+            .unwrap()
+            .contains(&"job: a horse seed=3".to_owned())
+    );
+    assert_eq!(
+        result.structured_content.as_ref().unwrap()["workflow"],
+        serde_json::Value::Null
+    );
     client.cancel().await.unwrap();
     handle.stop().await;
 }

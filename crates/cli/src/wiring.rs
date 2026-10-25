@@ -14,6 +14,7 @@ use tenaz_adapters::engine::generic::{Commands, GenericEngine};
 use tenaz_adapters::engine::sushi::SushiEngine;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::media::comfyui::ComfyUi;
+use tenaz_adapters::media::openai_images::OpenAiImages;
 use tenaz_adapters::metrics::PrometheusMetrics;
 use tenaz_adapters::notify::DesktopNotifier;
 use tenaz_adapters::probe_macos::MacMemoryProbe;
@@ -54,6 +55,9 @@ pub struct HarnessOptions {
 pub struct MediaOptions {
     pub comfyui: Option<String>,
     pub workflows: BTreeMap<String, WorkflowTemplate>,
+    /// An `OpenAI` Images API base URL and the model to ask it for.
+    pub images_url: Option<String>,
+    pub image_model: Option<String>,
     pub timeout: Duration,
 }
 
@@ -93,6 +97,37 @@ pub fn parse_workflows(specs: &[String]) -> anyhow::Result<BTreeMap<String, Work
         );
     }
     Ok(out)
+}
+
+/// The run's image engine, if it has one: `ComfyUI` with its workflows, or
+/// an `OpenAI` Images API, which shares the LLM's engine when it has the same
+/// origin as `llm_base_url`.
+fn media_adapter(
+    media: &MediaOptions,
+    llm_base_url: &str,
+) -> anyhow::Result<Option<Arc<dyn MediaAdapter>>> {
+    match (&media.comfyui, &media.images_url) {
+        (Some(_), Some(_)) => {
+            bail!("--comfyui and --images each give the run an image engine; keep one")
+        }
+        (Some(comfy_url), None) => {
+            if media.workflows.is_empty() {
+                bail!("--comfyui needs at least one --workflow name=path.json");
+            }
+            Ok(Some(Arc::new(ComfyUi::new(comfy_url, media.timeout))))
+        }
+        (None, Some(images_url)) => {
+            let model = media
+                .image_model
+                .clone()
+                .context("--images needs --image-model, the image model to ask it for")?;
+            let shares = origin(images_url)? == origin(llm_base_url)?;
+            Ok(Some(Arc::new(
+                OpenAiImages::new(images_url, model, media.timeout).sharing_the_engine(shares),
+            )))
+        }
+        (None, None) => Ok(None),
+    }
 }
 
 /// The `reasoning_effort` the engine is asked for, from the ledger's
@@ -184,20 +219,17 @@ pub async fn wire(
     );
     let mut services = Services::default();
     let mut mcp_endpoints = Vec::new();
-    if let Some(comfy_url) = &media.comfyui {
-        if media.workflows.is_empty() {
-            bail!("--comfyui needs at least one --workflow name=path.json");
-        }
-        let comfy: Arc<dyn MediaAdapter> = Arc::new(ComfyUi::new(comfy_url, media.timeout));
-        lease = lease.with_media(comfy);
+    let media_engine = media_adapter(media, &base_url)?;
+    if let Some(adapter) = &media_engine {
+        lease = lease.with_media(adapter.clone());
     }
     let lease = Arc::new(lease);
-    if media.comfyui.is_some() {
+    if let Some(adapter) = &media_engine {
         let tools = MediaTools::new(
             lease.clone(),
             project.private_dir().join("media"),
             media.workflows.clone(),
-            "comfyui",
+            adapter.name(),
         );
         let handle = serve(tools, "127.0.0.1:0".parse()?)
             .await
@@ -576,7 +608,45 @@ fn link_fx_skills(project: &Project, home: &Path, skills: &[SkillPin]) -> anyhow
 
 #[cfg(test)]
 mod tests {
-    use super::reasoning_effort;
+    use super::{BTreeMap, Duration, MediaOptions, media_adapter, reasoning_effort};
+
+    fn images(url: &str, model: Option<&str>) -> MediaOptions {
+        MediaOptions {
+            comfyui: None,
+            workflows: BTreeMap::new(),
+            images_url: Some(url.to_owned()),
+            image_model: model.map(str::to_owned),
+            timeout: Duration::from_mins(1),
+        }
+    }
+
+    #[test]
+    fn an_images_api_on_the_llms_origin_shares_its_engine() {
+        let llm = "http://127.0.0.1:12345/v1";
+        let same = media_adapter(&images("http://127.0.0.1:12345/v1", Some("flux")), llm)
+            .unwrap()
+            .unwrap();
+        assert_eq!(same.name(), "openai-images");
+        assert!(same.shares_engine());
+        let other = media_adapter(&images("http://127.0.0.1:1337/v1", Some("flux")), llm)
+            .unwrap()
+            .unwrap();
+        assert!(!other.shares_engine());
+        let error = media_adapter(&images("http://127.0.0.1:1337/v1", None), llm)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("--image-model"), "{error}");
+        let both = MediaOptions {
+            comfyui: Some("http://127.0.0.1:8188".into()),
+            ..images("http://127.0.0.1:1337/v1", Some("flux"))
+        };
+        assert!(media_adapter(&both, llm).is_err());
+        let none = MediaOptions {
+            images_url: None,
+            ..images("", None)
+        };
+        assert!(media_adapter(&none, llm).unwrap().is_none());
+    }
 
     #[test]
     fn thinking_level_becomes_a_reasoning_effort_unless_off() {

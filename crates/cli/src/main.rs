@@ -288,6 +288,13 @@ struct InitArgs {
     /// Image workflows, `name=path.json` (API-format workflow with {{prompt}} placeholders).
     #[arg(long = "workflow")]
     workflows: Vec<String>,
+    /// Base URL of an `OpenAI` Images API (`http://host:port/v1`); enables the
+    /// image tool instead of `ComfyUI`.
+    #[arg(long)]
+    images: Option<String>,
+    /// The image model to ask the `--images` API for.
+    #[arg(long)]
+    image_model: Option<String>,
     /// Media job time limit, in seconds (default 1800).
     #[arg(long)]
     media_timeout: Option<u64>,
@@ -353,6 +360,8 @@ impl InitArgs {
         for workflow in &self.workflows {
             flag("workflow", Some(workflow.clone()));
         }
+        flag("images", self.images.clone());
+        flag("image-model", self.image_model.clone());
         flag("media-timeout", self.media_timeout.map(|t| t.to_string()));
         if self.vision {
             words.push("--vision".to_owned());
@@ -404,6 +413,8 @@ struct InitPlan {
     engine_stop: Option<String>,
     comfyui: Option<String>,
     workflows: Vec<String>,
+    images: Option<String>,
+    image_model: Option<String>,
     /// The goal typed in the wizard, written as the brief.
     brief_text: Option<String>,
     /// For what neither path changes: thinking, params, skills, proxy,
@@ -464,6 +475,8 @@ async fn plan_from_flags(args: InitArgs) -> anyhow::Result<InitPlan> {
         engine_stop: args.engine_stop.clone(),
         comfyui: args.comfyui.clone(),
         workflows: args.workflows.clone(),
+        images: args.images.clone(),
+        image_model: args.image_model.clone(),
         brief_text: None,
         args,
     })
@@ -575,6 +588,8 @@ fn init_at(
         fx_args: None,
         comfyui: plan.comfyui,
         workflows: pinned_workflows(&plan.workflows)?,
+        images_url: plan.images,
+        image_model: plan.image_model,
         media_timeout_sec: plan.args.media_timeout,
     };
     let brief = match placement {
@@ -676,6 +691,12 @@ struct RunArgs {
     /// Image workflows, `name=path.json`; replaces the pinned ones.
     #[arg(long = "workflow")]
     workflows: Vec<String>,
+    /// Base URL of an `OpenAI` Images API; replaces the pinned one.
+    #[arg(long)]
+    images: Option<String>,
+    /// The image model to ask the `--images` API for.
+    #[arg(long)]
+    image_model: Option<String>,
     /// Media job time limit, in seconds.
     #[arg(long)]
     media_timeout: Option<u64>,
@@ -711,6 +732,12 @@ impl RunArgs {
         }
         if !self.workflows.is_empty() {
             next.workflows = pinned_workflows(&self.workflows)?;
+        }
+        if self.images.is_some() {
+            next.images_url.clone_from(&self.images);
+        }
+        if self.image_model.is_some() {
+            next.image_model.clone_from(&self.image_model);
         }
         if self.media_timeout.is_some() {
             next.media_timeout_sec = self.media_timeout;
@@ -1098,6 +1125,8 @@ async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     let media = wiring::MediaOptions {
         comfyui: launch.comfyui.clone(),
         workflows: wiring::parse_workflows(&workflow_specs)?,
+        images_url: launch.images_url.clone(),
+        image_model: launch.image_model.clone(),
         timeout: std::time::Duration::from_secs(launch.media_timeout_sec.unwrap_or(1800)),
     };
     let engine = wiring::EngineOptions {
