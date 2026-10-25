@@ -75,6 +75,11 @@ pub struct ScriptedHarness {
     /// The first builder session for this task that does the work leaves
     /// out its check, and adds it when the orchestrator asks.
     pub forget_checks_task: Option<String>,
+    /// The first builder session for this task reasons until its reply is
+    /// cut at the output limit, and the harness exits, as fx does.
+    pub truncate_task: Option<String>,
+    /// The first bootstrap session after the engine failures does the same.
+    pub truncate_bootstrap: bool,
 }
 
 impl ScriptedHarness {
@@ -461,6 +466,29 @@ impl Player {
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
+    /// One reply that reasons until it is cut at the output limit, then the
+    /// harness exits with code 1, as fx does on `OutputTruncated`.
+    async fn truncate(&mut self) {
+        self.emit(SessionEvent::TurnStart);
+        self.emit(SessionEvent::MessageEnd {
+            server: None,
+            usage: Usage {
+                input: 1000,
+                output: 16384,
+                ..Default::default()
+            },
+            stop_reason: StopReason::MaxTokens,
+            error_message: None,
+            thinking_chars: 60_000,
+            text: String::new(),
+        });
+        if let Some(log) = &self.stderr_log {
+            let _ = std::fs::write(log, "the agent connection ended: OutputTruncated\n");
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        self.emit(SessionEvent::Exited { code: Some(1) });
+    }
+
     async fn write_check(&mut self, task: &str) {
         self.write_tool(
             &format!("checks/{task}.exists.sh"),
@@ -489,6 +517,9 @@ impl Player {
             )
             .await;
             return self.engine_error(&message);
+        }
+        if self.script.truncate_bootstrap && self.bump("truncate-bootstrap") == 1 {
+            return self.truncate().await;
         }
         self.write_tool(
             ".tenaz/spec.md",
@@ -571,6 +602,11 @@ impl Player {
             && self.bump(&format!("crash-in-tool-{task}")) == 1
         {
             return self.crash(true).await;
+        }
+        if self.script.truncate_task.as_deref() == Some(task)
+            && self.bump(&format!("truncate-{task}")) == 1
+        {
+            return self.truncate().await;
         }
         if task == "T002" && attempt == 1 {
             while !self.aborted() {

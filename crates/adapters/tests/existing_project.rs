@@ -128,6 +128,7 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
         lease: None,
         engine_metrics: None,
         memory: None,
+        effort: None,
     };
     let mut runner = Runner::open(project.clone(), deps, CancellationToken::new()).unwrap();
     runner

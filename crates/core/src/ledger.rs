@@ -263,6 +263,10 @@ pub struct Ledger {
     /// engine said it can hold when a raised budget overflowed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cap_ceiling: Option<u64>,
+    /// The last session's reply stopped at the output limit: the next one
+    /// runs at a lower reasoning effort.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lower_effort: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_errors: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -322,6 +326,7 @@ impl Ledger {
             cap_failed_raises: 0,
             cap_raised: false,
             cap_ceiling: None,
+            lower_effort: false,
             last_errors: None,
             pending_continuation: false,
             paused_at: None,

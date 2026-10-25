@@ -42,6 +42,8 @@ pub struct Deps {
     pub lease: Option<Arc<crate::lease::LeaseManager>>,
     pub engine_metrics: Option<Arc<dyn EngineMetricsSource>>,
     pub memory: Option<Arc<dyn MemoryProbe>>,
+    /// Lowers the engine proxy's reasoning effort for a session; `None` without a proxy.
+    pub effort: Option<crate::effort::EffortDial>,
 }
 
 impl std::fmt::Debug for Deps {

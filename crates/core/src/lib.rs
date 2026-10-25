@@ -5,6 +5,7 @@
 pub mod backlog;
 pub mod briefing;
 pub mod doctor;
+pub mod effort;
 pub mod lease;
 pub mod ledger;
 pub mod memory;

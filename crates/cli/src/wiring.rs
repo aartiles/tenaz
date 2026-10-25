@@ -20,6 +20,7 @@ use tenaz_adapters::notify::DesktopNotifier;
 use tenaz_adapters::probe_macos::MacMemoryProbe;
 use tenaz_adapters::sandbox::{Guard, GuardedHarness, GuardedVerify, Policy};
 use tenaz_adapters::verify::VerifyProcess;
+use tenaz_core::effort::EffortDial;
 use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
 use tenaz_core::ledger::{JournalRecord, SkillPin};
 use tenaz_core::orchestrator::Deps;
@@ -243,12 +244,14 @@ pub async fn wire(
     }
     // The proxy sits between the harness and the engine; the harness is pointed at it.
     let (feed, _) = tokio::sync::broadcast::channel::<EngineObservation>(256);
+    let effort = engine.proxy.then(EffortDial::new);
     let harness_base_url = if engine.proxy {
         let handle = start_proxy(
             &base_url,
             gate.clone(),
             feed.clone(),
             config.thinking.as_deref(),
+            effort.clone(),
             ledger.params.repair_tool_args.then(|| {
                 project
                     .private_dir()
@@ -310,6 +313,7 @@ pub async fn wire(
         memory: cfg!(target_os = "macos").then(|| {
             Arc::new(MacMemoryProbe::new(port)) as Arc<dyn tenaz_core::ports::MemoryProbe>
         }),
+        effort,
     };
     Ok(Wired { deps, services })
 }
@@ -390,6 +394,7 @@ async fn start_proxy(
     gate: Gate,
     feed: tokio::sync::broadcast::Sender<EngineObservation>,
     thinking: Option<&str>,
+    effort: Option<EffortDial>,
     repairs: Option<PathBuf>,
 ) -> anyhow::Result<tenaz_proxy::ProxyHandle> {
     let repair_log = repairs.clone();
@@ -439,6 +444,7 @@ async fn start_proxy(
         }),
     );
     proxy.repair_tool_args = repairs.is_some();
+    proxy.effort = effort;
     if let Some(effort) = reasoning_effort(thinking) {
         // fx does not forward its effort to a custom provider; the proxy fills it in.
         proxy.request_defaults.insert(

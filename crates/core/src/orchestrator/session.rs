@@ -223,6 +223,10 @@ impl Runner {
             let note = harness_exit_note(exit.code, stderr_log.as_deref());
             if let Some(call) = &metrics.tool_in_flight {
                 metrics.abort_reason = Some(crashed_running(call, &note));
+            } else if metrics.output_truncated() {
+                // fx exits when a reply is cut at the output limit; the model
+                // was still reasoning, and would again in an unchanged rerun.
+                metrics.abort_reason = Some(OUTPUT_LIMIT.to_owned());
             }
             metrics.harness_exit = Some(note);
         }
@@ -323,6 +327,14 @@ impl Runner {
             context_tokens: self.ledger.context_budget_tokens(ctx.context_tokens),
             idle: role.edits_code(),
         };
+        if let Some(dial) = &self.deps.effort {
+            dial.set_lowered(self.ledger.lower_effort);
+            if self.ledger.lower_effort {
+                self.log(&format!(
+                    "  {label}: the last reply stopped at the output limit; this session reasons at a lower effort"
+                ));
+            }
+        }
         if let Some(sampler) = &self.sampler {
             sampler.begin(&label).await;
         }
@@ -380,6 +392,7 @@ impl Runner {
         };
         self.journal(JournalRecord::Session(record.clone()));
         self.ledger.inflight = None;
+        self.ledger.lower_effort = metrics.output_truncated();
         self.save()?;
         let outcome = if ok {
             "settled".to_owned()
@@ -796,6 +809,10 @@ fn harness_exit_note(code: Option<i32>, stderr_log: Option<&std::path::Path>) ->
         None => format!("the harness ended before the turn settled ({code}); its stderr was empty"),
     }
 }
+
+/// Why a session stopped when its last reply was cut at the output limit,
+/// for the next attempt's briefing.
+const OUTPUT_LIMIT: &str = "the reply reached the output limit while the model was still reasoning, before it acted; reason briefly, act in small steps and write files early";
 
 /// Why a session stopped when its harness crashed during `call`, for the
 /// next attempt's briefing.

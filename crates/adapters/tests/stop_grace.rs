@@ -168,6 +168,7 @@ async fn a_pause_after_a_long_wait_keeps_the_aborted_turn() {
         lease: None,
         engine_metrics: None,
         memory: None,
+        effort: None,
     };
     let mut runner = Runner::open(project.clone(), deps, stop).unwrap();
     runner

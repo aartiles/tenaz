@@ -3,7 +3,9 @@
 //! charging the task an attempt, and the run still completes. One that dies
 //! while a tool call runs (fx on output that is not UTF-8, in the Wild West
 //! run of 2026-10-24) would die again on a rerun that makes the same call, so
-//! the attempt counts and the next briefing names the call.
+//! the attempt counts and the next briefing names the call. So does one
+//! whose reply was cut at the output limit while the model reasoned (fx
+//! exits on `OutputTruncated`): the next session runs at a lower effort.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -68,6 +70,7 @@ async fn run(harness: ScriptedHarness, max_attempts: u32) -> (tempfile::TempDir,
         lease: None,
         engine_metrics: None,
         memory: None,
+        effort: Some(tenaz_core::effort::EffortDial::new()),
     };
     let mut runner = Runner::open(project.clone(), deps, CancellationToken::new()).unwrap();
     runner
@@ -192,4 +195,90 @@ async fn a_harness_exit_during_a_tool_call_charges_the_attempt_and_names_the_cal
         "{prompt}"
     );
     assert!(prompt.contains("do not cut output by bytes"), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_reply_cut_at_the_output_limit_charges_the_attempt_and_lowers_the_effort() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            truncate_task: Some("T001".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    let journal = project.journal();
+    let cut = journal
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.harness_exit.is_some() => Some(s.clone()),
+            _ => None,
+        })
+        .expect("the cut session is journaled with its harness exit");
+    assert!(cut.label.ends_with("-builder-T001"), "{}", cut.label);
+    let reason = cut.abort_reason.as_deref().unwrap();
+    assert!(reason.contains("output limit"), "{reason}");
+    assert!(
+        !journal.iter().any(
+            |e| matches!(&e.record, JournalRecord::EngineRetry { label, .. } if *label == cut.label)
+        ),
+        "a reply cut at the output limit is not retried as an engine failure:\n{log}"
+    );
+    let next = journal
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s)
+                if s.label.ends_with("-builder-T001") && s.label != cut.label =>
+            {
+                Some(s.clone())
+            }
+            _ => None,
+        })
+        .expect("T001 runs again");
+    assert_eq!(next.attempt, Some(2), "the cut cost T001 an attempt");
+    let prompt = project
+        .read(&format!(".tenaz/private/{}.prompt.md", next.label))
+        .unwrap();
+    assert!(prompt.contains("reason briefly"), "{prompt}");
+    assert!(
+        log.contains(&format!(
+            "{}: the last reply stopped at the output limit; this session reasons at a lower effort",
+            next.label
+        )),
+        "{log}"
+    );
+    assert!(
+        !project.load_ledger().unwrap().lower_effort,
+        "one session only"
+    );
+}
+
+#[tokio::test]
+async fn a_bootstrap_cut_at_the_output_limit_is_told_why_and_tried_again() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            truncate_bootstrap: true,
+            ..Default::default()
+        },
+        2,
+    )
+    .await;
+    let journal = project.journal();
+    let problems = journal
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::BootstrapValidation { errors, .. } if !errors.is_empty() => {
+                Some(errors.clone())
+            }
+            _ => None,
+        })
+        .expect("the cut bootstrap left problems");
+    assert!(
+        problems[0].starts_with("the session was stopped: the reply reached the output limit"),
+        "{problems:?}"
+    );
+    assert!(
+        log.contains("this session reasons at a lower effort"),
+        "{log}"
+    );
 }

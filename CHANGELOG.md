@@ -159,6 +159,12 @@ uses [Semantic Versioning](https://semver.org/).
   names the call: a rerun made the same call and the harness died again
   until the run blocked. When the output was not valid UTF-8 (fx dies on
   it), the briefing also says not to cut output by bytes.
+- A session whose reply stopped at the output limit while the model was
+  still reasoning (fx exits on it with `OutputTruncated`) counts as a
+  failed attempt instead of an engine failure, the next briefing says why,
+  and the next session asks the engine for one step less reasoning effort
+  (through the proxy). Rerun unchanged at temperature 0, such sessions
+  reasoned the same way again until the run blocked.
 - fx writes one ACP log per session instead of overwriting a shared one.
 - An ACP session handles a proxy observation before the prompt's end, so
   per-request usage is no longer occasionally lost or attributed to the

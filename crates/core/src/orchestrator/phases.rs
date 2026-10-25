@@ -233,6 +233,14 @@ impl Runner {
                 crate::ownership::reverted_note(Role::Bootstrap, &s.record.reverted),
             );
         }
+        // A reply cut at the output limit left no work: say why, so the next
+        // session does not reason the same way again.
+        if !errors.is_empty()
+            && s.metrics.output_truncated()
+            && let Some(reason) = &s.record.abort_reason
+        {
+            errors.insert(0, format!("the session was stopped: {reason}"));
+        }
         // A session whose every tool call failed did not get to the task: say
         // so first, for the next session and for whoever reads the block.
         if !errors.is_empty() && s.metrics.every_tool_call_failed() {

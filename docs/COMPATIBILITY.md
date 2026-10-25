@@ -120,6 +120,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
   tells the next session not to cut output by bytes; the session's work in
   progress is lost. The fake harness reproduces the crash; it has not been
   rerun against fx itself.
+- **Replies cut at the output limit.** fx is given a 16384-token output
+  limit; a reply that reasons past it ends the session (`OutputTruncated`).
+  Tenaz charges the attempt, says why in the next briefing, and lowers the
+  reasoning effort for the next session through the proxy, so without the
+  proxy (`--no-proxy`) the effort stays as configured. Tested with the fake
+  harness only.
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
 - A pause during a bootstrap session counts as one of its attempts. An

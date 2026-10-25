@@ -241,11 +241,18 @@ impl SessionMetrics {
         !self.settled && !self.aborted && self.abort_reason.is_none()
     }
 
+    /// The last reply stopped at the output limit (`length`), usually while
+    /// the model was still reasoning.
+    pub fn output_truncated(&self) -> bool {
+        self.last_stop_reason == Some(StopReason::MaxTokens)
+    }
+
     /// The session ended because of the engine or the harness, not the task.
-    /// A harness that ended while one of the session's tool calls ran is not
-    /// counted: that call is what ended it, and a rerun would make it again.
+    /// A harness that ended while one of the session's tool calls ran, or
+    /// after a reply cut at the output limit, is not counted: the session
+    /// caused it, and an unchanged rerun would do the same.
     pub fn engine_failed(&self) -> bool {
-        (self.harness_exit.is_some() && self.tool_in_flight.is_none())
+        (self.harness_exit.is_some() && self.tool_in_flight.is_none() && !self.output_truncated())
             || self.last_stop_reason == Some(StopReason::Error)
             || self
                 .abort_reason
@@ -359,6 +366,15 @@ mod tests {
         assert!(
             !in_tool.engine_failed(),
             "a crash during a tool call is the call's, not the engine's"
+        );
+        let truncated = SessionMetrics {
+            last_stop_reason: Some(StopReason::MaxTokens),
+            ..noted.clone()
+        };
+        assert!(truncated.output_truncated());
+        assert!(
+            !truncated.engine_failed(),
+            "a reply cut at the output limit is the session's, not the engine's"
         );
         let aborted = SessionMetrics {
             abort_reason: Some("same bash call 5 times in a row".into()),

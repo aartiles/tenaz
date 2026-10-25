@@ -17,6 +17,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures::StreamExt as _;
+use tenaz_core::effort::EffortDial;
 use tenaz_core::lease::Gate;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -46,6 +47,9 @@ pub struct Proxy {
     /// Parse back tool-call arguments the engine sent as JSON text where the
     /// tool's schema accepts only an object (see [`repair`]).
     pub repair_tool_args: bool,
+    /// When turned, requests ask for one step less than the default
+    /// `reasoning_effort`, whatever the harness sent.
+    pub effort: Option<EffortDial>,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -89,6 +93,13 @@ const HOP_BY_HOP: [&str; 8] = [
 ];
 
 impl Proxy {
+    /// The default `reasoning_effort` one step down, while the dial is turned.
+    fn lowered_effort(&self) -> Option<&str> {
+        let dial = self.effort.as_ref().filter(|d| d.lowered())?;
+        let configured = self.request_defaults.get("reasoning_effort")?.as_str()?;
+        Some(dial.effort(configured))
+    }
+
     /// `upstream` is the engine's origin (`http://127.0.0.1:12345`); paths are
     /// forwarded as received, so `/v1/...` stays `/v1/...`.
     pub fn new(upstream: impl Into<String>, gate: Gate, observer: Observer) -> Self {
@@ -101,6 +112,7 @@ impl Proxy {
             include_usage: true,
             request_defaults: serde_json::Map::new(),
             repair_tool_args: true,
+            effort: None,
         }
     }
 
@@ -154,16 +166,26 @@ fn is_completion(method: &axum::http::Method, path: &str) -> bool {
 }
 
 /// Rewrites a completion request: `stream_options.include_usage` on a
-/// streaming request that lacks it, and the defaults for absent fields.
-/// `None` when nothing changed.
+/// streaming request that lacks it, the defaults for absent fields, and
+/// `effort` as the `reasoning_effort` when given. `None` when nothing changed.
 fn rewrite_request(
     body: &[u8],
     include_usage: bool,
     defaults: &serde_json::Map<String, serde_json::Value>,
+    effort: Option<&str>,
 ) -> Option<Vec<u8>> {
     let mut json: serde_json::Value = serde_json::from_slice(body).ok()?;
     let object = json.as_object_mut()?;
     let mut changed = false;
+    if let Some(effort) = effort
+        && object
+            .get("reasoning_effort")
+            .and_then(serde_json::Value::as_str)
+            != Some(effort)
+    {
+        object.insert("reasoning_effort".to_owned(), effort.into());
+        changed = true;
+    }
     for (key, value) in defaults {
         if !object.contains_key(key) {
             object.insert(key.clone(), value.clone());
@@ -201,7 +223,12 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
         }
     };
     let rewritten = if completion {
-        rewrite_request(&body, proxy.include_usage, &proxy.request_defaults)
+        rewrite_request(
+            &body,
+            proxy.include_usage,
+            &proxy.request_defaults,
+            proxy.lowered_effort(),
+        )
     } else {
         None
     };
@@ -410,21 +437,22 @@ mod tests {
     fn streaming_requests_get_the_usage_option() {
         let none = serde_json::Map::new();
         let body = br#"{"model":"m","stream":true,"messages":[]}"#;
-        let rewritten = rewrite_request(body, true, &none).unwrap();
+        let rewritten = rewrite_request(body, true, &none, None).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
         assert_eq!(json["stream_options"]["include_usage"], true);
         assert_eq!(json["messages"], serde_json::json!([]));
-        assert!(rewrite_request(br#"{"stream":false}"#, true, &none).is_none());
+        assert!(rewrite_request(br#"{"stream":false}"#, true, &none, None).is_none());
         assert!(
             rewrite_request(
                 br#"{"stream":true,"stream_options":{"include_usage":false}}"#,
                 true,
-                &none
+                &none,
+                None
             )
             .is_none()
         );
-        assert!(rewrite_request(body, false, &none).is_none());
-        assert!(rewrite_request(b"not json", true, &none).is_none());
+        assert!(rewrite_request(body, false, &none, None).is_none());
+        assert!(rewrite_request(b"not json", true, &none, None).is_none());
     }
 
     #[test]
@@ -434,12 +462,38 @@ mod tests {
             .cloned()
             .unwrap();
         let body = br#"{"model":"m","stream":false,"messages":[]}"#;
-        let rewritten = rewrite_request(body, true, &defaults).unwrap();
+        let rewritten = rewrite_request(body, true, &defaults, None).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
         assert_eq!(json["reasoning_effort"], "medium");
         assert!(json.get("stream_options").is_none());
         let explicit = br#"{"model":"m","reasoning_effort":"low","stream":true,"stream_options":{"include_usage":true}}"#;
-        assert!(rewrite_request(explicit, true, &defaults).is_none());
+        assert!(rewrite_request(explicit, true, &defaults, None).is_none());
+    }
+
+    #[test]
+    fn a_turned_dial_asks_for_less_effort_than_the_default_or_the_harness() {
+        let mut proxy = Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
+        proxy
+            .request_defaults
+            .insert("reasoning_effort".to_owned(), "medium".into());
+        assert_eq!(proxy.lowered_effort(), None, "no dial");
+        let dial = EffortDial::new();
+        proxy.effort = Some(dial.clone());
+        assert_eq!(proxy.lowered_effort(), None, "not turned");
+        dial.set_lowered(true);
+        assert_eq!(proxy.lowered_effort(), Some("low"));
+        let defaults = proxy.request_defaults.clone();
+        let sent = br#"{"model":"m","reasoning_effort":"medium","stream":false}"#;
+        let rewritten = rewrite_request(sent, true, &defaults, Some("low")).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(json["reasoning_effort"], "low");
+        let absent = br#"{"model":"m","stream":false}"#;
+        let rewritten = rewrite_request(absent, true, &defaults, Some("low")).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(
+            json["reasoning_effort"], "low",
+            "the override wins over the default"
+        );
     }
 
     #[test]

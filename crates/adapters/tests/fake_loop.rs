@@ -33,6 +33,7 @@ fn deps(project: &Project, harness: ScriptedHarness) -> Deps {
         lease: None,
         engine_metrics: None,
         memory: None,
+        effort: None,
     }
 }
 
