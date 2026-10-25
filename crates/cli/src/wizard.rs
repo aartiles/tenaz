@@ -561,7 +561,8 @@ async fn ask_media<R: BufRead, W: Write>(
     let mut comfyui = args.comfyui.clone();
     if comfyui.is_none() && images.is_none() {
         let local = detect::COMFYUI_URL;
-        if detect::comfyui_at(client, local).await
+        if detect::probing()
+            && detect::comfyui_at(client, local).await
             && p.confirm(
                 &format!("ComfyUI is running at {local}. Give the agent an image tool?"),
                 true,

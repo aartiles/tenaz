@@ -72,7 +72,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   lists an image model, a server on 1337 (Atomic Chat) or 11234
   (mlx-serve) that does, and ComfyUI on 8188), with an 800 ms timeout
   each. Whether mlx-serve lists its image models at `/v1/models` and
-  serves `/v1/images/generations` has not been checked. An image model is
+  serves `/v1/images/generations` has not been checked. With
+  `TENAZ_NO_PROBE` set, neither looks at these ports: only the addresses
+  the flags give are used. An image model is
   recognised by its name (FLUX, SDXL, SD3, Z-Image, Qwen-Image and
   similar); one with another name is not offered. The context window
   comes from the engine where it reports one (Sushi, vLLM, llama.cpp's

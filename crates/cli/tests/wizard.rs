@@ -6,8 +6,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 
+/// The binary, kept from the engines and image servers running on this
+/// machine: it looks only where the test points it.
 fn tenaz() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_tenaz"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tenaz"));
+    command.env("TENAZ_NO_PROBE", "1");
+    command
 }
 
 /// A tiny HTTP server: an OpenAI-compatible model list with two models and
@@ -359,7 +363,6 @@ fn the_wizard_offers_the_folder_it_runs_in() {
         "",                  // where: here
         "1",                 // model: alpha
         "n",                 // reads images
-        "",                  // ComfyUI: none
         "",                  // create: yes
     ];
     child

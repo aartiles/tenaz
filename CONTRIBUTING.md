@@ -56,7 +56,10 @@ fx, Pi or ComfyUI installed. A scripted harness drives every orchestrator
 path, fake engines sit under the lease, and fakes stand in for the ACP agent,
 the Pi process, the engine behind the proxy and ComfyUI. Keep it that way:
 a new adapter comes with a fake or a recorded transcript, and pure
-translation code gets unit tests. Checks against real tools are documented in
+translation code gets unit tests. Nor may a test depend on what runs on the
+machine: tests that start `tenaz` set `TENAZ_NO_PROBE`, so `init` and
+`doctor` do not find a real engine or ComfyUI on the usual ports. Checks
+against real tools are documented in
 [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) rather than added to
 `cargo test`.
 

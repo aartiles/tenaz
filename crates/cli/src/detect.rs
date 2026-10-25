@@ -13,6 +13,16 @@ use tenaz_core::ledger::EngineApi;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 
+/// Set, `init` and `doctor` look only where flags point, not at the usual
+/// ports: for tests and scripted setups that must not depend on what runs
+/// on this machine.
+pub const NO_PROBE: &str = "TENAZ_NO_PROBE";
+
+/// Whether to look for engines and image servers on the usual ports.
+pub fn probing() -> bool {
+    std::env::var_os(NO_PROBE).is_none()
+}
+
 /// A coding agent Tenaz can drive.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Agent {
@@ -97,7 +107,7 @@ pub const COMFYUI_URL: &str = "http://127.0.0.1:8188";
 /// model, the servers on [`IMAGE_PORTS`] that do, then `ComfyUI`.
 pub async fn images(client: &reqwest::Client, engines: &[Engine]) -> Vec<doctor::ImagesSeen> {
     let mut found = image_servers(client, engines).await;
-    if comfyui_at(client, COMFYUI_URL).await {
+    if probing() && comfyui_at(client, COMFYUI_URL).await {
         found.push(doctor::ImagesSeen {
             label: "ComfyUI".to_owned(),
             url: COMFYUI_URL.to_owned(),
@@ -115,7 +125,7 @@ pub async fn image_servers(
     engines: &[Engine],
 ) -> Vec<doctor::ImagesSeen> {
     let mut found: Vec<doctor::ImagesSeen> = engines.iter().filter_map(Engine::images).collect();
-    for (port, label) in IMAGE_PORTS {
+    for (port, label) in IMAGE_PORTS.into_iter().filter(|_| probing()) {
         let url = format!("http://127.0.0.1:{port}/v1");
         if engines.iter().any(|e| e.base_url == url) {
             continue;
@@ -213,6 +223,9 @@ pub fn client() -> reqwest::Client {
 
 /// The engines answering on [`ENGINE_PORTS`] on this machine, probed at once.
 pub async fn local_engines(client: &reqwest::Client) -> Vec<Engine> {
+    if !probing() {
+        return Vec::new();
+    }
     let probes = ENGINE_PORTS.iter().map(|(port, _, _)| {
         let url = format!("http://127.0.0.1:{port}/v1");
         async move { engine_at(client, &url).await }
