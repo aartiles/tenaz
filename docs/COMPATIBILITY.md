@@ -68,8 +68,11 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - ComfyUI is wherever `--comfyui` points, usually `http://127.0.0.1:8188`.
 - `tenaz init`'s wizard and `tenaz doctor` look for engines on 12345
   (Sushi), 8080 (llama.cpp, llama-swap), 1234 (LM Studio), 11434 (Ollama)
-  and 8000 (vLLM), and the wizard for ComfyUI on 8188, with an 800 ms
-  timeout each. The context window
+  and 8000 (vLLM), and for image engines (an engine on those ports that
+  lists an image model, a server on 1337 (Atomic Chat) that does, and
+  ComfyUI on 8188), with an 800 ms timeout each. An image model is
+  recognised by its name (FLUX, SDXL, SD3, Z-Image, Qwen-Image and
+  similar); one with another name is not offered. The context window
   comes from the engine where it reports one (Sushi, vLLM, llama.cpp's
   `/props`, LM Studio's `/api/v0/models`); Ollama does not, so the wizard
   asks. Detection is tested against recorded answers, not live engines.

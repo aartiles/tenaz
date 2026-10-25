@@ -1,6 +1,7 @@
 //! What the setup wizard finds on this machine: coding agents on `PATH`,
 //! OpenAI-compatible engines on their usual ports with the models they
-//! serve, `ComfyUI`, and git for `tenaz doctor`. Every probe is short and
+//! serve, image engines (an `OpenAI` Images API that lists an image model,
+//! `ComfyUI`), and git for `tenaz doctor`. Every probe is short and
 //! failing to find something is not an error.
 
 use std::path::Path;
@@ -82,10 +83,81 @@ pub async fn machine(base_url: Option<&str>) -> doctor::Machine {
             .collect(),
         engines: engines.iter().map(Engine::seen).collect(),
         looked_at,
+        images: images(&client, &engines).await,
     }
 }
 
+/// Where image servers usually listen, besides [`ENGINE_PORTS`].
+pub const IMAGE_PORTS: [(u16, &str); 1] = [(1337, "Atomic Chat")];
+
+/// Where `ComfyUI` usually listens.
+pub const COMFYUI_URL: &str = "http://127.0.0.1:8188";
+
+/// The image engines on this machine: the `engines` that list an image
+/// model, the servers on [`IMAGE_PORTS`] that do, then `ComfyUI`.
+pub async fn images(client: &reqwest::Client, engines: &[Engine]) -> Vec<doctor::ImagesSeen> {
+    let mut found = image_servers(client, engines).await;
+    if comfyui_at(client, COMFYUI_URL).await {
+        found.push(doctor::ImagesSeen {
+            label: "ComfyUI".to_owned(),
+            url: COMFYUI_URL.to_owned(),
+            models: Vec::new(),
+            comfyui: true,
+        });
+    }
+    found
+}
+
+/// The `engines` that list an image model at `/v1/models`, then the
+/// servers on [`IMAGE_PORTS`] that do.
+pub async fn image_servers(
+    client: &reqwest::Client,
+    engines: &[Engine],
+) -> Vec<doctor::ImagesSeen> {
+    let mut found: Vec<doctor::ImagesSeen> = engines.iter().filter_map(Engine::images).collect();
+    for (port, label) in IMAGE_PORTS {
+        let url = format!("http://127.0.0.1:{port}/v1");
+        if engines.iter().any(|e| e.base_url == url) {
+            continue;
+        }
+        if let Some(mut engine) = engine_at(client, &url).await {
+            label.clone_into(&mut engine.label);
+            found.extend(engine.images());
+        }
+    }
+    found
+}
+
+/// The image servers worth offering for a run whose LLM is at
+/// `llm_base_url`: the LLM's own engine first, since it needs no second
+/// model in memory; `ComfyUI` is offered apart, as it needs a workflow.
+pub fn image_offers(
+    mut servers: Vec<doctor::ImagesSeen>,
+    llm_base_url: Option<&str>,
+) -> Vec<doctor::ImagesSeen> {
+    let own = llm_base_url.map(normalize_base_url);
+    servers.retain(|s| !s.comfyui && !s.models.is_empty());
+    servers.sort_by_key(|s| Some(&s.url) != own.as_ref());
+    servers
+}
+
 impl Engine {
+    /// The image models it lists, if any.
+    pub fn images(&self) -> Option<doctor::ImagesSeen> {
+        let models: Vec<String> = self
+            .models
+            .iter()
+            .map(|m| m.id.clone())
+            .filter(|id| doctor::is_image_model(id))
+            .collect();
+        (!models.is_empty()).then(|| doctor::ImagesSeen {
+            label: self.label.clone(),
+            url: self.base_url.clone(),
+            models,
+            comfyui: false,
+        })
+    }
+
     /// What `tenaz doctor` needs to know about it.
     pub fn seen(&self) -> doctor::EngineSeen {
         doctor::EngineSeen {
@@ -326,6 +398,57 @@ fn apply_lm_studio_models(models: &mut [Model], v0: &Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn engine(url: &str, ids: &[&str]) -> Engine {
+        Engine {
+            label: "Rapid-MLX".to_owned(),
+            provider: "local".to_owned(),
+            base_url: url.to_owned(),
+            api: EngineApi::Generic,
+            models: parse_models(
+                &json!({"data": ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()}),
+            ),
+        }
+    }
+
+    #[test]
+    fn an_engine_that_lists_an_image_model_is_an_image_server() {
+        let mixed = engine(
+            "http://127.0.0.1:8000/v1",
+            &["Qwen3.8-Flash-Next", "flux2-klein-4b", "z-image-turbo"],
+        );
+        let images = mixed.images().unwrap();
+        assert_eq!(images.models, vec!["flux2-klein-4b", "z-image-turbo"]);
+        assert_eq!(images.url, "http://127.0.0.1:8000/v1");
+        assert!(!images.comfyui);
+        assert!(
+            engine("http://127.0.0.1:1234/v1", &["qwen"])
+                .images()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_llms_own_engine_is_offered_first_and_comfyui_apart() {
+        let other = engine("http://127.0.0.1:1337/v1", &["sdxl"])
+            .images()
+            .unwrap();
+        let own = engine("http://127.0.0.1:8000/v1", &["flux"])
+            .images()
+            .unwrap();
+        let comfy = doctor::ImagesSeen {
+            label: "ComfyUI".to_owned(),
+            url: COMFYUI_URL.to_owned(),
+            models: Vec::new(),
+            comfyui: true,
+        };
+        let offers = image_offers(
+            vec![other.clone(), comfy, own.clone()],
+            Some("127.0.0.1:8000"),
+        );
+        assert_eq!(offers, vec![own, other.clone()]);
+        assert_eq!(image_offers(vec![other.clone()], None), vec![other]);
+    }
 
     #[test]
     fn base_urls_end_in_v1() {

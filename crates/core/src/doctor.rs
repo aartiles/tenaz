@@ -49,6 +49,18 @@ pub struct ModelSeen {
     pub context_window: Option<u64>,
 }
 
+/// An image engine that answered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImagesSeen {
+    /// What to call it (`LM Studio`, `ComfyUI`, ...).
+    pub label: String,
+    /// The `/v1` base URL of an `OpenAI` Images API, or `ComfyUI`'s address.
+    pub url: String,
+    /// The image models it lists; empty for `ComfyUI`, which needs a workflow.
+    pub models: Vec<String>,
+    pub comfyui: bool,
+}
+
 /// What was found on this machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Machine {
@@ -59,6 +71,8 @@ pub struct Machine {
     pub engines: Vec<EngineSeen>,
     /// Where engines were looked for, as shown to the user (`1234 LM Studio`).
     pub looked_at: Vec<String>,
+    /// Image engines, an `OpenAI` Images API before `ComfyUI`.
+    pub images: Vec<ImagesSeen>,
 }
 
 /// How one check came out.
@@ -88,7 +102,74 @@ pub fn examine(machine: &Machine, context_floor: u64) -> Vec<Check> {
         agent_check(machine),
         engine_check(machine),
         model_check(machine, context_floor),
+        images_check(machine),
     ]
+}
+
+/// Words in a model id that mark an image model: the families local
+/// servers render with. A heuristic: `--image-model` names any other.
+const IMAGE_MODEL_WORDS: [&str; 13] = [
+    "flux",
+    "sdxl",
+    "sd3",
+    "sd-3",
+    "stable-diffusion",
+    "z-image",
+    "qwen-image",
+    "krea",
+    "hidream",
+    "kolors",
+    "pixart",
+    "lumina",
+    "chroma",
+];
+
+/// Whether a model id looks like an image model.
+pub fn is_image_model(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    IMAGE_MODEL_WORDS.iter().any(|word| id.contains(word))
+}
+
+/// Images are optional: the check says what was found and how to give it
+/// to a run, never that something is missing.
+fn images_check(machine: &Machine) -> Check {
+    let Some(first) = machine.images.first() else {
+        return Check {
+            what: "images",
+            level: Level::Ok,
+            found: "no image engine (optional)".to_owned(),
+            fix: vec![
+                "For an image tool, run a server with the OpenAI Images API \
+                 (/v1/images/generations), such as an MLX server or LocalAI, or ComfyUI."
+                    .to_owned(),
+            ],
+        };
+    };
+    let found = machine
+        .images
+        .iter()
+        .map(|i| match i.models.first() {
+            Some(model) => format!("{model} on {} at {}", i.label, i.url),
+            None => format!("{} at {}", i.label, i.url),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let fix = match first.models.first() {
+        Some(model) => format!(
+            "Give it to a run: --images {} --image-model {model}",
+            first.url
+        ),
+        None => format!(
+            "Give it to a run: --comfyui {} --workflow default=<API-format workflow>.json",
+            first.url
+        ),
+    };
+    Check {
+        what: "images",
+        level: Level::Ok,
+        found,
+        fix: vec![fix],
+    }
 }
 
 /// Whether a real run can start: nothing is missing.
@@ -317,7 +398,63 @@ mod tests {
             }],
             engines: vec![engine("lmstudio", &[("qwen", Some(65536))])],
             looked_at: vec!["1234 LM Studio".to_owned()],
+            images: Vec::new(),
         }
+    }
+
+    #[test]
+    fn image_models_are_told_apart_by_name() {
+        for id in [
+            "FLUX.2-klein-4B",
+            "mlx-community/Z-Image-Turbo",
+            "qwen-image-2.1",
+            "stable-diffusion-3.5-medium",
+            "sdxl-turbo",
+        ] {
+            assert!(is_image_model(id), "{id}");
+        }
+        for id in [
+            "Qwen3.8-Flash-Next",
+            "llama-4-scout",
+            "gpt-oss-20b",
+            "qwen2.5-vl",
+        ] {
+            assert!(!is_image_model(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_images_check_offers_what_was_found_and_never_blocks() {
+        let mut m = machine();
+        let none = images_check(&m);
+        assert_eq!(none.level, Level::Ok);
+        assert!(none.found.contains("optional"));
+        m.images = vec![
+            ImagesSeen {
+                label: "Atomic Chat".to_owned(),
+                url: "http://127.0.0.1:1337/v1".to_owned(),
+                models: vec!["flux2-klein".to_owned()],
+                comfyui: false,
+            },
+            ImagesSeen {
+                label: "ComfyUI".to_owned(),
+                url: "http://127.0.0.1:8188".to_owned(),
+                models: Vec::new(),
+                comfyui: true,
+            },
+        ];
+        let found = images_check(&m);
+        assert_eq!(
+            found.found,
+            "flux2-klein on Atomic Chat at http://127.0.0.1:1337/v1; ComfyUI at http://127.0.0.1:8188"
+        );
+        assert_eq!(
+            found.fix,
+            vec!["Give it to a run: --images http://127.0.0.1:1337/v1 --image-model flux2-klein"]
+        );
+        m.images.remove(0);
+        assert!(images_check(&m).fix[0].contains("--comfyui http://127.0.0.1:8188"));
+        assert!(ready(&examine(&m, FLOOR)));
     }
 
     fn engine(provider: &str, models: &[(&str, Option<u64>)]) -> EngineSeen {

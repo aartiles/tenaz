@@ -35,6 +35,8 @@ Do this once, and again whenever a run fails before its first session.
    the usual ports (`--base-url` adds another address) and a model with at
    least 32k tokens of context, prints `ok`, `check` or `missing` for each
    with the fix under it, and exits with 1 while something is missing.
+   Its `images` line is optional: it names an image engine it found and
+   the `--images` or `--comfyui` flags that give it to a run.
    Work through the fixes in order:
    - git or the agent missing: the fix is an install command. Show it and
      ask before running it; installing software is the user's call.
