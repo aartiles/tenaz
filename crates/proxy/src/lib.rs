@@ -50,6 +50,9 @@ pub struct Proxy {
     /// When turned, requests ask for one step less than the default
     /// `reasoning_effort`, whatever the harness sent.
     pub effort: Option<EffortDial>,
+    /// The harness's output limit, for requests that do not carry one: a
+    /// reply that reaches it is reported with `finish_reason: length`.
+    pub max_output_tokens: Option<u64>,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -113,6 +116,7 @@ impl Proxy {
             request_defaults: serde_json::Map::new(),
             repair_tool_args: true,
             effort: None,
+            max_output_tokens: None,
         }
     }
 
@@ -241,6 +245,10 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
     } else {
         None
     };
+    let max_output = request_json
+        .as_ref()
+        .and_then(events::output_limit)
+        .or(proxy.max_output_tokens);
     let stream = request_json
         .as_ref()
         .and_then(|j| j.get("stream").and_then(serde_json::Value::as_bool))
@@ -312,7 +320,8 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
         stream || event_stream,
         completion,
         started,
-    );
+    )
+    .with_max_output(max_output);
     let tapped = TappedStream::new(
         upstream
             .bytes_stream()

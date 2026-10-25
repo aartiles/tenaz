@@ -110,6 +110,30 @@ pub fn finish_reason_from_json(value: &serde_json::Value) -> Option<String> {
     })
 }
 
+/// The output limit a completion request asks for, under any of the names
+/// the chat, completions and responses APIs use.
+pub fn output_limit(request: &serde_json::Value) -> Option<u64> {
+    ["max_completion_tokens", "max_tokens", "max_output_tokens"]
+        .iter()
+        .find_map(|key| request.get(*key).and_then(serde_json::Value::as_u64))
+}
+
+/// The `finish_reason` to report: `length` when the reply reached the
+/// output limit, whatever the engine said. Some engines end a reply cut
+/// inside a tool call's arguments with `tool_calls`.
+pub fn reported_finish_reason(
+    finish_reason: Option<String>,
+    usage: Option<&ProxyUsage>,
+    limit: Option<u64>,
+) -> Option<String> {
+    match (usage, limit) {
+        (Some(usage), Some(limit)) if limit > 0 && usage.completion_tokens >= limit => {
+            Some("length".to_owned())
+        }
+        _ => finish_reason,
+    }
+}
+
 /// The error message of an engine error body, and what it means.
 pub fn classify_error(body: &[u8]) -> (String, EngineErrorKind) {
     let text = String::from_utf8_lossy(body);
@@ -148,6 +172,36 @@ pub fn classify_error(body: &[u8]) -> (String, EngineErrorKind) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reply_at_the_output_limit_is_reported_as_cut() {
+        let usage = |completion_tokens| ProxyUsage {
+            completion_tokens,
+            ..Default::default()
+        };
+        let tool = || Some("tool_calls".to_owned());
+        assert_eq!(
+            reported_finish_reason(tool(), Some(&usage(16384)), Some(16384)).as_deref(),
+            Some("length")
+        );
+        assert_eq!(
+            reported_finish_reason(tool(), Some(&usage(16383)), Some(16384)).as_deref(),
+            Some("tool_calls")
+        );
+        assert_eq!(
+            reported_finish_reason(tool(), Some(&usage(16384)), None).as_deref(),
+            Some("tool_calls")
+        );
+        assert_eq!(
+            output_limit(&serde_json::json!({"max_tokens": 16384, "model": "m"})),
+            Some(16384)
+        );
+        assert_eq!(
+            output_limit(&serde_json::json!({"max_completion_tokens": 900})),
+            Some(900)
+        );
+        assert_eq!(output_limit(&serde_json::json!({"model": "m"})), None);
+    }
 
     #[test]
     fn usage_is_read_in_openai_and_responses_shapes() {

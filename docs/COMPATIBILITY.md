@@ -127,7 +127,11 @@ above), so a 32k context is the practical floor (`contextFloor`).
   Tenaz charges the attempt, says why in the next briefing, and lowers the
   reasoning effort for the next session through the proxy, so without the
   proxy (`--no-proxy`) the effort stays as configured. Tested with the fake
-  harness only.
+  harness only. TensorFold ended a reply cut inside a tool call's
+  arguments with `finish_reason: tool_calls` at 16384 of 16384 tokens, and
+  fx reported `InvalidToolArguments`; the proxy now reports any reply that
+  reaches the request's output limit (16384 when the request does not say)
+  as `length`. Tested against a fake engine only.
   Each fx session's reasoning text is kept in
   `.tenaz/private/<label>.thinking.md` to show what such a reply was
   doing. It relies on fx sending the reasoning as ACP thought chunks;

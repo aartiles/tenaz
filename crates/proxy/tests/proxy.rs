@@ -1,5 +1,6 @@
 //! The proxy against a fake engine: usage from JSON and SSE answers, error
-//! classification, and holding requests while the gate is closed.
+//! classification, holding requests while the gate is closed, and replies
+//! cut at the output limit.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -18,6 +19,10 @@ async fn fake_engine() -> SocketAddr {
                 let content = body["messages"][0]["content"].as_str().unwrap_or("").to_owned();
                 if content == "too big" {
                     return (axum::http::StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": {"message": "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}))).into_response();
+                }
+                if content == "cut in a tool call" {
+                    let sse = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"write\",\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":16}}\n\ndata: [DONE]\n\n";
+                    return ([("content-type", "text/event-stream")], sse).into_response();
                 }
                 if body["stream"] == true {
                     assert_eq!(body["stream_options"]["include_usage"], true, "the proxy asks for usage in streams");
@@ -254,4 +259,31 @@ async fn an_unreachable_engine_is_a_502_with_an_event() {
         }
     ));
     handle.stop().await;
+}
+
+#[tokio::test]
+async fn a_reply_at_the_requested_output_limit_is_reported_as_cut() {
+    let upstream = fake_engine().await;
+    let (handle, events) = start(upstream, Gate::new()).await;
+    reqwest::Client::new()
+        .post(format!("{}/chat/completions", handle.base_url()))
+        .json(&serde_json::json!({
+            "stream": true,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "cut in a tool call"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let events = settle(&events, 1).await;
+    assert!(
+        matches!(
+            &events[0],
+            ProxyEvent::Completed { finish_reason: Some(reason), .. } if reason == "length"
+        ),
+        "the engine said tool_calls at 16 of 16 tokens: {events:?}"
+    );
 }

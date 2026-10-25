@@ -386,6 +386,10 @@ fn log_repair(log: &Path, request: u64, tool: &str, fields: &[String]) {
     }
 }
 
+/// The output limit fx is configured with, and what the proxy takes as the
+/// limit of a request that does not say.
+const HARNESS_MAX_OUTPUT_TOKENS: u64 = 16_384;
+
 /// The engine proxy: per-request usage and errors go to `feed`, requests
 /// are given the `reasoning_effort` the thinking level asks for, and with a
 /// `repairs` log, tool-call arguments sent as text are repaired and logged.
@@ -444,6 +448,7 @@ async fn start_proxy(
         }),
     );
     proxy.repair_tool_args = repairs.is_some();
+    proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
     proxy.effort = effort;
     if let Some(effort) = reasoning_effort(thinking) {
         // fx does not forward its effort to a custom provider; the proxy fills it in.
@@ -533,7 +538,7 @@ fn build_harness(
                 base_url: harness_base_url,
                 model: config.id.clone(),
                 context_window: config.context_window,
-                max_output_tokens: 16_384,
+                max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
                 supports_vision: config.supports_images(),
                 permission_mode: "ask".to_owned(),
                 effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),

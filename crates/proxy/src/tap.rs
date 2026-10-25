@@ -9,7 +9,9 @@ use std::time::Instant;
 use bytes::Bytes;
 use futures::Stream;
 
-use crate::events::{ProxyEvent, classify_error, finish_reason_from_json, usage_from_json};
+use crate::events::{
+    ProxyEvent, classify_error, finish_reason_from_json, reported_finish_reason, usage_from_json,
+};
 use crate::{Proxy, elapsed_ms};
 
 /// Accumulates what the proxy needs from a response.
@@ -29,6 +31,8 @@ pub(crate) struct Tap {
     usage: Option<crate::ProxyUsage>,
     finish_reason: Option<String>,
     timings: Option<tenaz_core::session::ServerTimings>,
+    /// The output limit the request ran under, when known.
+    max_output: Option<u64>,
     done: bool,
 }
 
@@ -58,8 +62,15 @@ impl Tap {
             usage: None,
             finish_reason: None,
             timings: None,
+            max_output: None,
             done: false,
         }
+    }
+
+    /// A reply that reaches `limit` output tokens is reported as cut.
+    pub(crate) fn with_max_output(mut self, limit: Option<u64>) -> Self {
+        self.max_output = limit;
+        self
     }
 
     fn chunk(&mut self, chunk: &[u8]) {
@@ -140,7 +151,11 @@ impl Tap {
             status: self.status,
             stream: self.stream,
             usage: self.usage,
-            finish_reason: self.finish_reason.take(),
+            finish_reason: reported_finish_reason(
+                self.finish_reason.take(),
+                self.usage.as_ref(),
+                self.max_output,
+            ),
             timings: self.timings.take(),
             first_byte_ms: self.first_byte.map(|t| {
                 u64::try_from(t.duration_since(self.started).as_millis()).unwrap_or(u64::MAX)
