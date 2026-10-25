@@ -88,7 +88,7 @@ pub async fn machine(base_url: Option<&str>) -> doctor::Machine {
 }
 
 /// Where image servers usually listen, besides [`ENGINE_PORTS`].
-pub const IMAGE_PORTS: [(u16, &str); 1] = [(1337, "Atomic Chat")];
+pub const IMAGE_PORTS: [(u16, &str); 2] = [(1337, "Atomic Chat"), (11234, "mlx-serve")];
 
 /// Where `ComfyUI` usually listens.
 pub const COMFYUI_URL: &str = "http://127.0.0.1:8188";

@@ -69,8 +69,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - `tenaz init`'s wizard and `tenaz doctor` look for engines on 12345
   (Sushi), 8080 (llama.cpp, llama-swap), 1234 (LM Studio), 11434 (Ollama)
   and 8000 (vLLM), and for image engines (an engine on those ports that
-  lists an image model, a server on 1337 (Atomic Chat) that does, and
-  ComfyUI on 8188), with an 800 ms timeout each. An image model is
+  lists an image model, a server on 1337 (Atomic Chat) or 11234
+  (mlx-serve) that does, and ComfyUI on 8188), with an 800 ms timeout
+  each. Whether mlx-serve lists its image models at `/v1/models` and
+  serves `/v1/images/generations` has not been checked. An image model is
   recognised by its name (FLUX, SDXL, SD3, Z-Image, Qwen-Image and
   similar); one with another name is not offered. The context window
   comes from the engine where it reports one (Sushi, vLLM, llama.cpp's

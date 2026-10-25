@@ -113,9 +113,9 @@ uses [Semantic Versioning](https://semver.org/).
   When that API is on the LLM's own server, the LLM stays loaded while the
   image renders (ADR 0002).
 - `tenaz init`'s wizard offers an image tool when an engine on the usual
-  ports, or Atomic Chat on 1337, lists an image model (the LLM's own
-  engine first), before it looks for ComfyUI. `tenaz doctor` lists the
-  image engines it finds with the flags that use them.
+  ports, Atomic Chat on 1337 or mlx-serve on 11234, lists an image model
+  (the LLM's own engine first), before it looks for ComfyUI. `tenaz
+  doctor` lists the image engines it finds with the flags that use them.
 - A builder session that answers its prompt while `./verify --task` runs no
   passing check of its task gets one more prompt asking it to add them,
   before the attempt is judged. In the Wild West run 32 of 197 attempts

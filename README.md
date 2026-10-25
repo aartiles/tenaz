@@ -250,9 +250,9 @@ interface the skill relies on:
   `AGENTS.md`, `CLAUDE.md` and `.gitignore` are left as they are. The
   wizard looks for engines on Sushi's port 12345, llama.cpp's 8080, LM
   Studio's 1234, Ollama's 11434 and vLLM's 8000. It offers an image tool
-  when one of those engines, or a server on 1337 (Atomic Chat), lists an
-  image model, the LLM's own engine first, and otherwise when ComfyUI
-  answers on 8188.
+  when one of those engines, or a server on 1337 (Atomic Chat) or 11234
+  (mlx-serve), lists an image model, the LLM's own engine first, and
+  otherwise when ComfyUI answers on 8188.
 - `run` reads all of that from `run.json`. A launch flag given to `run`
   (`--comfyui`, `--engine-start`, ...) replaces the pinned value and is
   saved. `--resume` continues a blocked run after you have fixed what
