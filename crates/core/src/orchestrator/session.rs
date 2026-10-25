@@ -56,7 +56,9 @@ const ABORT_GRACE: Duration = Duration::from_secs(60);
 impl Runner {
     /// Runs the harness once with `prompts` sent one after another (the
     /// preflight sends several). `persist` keeps the raw stream and the
-    /// harness state under `.tenaz/private/`.
+    /// harness state under `.tenaz/private/`. With `own_checks`, a session
+    /// that answered every prompt while `./verify --task` runs no passing
+    /// check of that task gets one more prompt asking for them.
     pub(crate) async fn run_harness(
         &self,
         label: &str,
@@ -64,6 +66,7 @@ impl Runner {
         cwd: PathBuf,
         watch: Option<WatchConfig>,
         persist: bool,
+        mut own_checks: Option<&TaskId>,
     ) -> Result<(SessionMetrics, Vec<RequestRecord>), RunError> {
         let private = self.project.private_dir();
         let spec = SessionSpec {
@@ -188,12 +191,15 @@ impl Runner {
                 if aborted || watchdog.aborting() || self.stopping() {
                     break;
                 }
-                match prompts.get(prompt_index) {
-                    Some(next) => {
-                        session.prompt(next).await?;
-                        prompt_index += 1;
-                    }
-                    None => break,
+                if let Some(next) = prompts.get(prompt_index) {
+                    session.prompt(next).await?;
+                    prompt_index += 1;
+                } else if let Some(message) = self.own_checks_prompt(label, own_checks.take()).await
+                {
+                    watchdog.note("own-checks", clock.monotonic_ms().saturating_sub(started));
+                    session.prompt(&message).await?;
+                } else {
+                    break;
                 }
             }
         }
@@ -221,6 +227,25 @@ impl Runner {
             metrics.harness_exit = Some(note);
         }
         Ok((metrics, requests))
+    }
+
+    /// The prompt for a builder session that answered every prompt while
+    /// `./verify --task` runs no passing check of `task`; `None` when it does.
+    /// The attempt would fail on that alone, and the session still holds what
+    /// it learned, so it adds them now.
+    async fn own_checks_prompt(&self, label: &str, task: Option<&TaskId>) -> Option<String> {
+        let task = task?;
+        let own = self.run_verify(&["--task", task.as_str()]).await;
+        if own.passed() > 0 {
+            return None;
+        }
+        self.log(&format!(
+            "  {label}: no passing {task} check; asking for one"
+        ));
+        Some(retarget(
+            &no_own_checks(task, &own.summary),
+            self.params.verify_path(),
+        ))
     }
 
     /// Sends steers and aborts to the session; an abort starts the kill timer.
@@ -308,6 +333,7 @@ impl Runner {
                 self.project.root().to_path_buf(),
                 Some(watch),
                 true,
+                ctx.task.as_ref().filter(|_| role == Role::Builder),
             )
             .await?;
         let memory = match &self.sampler {
@@ -717,6 +743,14 @@ async fn engine_delta(
     let change = delta(&now, prior);
     *before = Some(now);
     Some(change)
+}
+
+/// The prompt for a builder session that ended with no passing check of its
+/// task.
+fn no_own_checks(task: &TaskId, summary: &str) -> String {
+    format!(
+        "[orchestrator] `./verify --task {task}` runs no passing check with ID prefix `{task}.`, so this attempt fails however the rest went. Add the card's acceptance checks to `verify` with IDs `{task}.<name>`, run `./verify --task {task}` until they pass, then stop.\n\n{summary}"
+    )
 }
 
 /// Sessions the engine must hold before a lowered budget is raised: the

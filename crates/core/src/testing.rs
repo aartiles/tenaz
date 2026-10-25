@@ -72,6 +72,9 @@ pub struct ScriptedHarness {
     /// Every builder session for this task grows its context past the stop
     /// without writing anything, so its attempt outgrows the budget.
     pub outgrow_task: Option<String>,
+    /// The first builder session for this task that does the work leaves
+    /// out its check, and adds it when the orchestrator asks.
+    pub forget_checks_task: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -356,6 +359,14 @@ impl Player {
     }
 
     async fn play(mut self, prompt: &str) {
+        if let Some(task) = prompt
+            .split("runs no passing check with ID prefix `")
+            .nth(1)
+            .and_then(|rest| rest.split('.').next())
+        {
+            self.write_check(task).await;
+            return self.finish("Added the check.");
+        }
         let Some(role) = field(prompt, "Role").map(str::to_owned) else {
             if prompt.contains(crate::orchestrator::TOOL_PROBE_FILE) {
                 let printed =
@@ -448,6 +459,15 @@ impl Player {
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
         self.emit(SessionEvent::Exited { code: Some(1) });
+    }
+
+    async fn write_check(&mut self, task: &str) {
+        self.write_tool(
+            &format!("checks/{task}.exists.sh"),
+            &format!("test -f src/{task}.txt\n"),
+            false,
+        )
+        .await;
     }
 
     async fn bootstrap(&mut self) {
@@ -575,12 +595,18 @@ impl Player {
         }
         self.write_tool(&format!("src/{task}.txt"), &format!("{task}\n"), false)
             .await;
-        self.write_tool(
-            &format!("checks/{task}.exists.sh"),
-            &format!("test -f src/{task}.txt\n"),
-            false,
-        )
-        .await;
+        if self.script.forget_checks_task.as_deref() == Some(task)
+            && self.bump(&format!("forget-{task}")) == 1
+        {
+            self.write_tool(
+                &format!(".tenaz/notes/{task}.md"),
+                &format!("Built {task}.\n"),
+                false,
+            )
+            .await;
+            return self.finish("Done.");
+        }
+        self.write_check(task).await;
         self.write_tool(
             &format!(".tenaz/notes/{task}.md"),
             &format!("Built {task}.\n"),

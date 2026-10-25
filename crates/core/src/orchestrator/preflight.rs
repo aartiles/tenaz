@@ -47,7 +47,7 @@ impl Runner {
             prompts.push(format!("Use the read tool to open {} and look at it. Answer with two words only: the colour of the square, then the colour of the background.", image.display()));
         }
         let (m, requests) = self
-            .run_harness("preflight", &prompts, cwd, None, false)
+            .run_harness("preflight", &prompts, cwd, None, false, None)
             .await?;
         // The first message after a message that ended with `stop` is the second prompt's answer.
         let second = m

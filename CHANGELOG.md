@@ -107,6 +107,10 @@ uses [Semantic Versioning](https://semver.org/).
   pressure. A raise the engine overflows again lowers it as before and
   doubles the sessions the next raise waits for, up to four times as many;
   a raise the engine held starts that count again.
+- A builder session that answers its prompt while `./verify --task` runs no
+  passing check of its task gets one more prompt asking it to add them,
+  before the attempt is judged. In the Wild West run 32 of 197 attempts
+  passed `--all` but failed only for lack of the task's own check.
 - A raised context budget never goes above the headroom share of what the
   engine said it could hold when an earlier raise overflowed it. Raising
   past it only overflowed again: in the Wild West run the engine held

@@ -130,9 +130,14 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     );
     assert!(project.load_ledger().unwrap().paused_at.is_some());
 
+    // T002's builder does the work but leaves out its check until asked.
+    let harness = ScriptedHarness {
+        forget_checks_task: Some("T002".into()),
+        ..Default::default()
+    };
     let mut runner = Runner::open(
         project.clone(),
-        deps(&project, ScriptedHarness::default()),
+        deps(&project, harness),
         CancellationToken::new(),
     )
     .unwrap();
@@ -253,6 +258,25 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     assert!(
         t001_prompts.iter().any(|t| t.contains("## Repository map")),
         "first builder prompt lost the map"
+    );
+    assert!(
+        watchdog("own-checks"),
+        "a builder without its check was not asked for one"
+    );
+    let asked = sessions
+        .iter()
+        .find(|s| s.watchdog.iter().any(|e| e.kind == "own-checks"))
+        .unwrap();
+    assert!(asked.label.ends_with("-builder-T002"), "{}", asked.label);
+    assert!(
+        has(
+            &|r| matches!(r, JournalRecord::Verify { task, attempt, task_ok: true, task_checks: 1.., .. } if task.as_str() == "T002" && Some(*attempt) == asked.attempt)
+        ),
+        "the check asked for was not there when the attempt was judged"
+    );
+    assert!(
+        log.contains("no passing T002 check; asking for one"),
+        "{log}"
     );
     let t001_first_verifies = records.iter().filter(|r| matches!(r, JournalRecord::Verify { task, attempt: 1, .. } if task.as_str() == "T001")).count();
     assert_eq!(t001_first_verifies, 1, "context stop counted as an attempt");

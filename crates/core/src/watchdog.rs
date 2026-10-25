@@ -93,6 +93,11 @@ impl Watchdog {
         actions
     }
 
+    /// Records something the runner sent the session outside the rules.
+    pub fn note(&mut self, kind: &str, elapsed_ms: u64) {
+        self.event(kind, None, elapsed_ms);
+    }
+
     /// Sets the final process facts once the harness has exited.
     pub fn finish(&mut self, exit_code: Option<i32>, duration_ms: u64) {
         self.metrics.exit_code = exit_code;
