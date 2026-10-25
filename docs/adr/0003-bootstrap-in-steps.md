@@ -74,3 +74,14 @@ of 32,000 tokens would nearly fill it.
 - `tenaz status` shows the step while the run is in bootstrap.
 - Tested with the fake harness only. Not yet run against fx and a real
   model.
+
+## Amendment, 2026-10-25: step 2 writes only `verify`
+
+Step 2 first asked for `verify`, the project skeleton and the notes. In
+the next image-landing run, step 1 passed, but the step-2 session drafted
+a six-module check harness and the skeleton in its reasoning (62 code
+blocks) and was cut at the output limit inside eight parallel file
+writes. Step 2 now writes one small `verify` file with a single `T000.`
+smoke check, and the notes; the checks of later tasks go in `checks/`
+(never a `verify/` folder beside the executable, which the draft had),
+and the skeleton becomes the first task card.

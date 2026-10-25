@@ -42,7 +42,9 @@ and you do not commit, push, open pull requests or switch branches.
 
 ## `verify` contract
 
-`verify` is an executable at the project root (any language).
+`verify` is an executable at the project root (any language). Keep it one
+file; the code of its checks goes in `checks/`, never in a folder named
+`verify`.
 
 - `./verify --all` runs every check. `./verify --task T007` runs only checks
   whose ID starts with `T007.`.

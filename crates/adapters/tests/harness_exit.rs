@@ -361,7 +361,7 @@ async fn the_bootstrap_runs_one_session_per_step() {
         })
         .collect();
     // The fake's first bootstrap sessions hit engine errors.
-    let [.., first, _, last] = labels.as_slice() else {
+    let [.., first, second, last] = labels.as_slice() else {
         panic!("three step sessions: {labels:?}");
     };
     let prompt = |label: &str| {
@@ -373,6 +373,10 @@ async fn the_bootstrap_runs_one_session_per_step() {
     assert!(first.contains("Step: 1 of 3 (spec and map)"), "{first}");
     assert!(first.contains("## Step 1: spec and map"), "{first}");
     assert!(!first.contains("## Step 2"), "{first}");
+    let second = prompt(second);
+    assert!(second.contains("Step: 2 of 3 (verify)"), "{second}");
+    assert!(second.contains("write no other checks now"), "{second}");
+    assert!(!second.contains("## Step 3"), "{second}");
     let last = prompt(last);
     assert!(last.contains("## Step 3: task cards"), "{last}");
     assert!(!last.contains("## Step 1"), "{last}");
@@ -400,7 +404,7 @@ async fn bootstrap_steps_already_done_need_no_session() {
         .collect();
     assert_eq!(steps, vec![BootstrapStep::Spec], "{log}");
     assert!(
-        log.contains("Bootstrap step 2 of 3 (verify and skeleton) is already done"),
+        log.contains("Bootstrap step 2 of 3 (verify) is already done"),
         "{log}"
     );
     assert!(

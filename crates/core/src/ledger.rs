@@ -50,7 +50,7 @@ pub enum BootstrapStep {
     /// `.tenaz/spec.md` and `.tenaz/map.md`.
     #[default]
     Spec,
-    /// `verify`, the project skeleton and the bootstrap notes.
+    /// A minimal `verify` and the bootstrap notes.
     Verify,
     /// The task cards.
     Tasks,
@@ -71,7 +71,7 @@ impl BootstrapStep {
     pub fn title(self) -> &'static str {
         match self {
             BootstrapStep::Spec => "spec and map",
-            BootstrapStep::Verify => "verify and skeleton",
+            BootstrapStep::Verify => "verify",
             BootstrapStep::Tasks => "task cards",
         }
     }

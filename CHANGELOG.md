@@ -153,7 +153,7 @@ uses [Semantic Versioning](https://semver.org/).
   them instead of starting over. Before, it got only the list of problems,
   and explored and wrote the spec again.
 - The bootstrap runs in three steps, one session each: the spec and map,
-  then `verify` and the skeleton, then the task cards (ADR 0003). Each
+  then a minimal `verify`, then the task cards (ADR 0003). Each
   session gets only its step's part of `bootstrap.md`, steps 2 and 3 get
   the spec and map in their prompt, and `maxBootstrapAttempts` applies to
   each step. A step whose files are already right is passed without a

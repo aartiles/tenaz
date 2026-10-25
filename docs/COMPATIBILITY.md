@@ -139,7 +139,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
 - The bootstrap runs in three steps, one session each (ADR 0003): the
-  spec and map, then `verify` and the skeleton, then the task cards. A
+  spec and map, then a minimal `verify`, then the task cards. A
   model that writes more than its step has the later steps passed by
   their checks. Tested with the fake harness only; not yet run with fx and
   a real model.
