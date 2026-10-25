@@ -50,6 +50,7 @@ async fn an_agent_that_exits_mid_turn_leaves_its_stderr_and_exit_code() {
         cwd: dir.path().to_path_buf(),
         persist_dir: None,
         raw_log: None,
+        thinking_log: None,
         stderr_log: Some(stderr_log.clone()),
     };
     let mut session = harness.open(spec).await.expect("the handshake succeeds");

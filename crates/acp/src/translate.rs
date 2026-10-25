@@ -161,6 +161,17 @@ impl Translator {
     }
 }
 
+/// The reasoning text an update carries, if it is a thought chunk.
+pub fn thought_text(update: &SessionUpdate) -> Option<&str> {
+    match update {
+        SessionUpdate::AgentThoughtChunk(chunk) => match &chunk.content {
+            ContentBlock::Text(text) => Some(&text.text),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn kind_name(kind: PermissionOptionKind) -> &'static str {
     match kind {
         PermissionOptionKind::AllowOnce => "allow_once",
@@ -267,6 +278,19 @@ mod tests {
                 result_text: "/tmp/out.png".into(),
                 is_error: false
             }]
+        );
+    }
+
+    #[test]
+    fn only_thought_chunks_carry_thought_text() {
+        let chunk = |s: &str| ContentChunk::new(ContentBlock::Text(TextContent::new(s)));
+        assert_eq!(
+            thought_text(&SessionUpdate::AgentThoughtChunk(chunk("hmm"))),
+            Some("hmm")
+        );
+        assert_eq!(
+            thought_text(&SessionUpdate::AgentMessageChunk(chunk("hi"))),
+            None
         );
     }
 

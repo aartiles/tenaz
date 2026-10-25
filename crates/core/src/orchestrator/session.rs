@@ -54,6 +54,21 @@ impl SessionResult {
 const ABORT_GRACE: Duration = Duration::from_secs(60);
 
 impl Runner {
+    /// How to open a session; `persist` keeps its logs and state under
+    /// `.tenaz/private/`.
+    fn session_spec(&self, label: &str, cwd: PathBuf, persist: bool) -> SessionSpec {
+        let private = self.project.private_dir();
+        let log = |suffix: &str| persist.then(|| private.join(format!("{label}.{suffix}")));
+        SessionSpec {
+            label: label.to_owned(),
+            cwd,
+            persist_dir: persist.then(|| private.join("sessions")),
+            raw_log: log("rpc.jsonl"),
+            thinking_log: log("thinking.md"),
+            stderr_log: log("stderr.log"),
+        }
+    }
+
     /// Runs the harness once with `prompts` sent one after another (the
     /// preflight sends several). `persist` keeps the raw stream and the
     /// harness state under `.tenaz/private/`. With `own_checks`, a session
@@ -68,14 +83,7 @@ impl Runner {
         persist: bool,
         mut own_checks: Option<&TaskId>,
     ) -> Result<(SessionMetrics, Vec<RequestRecord>), RunError> {
-        let private = self.project.private_dir();
-        let spec = SessionSpec {
-            label: label.to_owned(),
-            cwd,
-            persist_dir: persist.then(|| private.join("sessions")),
-            raw_log: persist.then(|| private.join(format!("{label}.rpc.jsonl"))),
-            stderr_log: persist.then(|| private.join(format!("{label}.stderr.log"))),
-        };
+        let spec = self.session_spec(label, cwd, persist);
         let stderr_log = spec.stderr_log.clone();
         let mut session = self.deps.harness.open(spec).await?;
         let mut watchdog = Watchdog::new(self.params.clone(), watch);

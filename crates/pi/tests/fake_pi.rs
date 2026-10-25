@@ -31,6 +31,7 @@ fn spec(dir: &Path, persist: bool) -> SessionSpec {
         cwd: dir.to_path_buf(),
         persist_dir: persist.then(|| dir.join("private/sessions")),
         raw_log: persist.then(|| dir.join("private/001-builder-T001.rpc.jsonl")),
+        thinking_log: None,
         stderr_log: persist.then(|| dir.join("private/001-builder-T001.stderr.log")),
     }
 }

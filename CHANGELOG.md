@@ -145,6 +145,9 @@ uses [Semantic Versioning](https://semver.org/).
   those notes.
 - Reading something not read before counts as progress for the idle rule,
   like a file change; repeated reads of the same thing still count as idle.
+- With fx, each session's reasoning text is kept in
+  `.tenaz/private/<label>.thinking.md`, with a line after each model
+  request. Before, only its length was kept.
 
 ### Fixed
 

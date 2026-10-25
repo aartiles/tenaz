@@ -32,6 +32,10 @@ pub struct SessionSpec {
     pub persist_dir: Option<PathBuf>,
     /// Where the raw event stream is appended (`.tenaz/private/<label>.rpc.jsonl`).
     pub raw_log: Option<PathBuf>,
+    /// Where the model's reasoning text is appended
+    /// (`.tenaz/private/<label>.thinking.md`), for harnesses whose raw
+    /// stream does not keep it.
+    pub thinking_log: Option<PathBuf>,
     /// Where the harness's stderr is appended.
     pub stderr_log: Option<PathBuf>,
 }

@@ -128,6 +128,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   reasoning effort for the next session through the proxy, so without the
   proxy (`--no-proxy`) the effort stays as configured. Tested with the fake
   harness only.
+  Each fx session's reasoning text is kept in
+  `.tenaz/private/<label>.thinking.md` to show what such a reply was
+  doing. It relies on fx sending the reasoning as ACP thought chunks;
+  tested with the fake ACP agent only.
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
 - A pause during a bootstrap session counts as one of its attempts. An

@@ -174,6 +174,7 @@ fn spec(dir: &Path) -> SessionSpec {
         cwd: dir.to_path_buf(),
         persist_dir: None,
         raw_log: Some(dir.join("raw.jsonl")),
+        thinking_log: Some(dir.join("thinking.md")),
         stderr_log: None,
     }
 }
@@ -267,6 +268,10 @@ async fn a_prompt_with_a_tool_call_and_permission_round_trips() {
             .lines()
             .count()
             >= 8
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("thinking.md")).unwrap(),
+        "thinking\n\n--- end of request (prompt ended: EndTurn) ---\n\n"
     );
 }
 

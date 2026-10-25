@@ -18,7 +18,7 @@ use tenaz_core::ports::{HarnessError, PermissionDecision, Session, SessionExit, 
 use tenaz_core::session::{SessionEvent, StopReason, Usage};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-use crate::translate::{Translator, choose_option};
+use crate::translate::{Translator, choose_option, thought_text};
 
 /// What the engine proxy saw: one request's usage and why the engine
 /// stopped, or an engine error.
@@ -77,6 +77,7 @@ impl AcpSession {
         let (event_tx, events) = mpsc::unbounded_channel();
         let (ready_tx, ready_rx) = oneshot::channel::<Result<(), String>>();
         let cwd = spec.cwd.clone();
+        let thinking = ThinkingLog::open(spec.thinking_log.as_deref());
         let task = tokio::spawn(async move {
             let mut ready = Some(ready_tx);
             Client
@@ -110,7 +111,7 @@ impl AcpSession {
                     if let Some(ready) = ready.take() {
                         let _ = ready.send(Ok(()));
                     }
-                    let mut state = Running { translator: Translator::new(), pending: HashMap::new(), request_seen: false, prompting: false, steering, events: event_tx };
+                    let mut state = Running { translator: Translator::new(), pending: HashMap::new(), request_seen: false, prompting: false, steering, events: event_tx, thinking };
                     let mut commands = command_rx;
                     let mut observations = observations;
                     loop {
@@ -152,26 +153,12 @@ impl AcpSession {
                                 }
                                 Some(Command::Permission { id, allow }) => state.answer(&id, allow),
                             },
-                            observation = recv_observation(&mut observations) => match observation {
-                                EngineObservation::Completed { usage, stop_reason, server } => {
-                                    state.request_seen = true;
-                                    for event in state.translator.request_end(usage, stop_reason, None, server) {
-                                        state.emit(event);
-                                    }
-                                    state.emit(SessionEvent::TurnStart);
-                                }
-                                EngineObservation::Error { message } => {
-                                    state.request_seen = true;
-                                    for event in state.translator.request_end(Usage::default(), StopReason::Error, Some(message), None) {
-                                        state.emit(event);
-                                    }
-                                    state.emit(SessionEvent::TurnStart);
-                                }
-                            },
+                            observation = recv_observation(&mut observations) => state.observe(observation),
                             message = session.read_update() => match message {
                                 Err(error) => return Err(error),
                                 Ok(SessionMessage::StopReason(stop)) => {
                                     state.prompting = false;
+                                    state.thinking.end_request(&format!("prompt ended: {stop:?}"));
                                     for event in state.translator.prompt_end(stop, state.request_seen) {
                                         state.emit(event);
                                     }
@@ -180,6 +167,9 @@ impl AcpSession {
                                     let state_ref = &mut state;
                                     MatchDispatch::new(dispatch)
                                         .if_notification(async |notification: SessionNotification| {
+                                            if let Some(text) = thought_text(&notification.update) {
+                                                state_ref.thinking.push(text);
+                                            }
                                             for event in state_ref.translator.update(&notification.update) {
                                                 state_ref.emit(event);
                                             }
@@ -282,11 +272,88 @@ struct Running {
     /// The agent accepts fx steer prompts.
     steering: bool,
     events: mpsc::UnboundedSender<SessionEvent>,
+    thinking: ThinkingLog,
+}
+
+/// The model's reasoning text, appended to the session's thinking log as it
+/// arrives, with a line after each model request that had any. Buffered;
+/// what is left is written when the session task ends, even when it is cut.
+struct ThinkingLog {
+    file: Option<std::io::BufWriter<std::fs::File>>,
+    in_request: bool,
+}
+
+impl ThinkingLog {
+    fn open(path: Option<&std::path::Path>) -> Self {
+        let file = path.and_then(|path| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|error| tracing::warn!(%error, path = %path.display(), "cannot open the thinking log"))
+                .ok()
+        });
+        Self {
+            file: file.map(std::io::BufWriter::new),
+            in_request: false,
+        }
+    }
+
+    fn push(&mut self, text: &str) {
+        if let Some(file) = &mut self.file {
+            let _ = std::io::Write::write_all(file, text.as_bytes());
+            self.in_request = true;
+        }
+    }
+
+    /// Closes the current request's reasoning, if it had any.
+    fn end_request(&mut self, note: &str) {
+        if !std::mem::take(&mut self.in_request) {
+            return;
+        }
+        if let Some(file) = &mut self.file {
+            let _ = std::io::Write::write_all(
+                file,
+                format!("\n\n--- end of request ({note}) ---\n\n").as_bytes(),
+            );
+            let _ = std::io::Write::flush(file);
+        }
+    }
 }
 
 impl Running {
     fn emit(&self, event: SessionEvent) {
         let _ = self.events.send(event);
+    }
+
+    /// A model request the proxy saw end: its turn's events, then a new turn.
+    fn observe(&mut self, observation: EngineObservation) {
+        self.request_seen = true;
+        let events = match observation {
+            EngineObservation::Completed {
+                usage,
+                stop_reason,
+                server,
+            } => {
+                self.thinking
+                    .end_request(&format!("{stop_reason:?}, {} output tokens", usage.output));
+                self.translator
+                    .request_end(usage, stop_reason, None, server)
+            }
+            EngineObservation::Error { message } => {
+                self.thinking.end_request("error");
+                self.translator.request_end(
+                    Usage::default(),
+                    StopReason::Error,
+                    Some(message),
+                    None,
+                )
+            }
+        };
+        for event in events {
+            self.emit(event);
+        }
+        self.emit(SessionEvent::TurnStart);
     }
 
     fn answer(&mut self, id: &str, allow: bool) {

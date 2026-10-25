@@ -705,6 +705,7 @@ mod tests {
                 cwd: dir.path().to_path_buf(),
                 persist_dir: None,
                 raw_log: None,
+                thinking_log: None,
                 stderr_log: None,
             })
             .await
