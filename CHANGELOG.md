@@ -146,6 +146,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `generate_image` without a width or height fills a ComfyUI workflow's
+  size placeholders with 1024 instead of leaving `{{width}}` as text,
+  which ComfyUI rejected.
 - Ctrl-C during the engine preflight pauses the run instead of ending it
   with a failed preflight.
 - A harness that ends before its turn settles is retried like an engine

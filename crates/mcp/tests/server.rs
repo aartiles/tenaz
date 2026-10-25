@@ -53,14 +53,19 @@ impl MediaAdapter for FakeComfy {
     }
     async fn run(&self, job: MediaJob) -> Result<MediaOutput, MediaError> {
         // A ComfyUI job carries the filled workflow; any other, the request.
-        let (text, seed) = match job.params.get("workflow") {
+        let (text, seed, size) = match job.params.get("workflow") {
             Some(workflow) => (
                 &workflow["1"]["inputs"]["text"],
                 &workflow["1"]["inputs"]["seed"],
+                format!(
+                    " size={}x{}",
+                    workflow["2"]["inputs"]["width"], workflow["2"]["inputs"]["height"]
+                ),
             ),
             None => (
                 &job.params["request"]["prompt"],
                 &job.params["request"]["seed"],
+                String::new(),
             ),
         };
         let text = text.as_str().unwrap_or_default().to_owned();
@@ -68,7 +73,7 @@ impl MediaAdapter for FakeComfy {
             .0
             .lock()
             .unwrap()
-            .push(format!("job: {text} seed={seed}"));
+            .push(format!("job: {text} seed={seed}{size}"));
         if text.contains("fail") {
             return Err(MediaError::Failed("bad prompt".into()));
         }
@@ -101,9 +106,10 @@ async fn generate_image_takes_the_lease_and_returns_paths() {
     let out = tempfile::tempdir().unwrap();
     let workflows = BTreeMap::from([(
         "default".to_owned(),
-        WorkflowTemplate::new(
-            serde_json::json!({"1": {"inputs": {"text": "{{prompt}}", "seed": "{{seed}}"}}}),
-        ),
+        WorkflowTemplate::new(serde_json::json!({
+            "1": {"inputs": {"text": "{{prompt}}", "seed": "{{seed}}"}},
+            "2": {"inputs": {"width": "{{width}}", "height": "{{height}}"}}
+        })),
     )]);
     let handle = serve(
         MediaTools::new(lease, out.path(), workflows, "comfyui"),
@@ -122,7 +128,7 @@ async fn generate_image_takes_the_lease_and_returns_paths() {
     let result = client
         .call_tool(
             CallToolRequestParams::new("generate_image").with_arguments(
-                serde_json::json!({"prompt": "a cat", "seed": 7})
+                serde_json::json!({"prompt": "a cat", "seed": 7, "width": 768})
                     .as_object()
                     .cloned()
                     .unwrap(),
@@ -142,7 +148,8 @@ async fn generate_image_takes_the_lease_and_returns_paths() {
         *log.0.lock().unwrap(),
         vec![
             "llm unload",
-            "job: a cat seed=7",
+            // A size the call leaves out is 1024, not the bare placeholder.
+            "job: a cat seed=7 size=768x1024",
             "comfy unload",
             "llm load"
         ]

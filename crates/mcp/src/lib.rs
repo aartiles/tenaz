@@ -44,6 +44,9 @@ impl std::fmt::Debug for MediaTools {
     }
 }
 
+/// The width and height a workflow gets when the call gives none.
+const DEFAULT_SIZE: u32 = 1024;
+
 /// Arguments of `generate_image`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GenerateImageArgs {
@@ -54,8 +57,10 @@ pub struct GenerateImageArgs {
     pub negative_prompt: Option<String>,
     #[serde(default)]
     pub seed: Option<u64>,
+    /// Pixels; 1024 when omitted.
     #[serde(default)]
     pub width: Option<u32>,
+    /// Pixels; 1024 when omitted.
     #[serde(default)]
     pub height: Option<u32>,
     /// A configured `ComfyUI` workflow name; the default workflow otherwise.
@@ -95,17 +100,15 @@ impl MediaTools {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs())
         });
-        let mut vars = BTreeMap::from([
+        // A workflow's size placeholders need a number: left as text,
+        // ComfyUI rejects the whole workflow.
+        let vars = BTreeMap::from([
             ("prompt", args.prompt.clone()),
             ("negative", args.negative_prompt.clone().unwrap_or_default()),
             ("seed", seed.to_string()),
+            ("width", args.width.unwrap_or(DEFAULT_SIZE).to_string()),
+            ("height", args.height.unwrap_or(DEFAULT_SIZE).to_string()),
         ]);
-        if let Some(width) = args.width {
-            vars.insert("width", width.to_string());
-        }
-        if let Some(height) = args.height {
-            vars.insert("height", height.to_string());
-        }
         let request = serde_json::json!({
             "prompt": args.prompt,
             "negative_prompt": args.negative_prompt,
