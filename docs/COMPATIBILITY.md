@@ -134,7 +134,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
   tested with the fake ACP agent only.
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
-- A pause during a bootstrap session counts as one of its attempts. An
+- The bootstrap runs in three steps, one session each (ADR 0003): the
+  spec and map, then `verify` and the skeleton, then the task cards. A
+  model that writes more than its step has the later steps passed by
+  their checks. Tested with the fake harness only; not yet run with fx and
+  a real model.
+- `maxBootstrapAttempts` applies to each bootstrap step.
+  A pause during a bootstrap session counts as one of its attempts. An
   attempt that leaves fewer problems than the one before does not count,
   up to `maxBootstrapAttempts` such attempts. `--resume` on a run blocked
   in bootstrap starts both counts again. Task cards a model wrapped in a

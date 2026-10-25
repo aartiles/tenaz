@@ -6,6 +6,8 @@
 //! the attempt counts and the next briefing names the call. So does one
 //! whose reply was cut at the output limit while the model reasoned (fx
 //! exits on `OutputTruncated`): the next session runs at a lower effort.
+//! The bootstrap runs in steps, and a step that fails is retried with the
+//! files the earlier session left.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -13,7 +15,7 @@ use std::sync::Arc;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::notify::SilentNotifier;
 use tenaz_adapters::verify::VerifyProcess;
-use tenaz_core::ledger::{JournalRecord, ModelConfig, Phase};
+use tenaz_core::ledger::{BootstrapStep, JournalRecord, ModelConfig, Phase};
 use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
@@ -320,4 +322,89 @@ async fn the_next_bootstrap_is_told_which_files_the_previous_one_left() {
     assert!(left.contains(".tenaz/spec.md"), "{second}");
     assert!(left.contains("index.html"), "{second}");
     assert!(left.contains("Do not start over"), "{second}");
+}
+
+#[tokio::test]
+async fn the_bootstrap_runs_one_session_per_step() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            stepwise_bootstrap: true,
+            ..Default::default()
+        },
+        2,
+    )
+    .await;
+    let journal = project.journal();
+    let passed: Vec<BootstrapStep> = journal
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::BootstrapValidation { step, errors, .. } if errors.is_empty() => {
+                Some(*step)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        passed,
+        vec![
+            BootstrapStep::Spec,
+            BootstrapStep::Verify,
+            BootstrapStep::Tasks
+        ],
+        "{log}"
+    );
+    let labels: Vec<String> = journal
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-bootstrap") => Some(s.label.clone()),
+            _ => None,
+        })
+        .collect();
+    // The fake's first bootstrap sessions hit engine errors.
+    let [.., first, _, last] = labels.as_slice() else {
+        panic!("three step sessions: {labels:?}");
+    };
+    let prompt = |label: &str| {
+        project
+            .read(&format!(".tenaz/private/{label}.prompt.md"))
+            .unwrap()
+    };
+    let first = prompt(first);
+    assert!(first.contains("Step: 1 of 3 (spec and map)"), "{first}");
+    assert!(first.contains("## Step 1: spec and map"), "{first}");
+    assert!(!first.contains("## Step 2"), "{first}");
+    let last = prompt(last);
+    assert!(last.contains("## Step 3: task cards"), "{last}");
+    assert!(!last.contains("## Step 1"), "{last}");
+    assert!(
+        last.contains("## Spec (.tenaz/spec.md), from step 1"),
+        "{last}"
+    );
+    assert!(last.contains("- R1: one"), "{last}");
+    assert!(
+        log.contains("Bootstrap step 1 of 3 (spec and map) done"),
+        "{log}"
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_steps_already_done_need_no_session() {
+    let (_work, project, log) = run(ScriptedHarness::default(), 2).await;
+    let steps: Vec<BootstrapStep> = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::BootstrapValidation { step, .. } => Some(*step),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(steps, vec![BootstrapStep::Spec], "{log}");
+    assert!(
+        log.contains("Bootstrap step 2 of 3 (verify and skeleton) is already done"),
+        "{log}"
+    );
+    assert!(
+        log.contains("Bootstrap step 3 of 3 (task cards) is already done"),
+        "{log}"
+    );
 }

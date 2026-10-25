@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use crate::backlog::Backlog;
 use crate::briefing::{self, Briefing};
-use crate::ledger::{CurrentTask, JournalRecord, Phase, StoppedAttempt, TaskOutcome};
+use crate::ledger::{
+    BootstrapStep, CurrentTask, JournalRecord, Phase, StoppedAttempt, TaskOutcome,
+};
 use crate::project::BRIEF;
 use crate::role::Role;
 use crate::spec::{self, coverage};
@@ -98,7 +100,11 @@ impl Runner {
             ));
         }
         let protocol = self.project.protocol()?;
-        let role_prompt = self.project.role_prompt(role)?;
+        let mut role_prompt = self.project.role_prompt(role)?;
+        if role == Role::Bootstrap {
+            role_prompt =
+                briefing::bootstrap_step(&role_prompt, self.ledger.bootstrap_step.number());
+        }
         let spec = self
             .project
             .read_if(".tenaz/spec.md")
@@ -121,15 +127,10 @@ impl Runner {
         ))
     }
 
-    async fn validate_bootstrap(&self) -> (Vec<String>, Backlog) {
+    /// What is wrong with the files of the bootstrap up to `step`: the spec
+    /// and map, then a deterministic passing `verify`, then the task cards.
+    async fn validate_bootstrap(&self, step: BootstrapStep) -> (Vec<String>, Backlog) {
         let mut errors = Vec::new();
-        let unfenced = self.project.unfence_cards();
-        if !unfenced.is_empty() {
-            self.log(&format!(
-                "Removed the code fence around task cards: {}",
-                unfenced.join(", ")
-            ));
-        }
         let reqs = self.project.requirements();
         if reqs.is_empty() {
             errors.push(".tenaz/spec.md has no requirement lines like \"- R1: ...\"".to_owned());
@@ -137,18 +138,31 @@ impl Runner {
         if !self.project.exists(".tenaz/map.md") {
             errors.push(".tenaz/map.md is missing".to_owned());
         }
-        let loaded = self.project.load_backlog();
-        errors.extend(loaded.errors);
-        let backlog = loaded.backlog;
-        if backlog.is_empty() {
-            errors.push("no task cards in .tenaz/tasks/".to_owned());
+        let mut backlog = Backlog::default();
+        if step == BootstrapStep::Tasks {
+            let unfenced = self.project.unfence_cards();
+            if !unfenced.is_empty() {
+                self.log(&format!(
+                    "Removed the code fence around task cards: {}",
+                    unfenced.join(", ")
+                ));
+            }
+            let loaded = self.project.load_backlog();
+            errors.extend(loaded.errors);
+            backlog = loaded.backlog;
+            if backlog.is_empty() {
+                errors.push("no task cards in .tenaz/tasks/".to_owned());
+            }
+            let cov = coverage(&reqs, backlog.cards(), false);
+            if !cov.missing.is_empty() {
+                errors.push(format!(
+                    "requirements without a task: {}",
+                    cov.missing.join(", ")
+                ));
+            }
         }
-        let cov = coverage(&reqs, backlog.cards(), false);
-        if !cov.missing.is_empty() {
-            errors.push(format!(
-                "requirements without a task: {}",
-                cov.missing.join(", ")
-            ));
+        if step == BootstrapStep::Spec {
+            return (errors, backlog);
         }
         let first = self.run_verify(&["--all"]).await;
         if first.ok {
@@ -171,6 +185,16 @@ impl Runner {
     }
 
     pub(crate) async fn bootstrap_phase(&mut self) -> Result<(), RunError> {
+        let step = self.ledger.bootstrap_step;
+        // A step whose files are already right (written by an earlier step's
+        // session, or before a resume) needs no session of its own.
+        if self.ledger.bootstrap_attempts == 0 && self.ledger.bootstrap_uncounted == 0 {
+            let (errors, backlog) = self.validate_bootstrap(step).await;
+            if errors.is_empty() {
+                self.log(&format!("Bootstrap step {step} is already done"));
+                return self.bootstrap_step_done(step, &backlog);
+            }
+        }
         if self.ledger.bootstrap_attempts >= self.params.max_bootstrap_attempts {
             let errors = self
                 .ledger
@@ -188,7 +212,7 @@ impl Runner {
                 String::new()
             };
             return self.block(&format!(
-                "bootstrap failed {} times{hint}: {errors}",
+                "bootstrap failed {} times at step {step}{hint}: {errors}",
                 self.ledger.bootstrap_attempts
             ));
         }
@@ -218,18 +242,31 @@ impl Runner {
                 ));
             }
         }
-        let fields = vec![(
-            "Attempt".to_owned(),
-            format!(
-                "{} of {}",
-                self.ledger.bootstrap_attempts, self.params.max_bootstrap_attempts
+        if step != BootstrapStep::Spec {
+            for (title, path) in [
+                ("Spec", ".tenaz/spec.md"),
+                ("Repository map", ".tenaz/map.md"),
+            ] {
+                if let Some(text) = self.project.read_if(path) {
+                    extra.push((format!("{title} ({path}), from step 1"), text));
+                }
+            }
+        }
+        let fields = vec![
+            ("Step".to_owned(), format!("{step}; do only this step")),
+            (
+                "Attempt".to_owned(),
+                format!(
+                    "{} of {}",
+                    self.ledger.bootstrap_attempts, self.params.max_bootstrap_attempts
+                ),
             ),
-        )];
+        ];
         let prompt = self.briefing(Role::Bootstrap, fields, None, extra, &[])?;
         let s = self
             .session(Role::Bootstrap, &prompt, &SessionCtx::default())
             .await?;
-        let (mut errors, backlog) = self.validate_bootstrap().await;
+        let (mut errors, backlog) = self.validate_bootstrap(step).await;
         // A file the session wrote where it may not was reverted after it. When the
         // bootstrap fails, say so: the next session otherwise sees only the failure
         // the revert caused (verify calling a file that is gone) and repeats it.
@@ -262,6 +299,7 @@ impl Runner {
             );
         }
         self.journal(JournalRecord::BootstrapValidation {
+            step,
             attempt: self.ledger.bootstrap_attempts,
             errors: errors.clone(),
             session_ok: s.ok(),
@@ -286,7 +324,7 @@ impl Runner {
                 ));
             }
             self.log(&format!(
-                "Bootstrap not accepted: {} problem(s){}",
+                "Bootstrap step {step} not accepted: {} problem(s){}",
                 errors.len(),
                 if s.metrics.every_tool_call_failed() {
                     format!(
@@ -301,13 +339,35 @@ impl Runner {
             self.ledger.last_errors = Some(errors);
             return self.save();
         }
+        self.bootstrap_step_done(step, &backlog)
+    }
+
+    /// Moves the bootstrap to the step after `step`, whose attempts count
+    /// from zero, or accepts it after the last one.
+    fn bootstrap_step_done(
+        &mut self,
+        step: BootstrapStep,
+        backlog: &Backlog,
+    ) -> Result<(), RunError> {
+        self.ledger.last_errors = None;
+        self.ledger.bootstrap_attempts = 0;
+        self.ledger.bootstrap_tool_failures = 0;
+        self.ledger.bootstrap_uncounted = 0;
+        if let Some(next) = step.next() {
+            self.ledger.bootstrap_step = next;
+            self.deps
+                .vcs
+                .commit_all(&format!("tenaz: bootstrap step {} done", step.number()))?;
+            self.save()?;
+            self.log(&format!("Bootstrap step {step} done; next: step {next}"));
+            return Ok(());
+        }
         for id in backlog.ids() {
             self.project.set_card_fields(
                 id,
                 &[("status", "todo".to_owned()), ("attempts", "0".to_owned())],
             )?;
         }
-        self.ledger.last_errors = None;
         self.ledger.phase = Phase::Loop;
         self.ledger.checkpoint = Some(self.deps.vcs.commit_all("tenaz: bootstrap accepted")?);
         self.save()?;

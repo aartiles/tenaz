@@ -93,6 +93,24 @@ pub fn build(role: Role, b: &Briefing<'_>) -> String {
     text
 }
 
+/// The bootstrap prompt for one step: the text before the first
+/// `## Step ` heading and that step's own section. A prompt without step
+/// sections (a project's older copy) is returned whole.
+pub fn bootstrap_step(role_prompt: &str, step: u32) -> String {
+    const HEADING: &str = "\n## Step ";
+    let Some(first) = role_prompt.find(HEADING) else {
+        return role_prompt.to_owned();
+    };
+    let common = role_prompt[..first].trim_end();
+    let wanted = format!("{HEADING}{step}");
+    let Some(start) = role_prompt.find(&wanted) else {
+        return common.to_owned();
+    };
+    let body = &role_prompt[start + 1..];
+    let end = body[1..].find(HEADING).map_or(body.len(), |at| at + 1);
+    format!("{common}\n\n{}", body[..end].trim_end())
+}
+
 /// What changes in a bootstrap when the project had code before the run.
 /// It comes after the role prompt and overrides it where they differ.
 pub const EXISTING_PROJECT: &str = "This project already has code, conventions and tests; the brief asks for a change to it. Where this section and the role prompt differ, this section wins.
@@ -139,6 +157,22 @@ pub fn dependency_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bootstrap_step_gets_the_common_part_and_its_own_section() {
+        let prompt =
+            "Intro.\n\n## Step 1: spec\n\nWrite the spec.\n\n## Step 2: verify\n\nWrite verify.\n";
+        assert_eq!(
+            bootstrap_step(prompt, 1),
+            "Intro.\n\n## Step 1: spec\n\nWrite the spec."
+        );
+        assert_eq!(
+            bootstrap_step(prompt, 2),
+            "Intro.\n\n## Step 2: verify\n\nWrite verify."
+        );
+        assert_eq!(bootstrap_step(prompt, 3), "Intro.");
+        assert_eq!(bootstrap_step("Old prompt.\n", 2), "Old prompt.\n");
+    }
 
     #[test]
     fn packed_builder_briefing_has_stable_content_first() {

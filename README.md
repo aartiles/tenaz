@@ -22,9 +22,9 @@ it is done.
                       └──────────── retry, split, block or replan ◀──┘
 ```
 
-You write the goal as a short brief. The first session, the **bootstrap**,
-turns it into numbered requirements, a list of small tasks and a `verify`
-script. Each task then gets its own session: the agent builds it, Tenaz runs
+You write the goal as a short brief. The **bootstrap** turns it into
+numbered requirements, a `verify` script and a list of small tasks, in three
+sessions: one step each, so no session has to plan everything at once. Each task then gets its own session: the agent builds it, Tenaz runs
 `verify`, and a fresh session of the same model reviews the diff. A task
 that passes is committed; one that fails is undone and retried, split into
 smaller tasks or marked blocked. When every task is done, a final review

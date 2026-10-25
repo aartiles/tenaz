@@ -43,6 +43,54 @@ impl Phase {
     }
 }
 
+/// The bootstrap's step (ADR 0003): one session writes each.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BootstrapStep {
+    /// `.tenaz/spec.md` and `.tenaz/map.md`.
+    #[default]
+    Spec,
+    /// `verify`, the project skeleton and the bootstrap notes.
+    Verify,
+    /// The task cards.
+    Tasks,
+}
+
+impl BootstrapStep {
+    pub const COUNT: u32 = 3;
+
+    /// 1, 2 or 3; the role prompt's `## Step N` section.
+    pub fn number(self) -> u32 {
+        match self {
+            BootstrapStep::Spec => 1,
+            BootstrapStep::Verify => 2,
+            BootstrapStep::Tasks => 3,
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            BootstrapStep::Spec => "spec and map",
+            BootstrapStep::Verify => "verify and skeleton",
+            BootstrapStep::Tasks => "task cards",
+        }
+    }
+
+    pub fn next(self) -> Option<Self> {
+        match self {
+            BootstrapStep::Spec => Some(BootstrapStep::Verify),
+            BootstrapStep::Verify => Some(BootstrapStep::Tasks),
+            BootstrapStep::Tasks => None,
+        }
+    }
+}
+
+impl std::fmt::Display for BootstrapStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} of {} ({})", self.number(), Self::COUNT, self.title())
+    }
+}
+
 impl std::fmt::Display for Phase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -229,6 +277,9 @@ pub struct Ledger {
     pub skills: Vec<SkillPin>,
     pub phase: Phase,
     pub session_seq: u32,
+    /// The bootstrap step in progress; attempts count per step.
+    #[serde(default)]
+    pub bootstrap_step: BootstrapStep,
     pub bootstrap_attempts: u32,
     /// Bootstrap attempts in which every tool call the model made failed.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -310,6 +361,7 @@ impl Ledger {
             skills,
             phase: Phase::Bootstrap,
             session_seq: 0,
+            bootstrap_step: BootstrapStep::Spec,
             bootstrap_attempts: 0,
             bootstrap_tool_failures: 0,
             bootstrap_uncounted: 0,
@@ -474,6 +526,8 @@ pub enum JournalRecord {
         skill: String,
     },
     BootstrapValidation {
+        #[serde(default)]
+        step: BootstrapStep,
         attempt: u32,
         errors: Vec<String>,
         session_ok: bool,

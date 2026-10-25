@@ -70,8 +70,13 @@ pub fn status_text(project: &Project) -> String {
         .unwrap_or_default();
     let lines = [
         format!(
-            "Phase: {}{}",
+            "Phase: {}{}{}",
             ledger.phase,
+            if ledger.phase == Phase::Bootstrap {
+                format!(", step {}", ledger.bootstrap_step)
+            } else {
+                String::new()
+            },
             ledger
                 .blocked_reason
                 .as_ref()

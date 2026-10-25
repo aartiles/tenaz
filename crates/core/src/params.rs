@@ -75,7 +75,7 @@ pub struct RunParams {
     pub session_minutes: u64,
     /// Time limit of one `verify` run.
     pub verify_timeout_sec: u64,
-    /// Bootstrap sessions before the run blocks.
+    /// Bootstrap sessions per step before the run blocks.
     pub max_bootstrap_attempts: u32,
     /// Final review cycles before the run completes with gaps.
     pub max_final_cycles: u32,

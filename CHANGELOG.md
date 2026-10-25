@@ -152,6 +152,15 @@ uses [Semantic Versioning](https://semver.org/).
   sessions left (`git diff --stat` since `init`) and asked to continue from
   them instead of starting over. Before, it got only the list of problems,
   and explored and wrote the spec again.
+- The bootstrap runs in three steps, one session each: the spec and map,
+  then `verify` and the skeleton, then the task cards (ADR 0003). Each
+  session gets only its step's part of `bootstrap.md`, steps 2 and 3 get
+  the spec and map in their prompt, and `maxBootstrapAttempts` applies to
+  each step. A step whose files are already right is passed without a
+  session. `run.json` gains `bootstrap_step`, `BootstrapValidation`
+  records gain `step`, and `tenaz status` shows the step. A local model
+  drafted the whole bootstrap in its reasoning and hit the output limit
+  before writing any file, even at low effort.
 
 ### Fixed
 

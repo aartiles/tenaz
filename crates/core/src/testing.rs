@@ -83,6 +83,9 @@ pub struct ScriptedHarness {
     /// The first bootstrap session writes the spec and a new file, then
     /// ends without the rest.
     pub partial_bootstrap: bool,
+    /// Each bootstrap session writes only the files of the step its prompt
+    /// names. Otherwise the first one writes them all.
+    pub stepwise_bootstrap: bool,
 }
 
 impl ScriptedHarness {
@@ -390,7 +393,13 @@ impl Player {
             .and_then(|n| n.parse().ok())
             .unwrap_or(1);
         match role.as_str() {
-            "BOOTSTRAP" => self.bootstrap().await,
+            "BOOTSTRAP" => {
+                let step = field(prompt, "Step")
+                    .and_then(|s| s.split_whitespace().next())
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(1);
+                self.bootstrap(step).await;
+            }
             "BUILDER" => self.builder(&task, attempt).await,
             "REVIEWER" => {
                 let file = field(prompt, "Review file")
@@ -501,7 +510,7 @@ impl Player {
         .await;
     }
 
-    async fn bootstrap(&mut self) {
+    async fn bootstrap(&mut self, step: u32) {
         let boot = self.bump("bootstrap");
         if boot == 1 || boot == 2 {
             // Engine out of memory, then a prompt over its current maximum: rerun, not counted.
@@ -531,6 +540,22 @@ impl Player {
                 .await;
             return self.finish("Out of time.");
         }
+        let only = self.script.stepwise_bootstrap;
+        if !only || step == 1 {
+            self.bootstrap_spec().await;
+        }
+        if !only || step == 2 {
+            self.bootstrap_verify().await;
+        }
+        if !only || step == 3 {
+            self.bootstrap_cards().await;
+        }
+        self.write_tool(".tenaz/brief.md", "tampered\n", false)
+            .await; // must be reverted
+        self.finish("Done.");
+    }
+
+    async fn bootstrap_spec(&mut self) {
         self.write_tool(
             ".tenaz/spec.md",
             "# Spec\n\n- R1: one\n- R2: two\n- R3: three\n- R4: looks good (manual: visual)\n",
@@ -543,6 +568,9 @@ impl Player {
             false,
         )
         .await;
+    }
+
+    async fn bootstrap_verify(&mut self) {
         let verify = self
             .script
             .verify_path
@@ -551,6 +579,11 @@ impl Player {
         self.write_tool(&verify, VERIFY, true).await;
         self.write_tool("checks/T000.smoke.sh", "exit 0\n", false)
             .await;
+        self.write_tool(".tenaz/notes/BOOTSTRAP.md", "Fake stack.\n", false)
+            .await;
+    }
+
+    async fn bootstrap_cards(&mut self) {
         self.write_tool(
             ".tenaz/tasks/T001.md",
             &card("T001", &["R1"], &[], None),
@@ -575,11 +608,6 @@ impl Player {
             false,
         )
         .await;
-        self.write_tool(".tenaz/notes/BOOTSTRAP.md", "Fake stack.\n", false)
-            .await;
-        self.write_tool(".tenaz/brief.md", "tampered\n", false)
-            .await; // must be reverted
-        self.finish("Done.");
     }
 
     /// Reads until the context passes the stop and the session is aborted.
