@@ -211,6 +211,12 @@ impl Runner {
                     .collect::<Vec<_>>()
                     .join("\n"),
             ));
+            if let Some(left) = self.bootstrap_left()? {
+                extra.push((
+                    "Files the previous bootstrap sessions left (kept)".to_owned(),
+                    left,
+                ));
+            }
         }
         let fields = vec![(
             "Attempt".to_owned(),
@@ -311,6 +317,26 @@ impl Runner {
             self.project.requirements().len()
         ));
         Ok(())
+    }
+
+    /// What earlier bootstrap sessions wrote since `init`, for the next one
+    /// to continue from instead of starting over. Commits it first, so new
+    /// files show too.
+    fn bootstrap_left(&self) -> Result<Option<String>, RunError> {
+        let Some(base) = self.ledger.checkpoint.clone() else {
+            return Ok(None);
+        };
+        self.deps
+            .vcs
+            .commit_all(&format!("tenaz: bookkeeping before {}", Role::Bootstrap))?;
+        let stat = self.deps.vcs.diff_stat(&base, Some("HEAD"), false)?;
+        if stat.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "{}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right.",
+            stat.trim()
+        )))
     }
 
     /// A split or replan session; the cards it leaves are validated and

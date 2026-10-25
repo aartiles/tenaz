@@ -80,6 +80,9 @@ pub struct ScriptedHarness {
     pub truncate_task: Option<String>,
     /// The first bootstrap session after the engine failures does the same.
     pub truncate_bootstrap: bool,
+    /// The first bootstrap session writes the spec and a new file, then
+    /// ends without the rest.
+    pub partial_bootstrap: bool,
 }
 
 impl ScriptedHarness {
@@ -520,6 +523,13 @@ impl Player {
         }
         if self.script.truncate_bootstrap && self.bump("truncate-bootstrap") == 1 {
             return self.truncate().await;
+        }
+        if self.script.partial_bootstrap && self.bump("partial-bootstrap") == 1 {
+            self.write_tool(".tenaz/spec.md", "# Spec\n\n- R1: one\n", false)
+                .await;
+            self.write_tool("index.html", "<h1>draft</h1>\n", false)
+                .await;
+            return self.finish("Out of time.");
         }
         self.write_tool(
             ".tenaz/spec.md",

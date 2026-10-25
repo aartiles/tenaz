@@ -148,6 +148,10 @@ uses [Semantic Versioning](https://semver.org/).
 - With fx, each session's reasoning text is kept in
   `.tenaz/private/<label>.thinking.md`, with a line after each model
   request. Before, only its length was kept.
+- A bootstrap session after a failed one is told which files the earlier
+  sessions left (`git diff --stat` since `init`) and asked to continue from
+  them instead of starting over. Before, it got only the list of problems,
+  and explored and wrote the spec again.
 
 ### Fixed
 

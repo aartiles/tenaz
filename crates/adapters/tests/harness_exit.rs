@@ -282,3 +282,42 @@ async fn a_bootstrap_cut_at_the_output_limit_is_told_why_and_tried_again() {
         "{log}"
     );
 }
+
+#[tokio::test]
+async fn the_next_bootstrap_is_told_which_files_the_previous_one_left() {
+    let (_work, project, _log) = run(
+        ScriptedHarness {
+            partial_bootstrap: true,
+            ..Default::default()
+        },
+        2,
+    )
+    .await;
+    let labels: Vec<String> = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-bootstrap") => Some(s.label.clone()),
+            _ => None,
+        })
+        .collect();
+    // The fake's first bootstrap sessions hit engine errors; the partial
+    // one and the full one are the last two.
+    let (last, earlier) = labels.split_last().unwrap();
+    let prompt = |label: &str| {
+        project
+            .read(&format!(".tenaz/private/{label}.prompt.md"))
+            .unwrap()
+    };
+    for label in earlier {
+        assert!(!prompt(label).contains("previous bootstrap sessions left"));
+    }
+    let second = prompt(last);
+    let left = second
+        .split("Files the previous bootstrap sessions left (kept)")
+        .nth(1)
+        .expect("the second bootstrap gets the files the first one left");
+    assert!(left.contains(".tenaz/spec.md"), "{second}");
+    assert!(left.contains("index.html"), "{second}");
+    assert!(left.contains("Do not start over"), "{second}");
+}
