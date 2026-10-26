@@ -2,9 +2,10 @@
 
 ![A scripted tenaz demo run, then tenaz status](docs/demo/demo.gif)
 
-A scripted run (`tenaz demo`, sped up 2x): no model and no agent, but the real
-runner, `verify` and git commits. [`docs/demo/demo.tape`](docs/demo/demo.tape)
-and `docs/demo/render.sh` regenerate it.
+A scripted run (`tenaz demo`, sped up 2x, output trimmed): no model and no
+agent, but the real runner, `verify` and git commits.
+[`docs/demo/demo.tape`](docs/demo/demo.tape) and `docs/demo/render.sh`
+regenerate it.
 
 Give it a goal; it plans the work, splits it into tasks and drives a coding
 agent session by session until the goal is met, on a local model.
