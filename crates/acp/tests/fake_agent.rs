@@ -345,6 +345,12 @@ async fn proxy_observations_become_per_request_turns() {
             drafted: Some(60),
             accepted: Some(45),
         }),
+        sent: Some(Box::new(tenaz_core::session::RequestSettings {
+            temperature: Some(0.8),
+            reasoning_effort: Some("medium".into()),
+            max_tokens: Some(16384),
+            ..Default::default()
+        })),
     })
     .unwrap();
     // A reasoning-only response that ended with `stop` and no tool call (seen
@@ -359,6 +365,7 @@ async fn proxy_observations_become_per_request_turns() {
         },
         stop_reason: CoreStop::Stop,
         server: None,
+        sent: None,
     })
     .unwrap();
     feed.send(EngineObservation::Error {
@@ -372,7 +379,7 @@ async fn proxy_observations_become_per_request_turns() {
         .collect();
     assert_eq!(ends.len(), 3, "{events:?}");
     assert!(
-        matches!(ends[0], SessionEvent::MessageEnd { usage, stop_reason: CoreStop::ToolUse, server: Some(s), .. } if usage.cache_read == 90 && s.drafted == Some(60) && s.accepted == Some(45))
+        matches!(ends[0], SessionEvent::MessageEnd { usage, stop_reason: CoreStop::ToolUse, server: Some(s), sent: Some(sent), .. } if usage.cache_read == 90 && s.drafted == Some(60) && s.accepted == Some(45) && sent.temperature == Some(0.8) && sent.reasoning_effort.as_deref() == Some("medium"))
     );
     assert!(
         matches!(ends[1], SessionEvent::MessageEnd { usage, stop_reason: CoreStop::Stop, .. } if usage.reasoning == 4848 && usage.output == 4848)

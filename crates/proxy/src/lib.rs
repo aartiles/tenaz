@@ -245,10 +245,6 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
     } else {
         None
     };
-    let max_output = request_json
-        .as_ref()
-        .and_then(events::output_limit)
-        .or(proxy.max_output_tokens);
     let stream = request_json
         .as_ref()
         .and_then(|j| j.get("stream").and_then(serde_json::Value::as_bool))
@@ -321,7 +317,7 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
         completion,
         started,
     )
-    .with_max_output(max_output);
+    .for_request(request_json.as_ref(), proxy.max_output_tokens);
     let tapped = TappedStream::new(
         upstream
             .bytes_stream()

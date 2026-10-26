@@ -503,3 +503,19 @@ async fn the_reviewer_is_given_the_images_the_change_adds() {
         "a change without images gets no image section:\n{log}"
     );
 }
+
+#[tokio::test]
+async fn each_request_line_records_what_the_request_asked_for() {
+    let (_work, project, _log) = run(ScriptedHarness::default(), 3).await;
+    let lines = project.read(".tenaz/private/requests.jsonl").unwrap();
+    let recorded: Vec<serde_json::Value> = lines
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .filter(|r: &serde_json::Value| r.get("sent").is_some())
+        .collect();
+    assert!(!recorded.is_empty(), "{lines}");
+    assert_eq!(
+        recorded[0]["sent"],
+        serde_json::json!({"reasoning_effort": "medium", "max_tokens": 16384})
+    );
+}

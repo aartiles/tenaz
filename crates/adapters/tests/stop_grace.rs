@@ -72,6 +72,7 @@ impl Session for Thinking {
             for event in [
                 SessionEvent::MessageEnd {
                     server: None,
+                    sent: None,
                     usage: Usage::default(),
                     stop_reason: StopReason::Aborted,
                     error_message: Some("Request was aborted".into()),

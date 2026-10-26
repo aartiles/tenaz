@@ -644,6 +644,7 @@ mod tests {
         w.handle(
             &SessionEvent::MessageEnd {
                 server: None,
+                sent: None,
                 usage: Usage {
                     input,
                     output: 10,

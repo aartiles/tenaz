@@ -10,9 +10,11 @@ use bytes::Bytes;
 use futures::Stream;
 
 use crate::events::{
-    ProxyEvent, classify_error, finish_reason_from_json, reported_finish_reason, usage_from_json,
+    ProxyEvent, classify_error, finish_reason_from_json, output_limit, reported_finish_reason,
+    usage_from_json,
 };
 use crate::{Proxy, elapsed_ms};
+use tenaz_core::session::RequestSettings;
 
 /// Accumulates what the proxy needs from a response.
 pub(crate) struct Tap {
@@ -33,6 +35,7 @@ pub(crate) struct Tap {
     timings: Option<tenaz_core::session::ServerTimings>,
     /// The output limit the request ran under, when known.
     max_output: Option<u64>,
+    sent: Option<Box<RequestSettings>>,
     done: bool,
 }
 
@@ -63,13 +66,21 @@ impl Tap {
             finish_reason: None,
             timings: None,
             max_output: None,
+            sent: None,
             done: false,
         }
     }
 
-    /// A reply that reaches `limit` output tokens is reported as cut.
-    pub(crate) fn with_max_output(mut self, limit: Option<u64>) -> Self {
-        self.max_output = limit;
+    /// What the tap takes from the completion request: its output limit,
+    /// or `default_limit` when it names none (a reply that reaches it is
+    /// reported as cut), and the settings it asked for.
+    pub(crate) fn for_request(
+        mut self,
+        request: Option<&serde_json::Value>,
+        default_limit: Option<u64>,
+    ) -> Self {
+        self.max_output = request.and_then(output_limit).or(default_limit);
+        self.sent = request.map(|r| Box::new(RequestSettings::from_request(r)));
         self
     }
 
@@ -157,6 +168,7 @@ impl Tap {
                 self.max_output,
             ),
             timings: self.timings.take(),
+            sent: self.sent.take(),
             first_byte_ms: self.first_byte.map(|t| {
                 u64::try_from(t.duration_since(self.started).as_millis()).unwrap_or(u64::MAX)
             }),

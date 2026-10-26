@@ -51,6 +51,9 @@ pub enum ProxyEvent {
         /// reports them there).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timings: Option<tenaz_core::session::ServerTimings>,
+        /// What a completion request asked for, as the proxy forwarded it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sent: Option<Box<tenaz_core::session::RequestSettings>>,
         first_byte_ms: Option<u64>,
         total_ms: u64,
     },

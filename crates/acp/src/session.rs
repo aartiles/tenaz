@@ -29,6 +29,8 @@ pub enum EngineObservation {
         stop_reason: StopReason,
         /// The engine's own figures for the request, when it reported them.
         server: Option<tenaz_core::session::ServerTimings>,
+        /// What the request asked for, as the proxy forwarded it.
+        sent: Option<Box<tenaz_core::session::RequestSettings>>,
     },
     Error {
         message: String,
@@ -334,11 +336,12 @@ impl Running {
                 usage,
                 stop_reason,
                 server,
+                sent,
             } => {
                 self.thinking
                     .end_request(&format!("{stop_reason:?}, {} output tokens", usage.output));
                 self.translator
-                    .request_end(usage, stop_reason, None, server)
+                    .request_end(usage, stop_reason, None, server, sent.map(|s| *s))
             }
             EngineObservation::Error { message } => {
                 self.thinking.end_request("error");
@@ -346,6 +349,7 @@ impl Running {
                     Usage::default(),
                     StopReason::Error,
                     Some(message),
+                    None,
                     None,
                 )
             }

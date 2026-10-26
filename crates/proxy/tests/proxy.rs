@@ -270,6 +270,7 @@ async fn a_reply_at_the_requested_output_limit_is_reported_as_cut() {
         .json(&serde_json::json!({
             "stream": true,
             "max_tokens": 16,
+            "temperature": 0.8,
             "messages": [{"role": "user", "content": "cut in a tool call"}]
         }))
         .send()
@@ -285,5 +286,13 @@ async fn a_reply_at_the_requested_output_limit_is_reported_as_cut() {
             ProxyEvent::Completed { finish_reason: Some(reason), .. } if reason == "length"
         ),
         "the engine said tool_calls at 16 of 16 tokens: {events:?}"
+    );
+    assert!(
+        matches!(
+            &events[0],
+            ProxyEvent::Completed { sent: Some(sent), .. }
+                if sent.temperature == Some(0.8) && sent.max_tokens == Some(16)
+        ),
+        "the request's settings are reported with its completion: {events:?}"
     );
 }

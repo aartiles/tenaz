@@ -467,6 +467,7 @@ mod tests {
                 decode_ms: Some(5000.0),
                 ..ServerTimings::default()
             }),
+            sent: None,
         }
     }
 

@@ -411,6 +411,7 @@ async fn start_proxy(
                 usage: Some(u),
                 finish_reason,
                 timings,
+                sent,
                 ..
             } => {
                 let _ = feed.send(EngineObservation::Completed {
@@ -423,6 +424,7 @@ async fn start_proxy(
                     },
                     stop_reason: stop_reason_for_finish(finish_reason.as_deref()),
                     server: timings,
+                    sent,
                 });
             }
             ProxyEvent::EngineError { message, .. } => {

@@ -176,6 +176,7 @@ impl Runner {
                     usage,
                     stop_reason,
                     server,
+                    sent,
                     ..
                 } => {
                     let timing = ClientTiming {
@@ -183,7 +184,13 @@ impl Runner {
                         first_token,
                         now,
                     };
-                    recorder.record(*usage, stop_reason.clone(), *server, timing);
+                    recorder.record(RequestInput {
+                        usage: *usage,
+                        stop_reason: stop_reason.clone(),
+                        server: *server,
+                        sent: sent.clone(),
+                        timing,
+                    });
                 }
                 _ => {}
             }
@@ -657,6 +664,7 @@ struct RequestInput {
     usage: crate::session::Usage,
     stop_reason: crate::session::StopReason,
     server: Option<crate::session::ServerTimings>,
+    sent: Option<crate::session::RequestSettings>,
     timing: ClientTiming,
 }
 
@@ -705,6 +713,7 @@ impl RequestRecorder {
                 )
                 .with_engine(engine);
                 record.server = input.server;
+                record.sent = input.sent;
                 matched_once |= record.engine_matched;
                 if let Some(project) = &project
                     && let Ok(line) = serde_json::to_string(&record)
@@ -718,20 +727,9 @@ impl RequestRecorder {
         Self { tx: Some(tx), task }
     }
 
-    fn record(
-        &self,
-        usage: crate::session::Usage,
-        stop_reason: crate::session::StopReason,
-        server: Option<crate::session::ServerTimings>,
-        timing: ClientTiming,
-    ) {
+    fn record(&self, input: RequestInput) {
         if let Some(tx) = &self.tx {
-            let _ = tx.send(RequestInput {
-                usage,
-                stop_reason,
-                server,
-                timing,
-            });
+            let _ = tx.send(input);
         }
     }
 
@@ -870,6 +868,7 @@ fn request_record(
         engine: None,
         engine_matched: false,
         server: None,
+        sent: None,
     }
 }
 

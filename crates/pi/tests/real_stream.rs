@@ -24,6 +24,7 @@ fn a_captured_pi_1_1_0_prompt_translates_to_one_turn() {
             SessionEvent::FirstToken,
             SessionEvent::MessageEnd {
                 server: None,
+                sent: None,
                 usage: Usage {
                     input: 2316,
                     output: 17,

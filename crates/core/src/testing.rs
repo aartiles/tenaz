@@ -330,6 +330,12 @@ impl Player {
         });
         self.emit(SessionEvent::MessageEnd {
             server: None,
+            // What a proxy that saw the request would report.
+            sent: Some(crate::session::RequestSettings {
+                reasoning_effort: Some("medium".to_owned()),
+                max_tokens: Some(16_384),
+                ..Default::default()
+            }),
             usage: Usage {
                 input,
                 output: 20,
@@ -360,6 +366,7 @@ impl Player {
         let aborted = self.aborted();
         self.emit(SessionEvent::MessageEnd {
             server: None,
+            sent: None,
             usage: Usage {
                 input: 1200,
                 output: 10,
@@ -382,6 +389,7 @@ impl Player {
     fn engine_error(&self, message: &str) {
         self.emit(SessionEvent::MessageEnd {
             server: None,
+            sent: None,
             usage: Usage::default(),
             stop_reason: StopReason::Error,
             error_message: Some(message.to_owned()),
@@ -512,6 +520,7 @@ impl Player {
         self.emit(SessionEvent::TurnStart);
         self.emit(SessionEvent::MessageEnd {
             server: None,
+            sent: None,
             usage: Usage {
                 input: 1000,
                 output: 16384,

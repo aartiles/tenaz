@@ -107,6 +107,10 @@ pub struct RequestRecord {
     /// carried them (prefill and decode time, speculative drafts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<crate::session::ServerTimings>,
+    /// The sampling and limits the request asked for, as the engine proxy
+    /// forwarded it; a missing field is the engine's own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<crate::session::RequestSettings>,
 }
 
 impl RequestRecord {
@@ -294,6 +298,7 @@ mod tests {
             engine: None,
             engine_matched: false,
             server: None,
+            sent: None,
         }
         .with_engine(Some(d.clone()));
         assert!(record.engine_matched);
@@ -320,6 +325,7 @@ mod tests {
             engine: None,
             engine_matched: false,
             server,
+            sent: None,
         };
         let drafts = |d, a| {
             Some(crate::session::ServerTimings {
@@ -376,6 +382,7 @@ mod tests {
             ])),
             engine_matched: matched,
             server: None,
+            sent: None,
         };
         let requests = vec![
             mk(0.5, 1.0, 50.0, true),

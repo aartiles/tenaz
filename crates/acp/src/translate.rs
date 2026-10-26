@@ -104,6 +104,7 @@ impl Translator {
         stop_reason: StopReason,
         error_message: Option<String>,
         server: Option<tenaz_core::session::ServerTimings>,
+        sent: Option<tenaz_core::session::RequestSettings>,
     ) -> Vec<SessionEvent> {
         let text = std::mem::take(&mut self.text);
         let thinking_chars = std::mem::take(&mut self.thinking_chars);
@@ -111,6 +112,7 @@ impl Translator {
         vec![
             SessionEvent::MessageEnd {
                 server,
+                sent,
                 usage,
                 stop_reason,
                 error_message,
@@ -131,7 +133,7 @@ impl Translator {
                 input: self.last_used.unwrap_or(0),
                 ..Default::default()
             };
-            events.extend(self.request_end(usage, stop_reason(stop), None, None));
+            events.extend(self.request_end(usage, stop_reason(stop), None, None, None));
         }
         events.push(SessionEvent::Settled { aborted });
         events

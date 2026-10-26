@@ -213,6 +213,12 @@ uses [Semantic Versioning](https://semver.org/).
   only, and the final reviewer marked the visual requirements manual
   without seeing the images, so a product that changed from image to image
   went unnoticed.
+- Each line of `.tenaz/private/requests.jsonl` records, under `sent`, the
+  sampling and limits the request asked the engine for, as the proxy
+  forwarded it: `temperature`, `top_p`, `top_k`, `reasoning_effort` (the
+  lowered one after a cut) and `max_tokens`. A field the request did not
+  carry is left out: the engine used its own default. Only for requests
+  through the proxy.
 - fx writes one ACP log per session instead of overwriting a shared one.
 - An ACP session handles a proxy observation before the prompt's end, so
   per-request usage is no longer occasionally lost or attributed to the

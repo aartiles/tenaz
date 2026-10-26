@@ -97,6 +97,10 @@ pub enum SessionEvent {
         /// response carried it (seen by the engine proxy).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         server: Option<ServerTimings>,
+        /// The sampling and limits the request asked for, as the engine
+        /// proxy forwarded it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sent: Option<RequestSettings>,
     },
     TurnEnd,
     CompactionStart {
@@ -136,6 +140,45 @@ pub struct ServerTimings {
     /// Draft tokens accepted (llama.cpp `draft_n_accepted`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted: Option<u64>,
+}
+
+/// What a completion request asked of the engine, as the engine proxy
+/// forwarded it (after the proxy's own defaults). A field the request did
+/// not carry is `None`: the engine used its own default.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RequestSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// `max_completion_tokens`, `max_tokens` or `max_output_tokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+}
+
+impl RequestSettings {
+    /// Reads them from a completion request body.
+    pub fn from_request(request: &serde_json::Value) -> Self {
+        let float = |key: &str| request.get(key).and_then(serde_json::Value::as_f64);
+        let int = |key: &str| request.get(key).and_then(serde_json::Value::as_u64);
+        Self {
+            temperature: float("temperature"),
+            top_p: float("top_p"),
+            top_k: int("top_k"),
+            reasoning_effort: request
+                .get("reasoning_effort")
+                .or_else(|| request.get("reasoning").and_then(|r| r.get("effort")))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            max_tokens: ["max_completion_tokens", "max_tokens", "max_output_tokens"]
+                .into_iter()
+                .find_map(int),
+        }
+    }
 }
 
 impl ServerTimings {
@@ -300,6 +343,28 @@ pub fn is_image_refusal(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_settings_read_what_the_request_carries() {
+        let sent = RequestSettings::from_request(&serde_json::json!({
+            "model": "m", "temperature": 0.8, "top_k": 20,
+            "reasoning_effort": "low", "max_tokens": 16384
+        }));
+        assert_eq!(
+            sent,
+            RequestSettings {
+                temperature: Some(0.8),
+                top_p: None,
+                top_k: Some(20),
+                reasoning_effort: Some("low".into()),
+                max_tokens: Some(16384),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&sent).unwrap(),
+            serde_json::json!({"temperature": 0.8, "top_k": 20, "reasoning_effort": "low", "max_tokens": 16384})
+        );
+    }
 
     #[test]
     fn a_session_whose_every_tool_call_failed_is_told_apart() {
