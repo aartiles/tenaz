@@ -19,7 +19,7 @@ below; this page is about the real ones.
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
 | Media | ComfyUI images (`generate_image` over MCP) | Tested against a mock. Needs an API-format workflow with `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}` and `{{height}}` placeholders. |
-| | OpenAI Images API (`--images`, `POST /v1/images/generations`): Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock only. Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Does not unload the image model after a job. On the LLM's own origin the LLM stays loaded. |
+| | OpenAI Images API (`--images`, `POST /v1/images/generations`): mlx-serve, Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock, and by hand against mlx-serve 26.10.3 (see Known gaps). Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Does not unload the image model after a job. On the LLM's own origin the LLM stays loaded. |
 | | TTS, STT, video | Not built. |
 
 ## What the model needs
@@ -71,8 +71,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   and 8000 (vLLM), and for image engines (an engine on those ports that
   lists an image model, a server on 1337 (Atomic Chat) that does, and
   ComfyUI on 8188), with an 800 ms timeout
-  each. Whether mlx-serve lists its image models at `/v1/models` and
-  serves `/v1/images/generations` has not been checked. With
+  each. mlx-serve 26.10.3 lists its image models at `/v1/models` and
+  serves `/v1/images/generations`. With
   `TENAZ_NO_PROBE` set, neither looks at these ports: only the addresses
   the flags give are used. An image model is
   recognised by its name (FLUX, SDXL, SD3, Z-Image, Qwen-Image and
@@ -122,6 +122,19 @@ above), so a 32k context is the practical floor (`contextFloor`).
   `--no-mcp`), and Pi's request records take their usage from Pi rather
   than the proxy, so they carry no server timings (draft acceptance).
   `--no-proxy` points Pi straight at the engine.
+- **mlx-serve serving the LLM and the images.** When `--images` is the
+  LLM's own server, Tenaz keeps the LLM loaded and leaves the memory to
+  the server (`lease llm kept` in the journal). mlx-serve 26.10.3 does
+  not make room by itself with its defaults: up to 3 models stay loaded,
+  and its free-memory check refused to load Qwen-Image 2.1 8-bit next to
+  Qwen3.8 27B 4-bit (`503 … InsufficientMemory`) in the image-landing run
+  of 2026-10-26. Set "Max models loaded at once" to 1
+  (`--max-resident-models 1`) and restart the server: an image request
+  then unloads the LLM and loads the image model, and the next chat
+  request swaps them back. Checked by hand: a 1536×864 image in 147 s,
+  the LLM back in 2 to 4 s, the size and seed respected. The first chat
+  request after each image computes its prompt again, since the prefix
+  cache goes with the LLM.
 - **Media through fx with long jobs.** Which route fx takes for a
   10-minute tool call has not been measured.
 - **Linux and NVIDIA memory.** Memory pressure, swap and the engine's
