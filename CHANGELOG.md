@@ -187,6 +187,10 @@ uses [Semantic Versioning](https://semver.org/).
   ends it with `tool_calls` (TensorFold does, for a reply cut inside a
   tool call's arguments). Tenaz retried such sessions as engine failures,
   up to six times with waits, at the same effort.
+- A steer for context, turns or compaction asks each role for what it may
+  write before stopping: a reviewer its verdict file, the final reviewer
+  `FINAL.md`, a planner its cards. All were told to write handoff notes,
+  and reviewers did, in notes files that were then reverted.
 - fx writes one ACP log per session instead of overwriting a shared one.
 - An ACP session handles a proxy observation before the prompt's end, so
   per-request usage is no longer occasionally lost or attributed to the

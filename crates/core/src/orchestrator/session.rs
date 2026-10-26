@@ -334,6 +334,7 @@ impl Runner {
             turns: ctx.turns.unwrap_or(self.params.turn_budget),
             context_tokens: self.ledger.context_budget_tokens(ctx.context_tokens),
             idle: role.edits_code(),
+            wrap_up: role.wrap_up(),
         };
         if let Some(dial) = &self.deps.effort {
             dial.set_lowered(self.ledger.lower_effort);

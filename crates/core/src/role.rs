@@ -42,6 +42,25 @@ impl Role {
         format!(".tenaz/prompts/{}.md", self.as_str())
     }
 
+    /// What a steered session is asked to do before it stops: hand off for
+    /// the roles that edit, write the one file it owns for the others. A
+    /// reviewer told to write handoff notes writes them, and they are
+    /// reverted.
+    pub fn wrap_up(self) -> &'static str {
+        match self {
+            Role::Bootstrap | Role::Builder => {
+                "Finish the smallest coherent step, run ./verify, write your handoff notes, and stop. The next session continues from the repository."
+            }
+            Role::Reviewer => {
+                "Stop investigating: write your verdict file now from what you have found, and stop. Write no other file; a reviewer's notes are discarded."
+            }
+            Role::FinalReviewer => {
+                "Stop investigating: write .tenaz/reviews/FINAL.md now from what you have found, with a card for each gap, and stop. Write no other file."
+            }
+            Role::Split | Role::Replan => "Write the task cards now from what you have, and stop.",
+        }
+    }
+
     /// Roles whose sessions are expected to change files; the idle watchdog applies.
     pub fn edits_code(self) -> bool {
         matches!(self, Role::Builder | Role::Bootstrap)

@@ -23,6 +23,8 @@ pub struct WatchConfig {
     pub context_tokens: u64,
     /// Count turns without a file change (builder and bootstrap sessions).
     pub idle: bool,
+    /// What a steer asks the session to do before it stops ([`Role::wrap_up`]).
+    pub wrap_up: &'static str,
 }
 
 /// What the session runner must do.
@@ -174,7 +176,10 @@ impl Watchdog {
                     if self.metrics.compactions >= 2 {
                         self.abort("second context compaction", elapsed_ms, &mut actions);
                     } else {
-                        self.steer("compaction", "Context is being compacted, which loses detail. Finish the current step, run ./verify, write your handoff notes, and stop.", elapsed_ms, &mut actions);
+                        let wrap_up = self.watch.map_or("", |w| w.wrap_up);
+                        let message =
+                            format!("Context is being compacted, which loses detail. {wrap_up}");
+                        self.steer("compaction", &message, elapsed_ms, &mut actions);
                     }
                 }
             }
@@ -398,16 +403,16 @@ impl Watchdog {
                 );
             } else if self.metrics.context_peak > watch.context_tokens {
                 let message = format!(
-                    "This session has used {} tokens of context, over its budget of {}. Finish the smallest coherent step, run ./verify, write your handoff notes, and stop. The next session continues from the repository.",
-                    self.metrics.context_peak, watch.context_tokens
+                    "This session has used {} tokens of context, over its budget of {}. {}",
+                    self.metrics.context_peak, watch.context_tokens, watch.wrap_up
                 );
                 self.steer("context", &message, elapsed_ms, actions);
             } else if let Some(turns) = self.turns_to_stop(hard)
                 && turns <= u64::from(self.params.context_steer_turns)
             {
                 let message = format!(
-                    "This session has used {} tokens of context. At its pace so far it reaches the stop at {hard} tokens in about {turns} turns, and a stopped session leaves no handoff. Finish the smallest coherent step, run ./verify, write your handoff notes, and stop. The next session continues from the repository.",
-                    self.metrics.context_peak
+                    "This session has used {} tokens of context. At its pace so far it reaches the stop at {hard} tokens in about {turns} turns, and a stopped session's work is lost. {}",
+                    self.metrics.context_peak, watch.wrap_up
                 );
                 self.steer("context-pace", &message, elapsed_ms, actions);
             }
@@ -478,8 +483,8 @@ impl Watchdog {
             );
         } else if self.metrics.turns >= watch.turns {
             let message = format!(
-                "You have used your turn budget ({}). Finish the current step, run ./verify, write your handoff notes, and stop.",
-                watch.turns
+                "You have used your turn budget ({}). {}",
+                watch.turns, watch.wrap_up
             );
             self.steer("turns", &message, elapsed_ms, actions);
         }
@@ -489,6 +494,7 @@ impl Watchdog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::role::Role;
     use crate::session::Usage;
 
     fn watched() -> Watchdog {
@@ -498,6 +504,7 @@ mod tests {
                 turns: 40,
                 context_tokens: 60_000,
                 idle: true,
+                wrap_up: Role::Builder.wrap_up(),
             }),
         )
     }
@@ -748,6 +755,7 @@ mod tests {
                 turns: 40,
                 context_tokens: 60_000,
                 idle: true,
+                wrap_up: Role::Builder.wrap_up(),
             }),
         );
         w.set_fingerprint(Some("a".into()));
@@ -821,6 +829,7 @@ mod tests {
                 turns: 4,
                 context_tokens: 60_000,
                 idle: false,
+                wrap_up: Role::Builder.wrap_up(),
             }),
         );
         let mut steered_at = None;

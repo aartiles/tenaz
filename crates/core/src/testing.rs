@@ -86,6 +86,8 @@ pub struct ScriptedHarness {
     /// Each bootstrap session writes only the files of the step its prompt
     /// names. Otherwise the first one writes them all.
     pub stepwise_bootstrap: bool,
+    /// The first review of this task reads until its context is stopped.
+    pub outgrow_review: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -115,6 +117,7 @@ impl Harness for ScriptedHarness {
             rx,
             aborted: Arc::new(AtomicBool::new(false)),
             prompts: 0,
+            role: String::new(),
             play: None,
             script: self.clone(),
         }))
@@ -130,6 +133,8 @@ struct ScriptedSession {
     rx: mpsc::UnboundedReceiver<SessionEvent>,
     aborted: Arc<AtomicBool>,
     prompts: u32,
+    /// The `Role` field of the first prompt.
+    role: String,
     play: Option<tokio::task::JoinHandle<()>>,
     script: ScriptedHarness,
 }
@@ -138,6 +143,11 @@ struct ScriptedSession {
 impl Session for ScriptedSession {
     async fn prompt(&mut self, text: &str) -> Result<(), HarnessError> {
         self.prompts += 1;
+        if let Some(role) = field(text, "Role")
+            && self.role.is_empty()
+        {
+            role.clone_into(&mut self.role);
+        }
         let player = Player {
             cwd: self.cwd.clone(),
             stderr_log: self.stderr_log.clone(),
@@ -171,7 +181,16 @@ impl Session for ScriptedSession {
         Some(event)
     }
 
-    async fn steer(&mut self, _text: &str) -> Result<(), HarnessError> {
+    /// Steers are appended to `.tenaz/private/fake-steers.log`, after the role.
+    async fn steer(&mut self, text: &str) -> Result<(), HarnessError> {
+        let log = self.cwd.join(".tenaz/private/fake-steers.log");
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut f| {
+                std::io::Write::write_all(&mut f, format!("{}: {text}\n", self.role).as_bytes())
+            });
         Ok(())
     }
 
@@ -406,6 +425,9 @@ impl Player {
                     .unwrap_or(".tenaz/reviews/unknown.md")
                     .to_owned();
                 let n = self.bump(&format!("review-{task}"));
+                if self.script.outgrow_review.as_deref() == Some(task.as_str()) && n == 1 {
+                    return self.outgrow().await;
+                }
                 if task == "T004" && n == 1 {
                     return self.finish("(no verdict written)"); // must be retried
                 }

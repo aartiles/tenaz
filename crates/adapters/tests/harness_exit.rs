@@ -412,3 +412,27 @@ async fn bootstrap_steps_already_done_need_no_session() {
         "{log}"
     );
 }
+
+#[tokio::test]
+async fn a_reviewer_over_its_context_is_asked_for_its_verdict_not_notes() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            outgrow_review: Some("T002".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    let steers = project
+        .read(".tenaz/private/fake-steers.log")
+        .unwrap_or_default();
+    let reviewer: Vec<&str> = steers
+        .lines()
+        .filter(|l| l.starts_with("REVIEWER: ") && l.contains("tokens of context"))
+        .collect();
+    assert!(!reviewer.is_empty(), "the reviewer was steered:\n{log}");
+    for line in reviewer {
+        assert!(line.contains("write your verdict file now"), "{line}");
+        assert!(!line.contains("handoff notes"), "{line}");
+    }
+}
