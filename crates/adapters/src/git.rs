@@ -315,6 +315,28 @@ impl GitRepo {
     }
 }
 
+impl GitRepo {
+    /// A diff that, when it leaves out `.tenaz/`, still shows
+    /// `.tenaz/verify`: in an existing project that is the project's verify,
+    /// and a reviewer must see a change to it. Git cannot exclude a folder
+    /// but one file in it, so the file's diff is appended.
+    fn diff_with_verify(
+        &self,
+        from: &str,
+        to: Option<&str>,
+        stat: bool,
+        exclude_agent: bool,
+    ) -> Result<String, VcsError> {
+        let mut out = self.git(&diff_args(from, to, stat, exclude_agent))?;
+        if exclude_agent {
+            let mut args = diff_args(from, to, stat, false);
+            args.extend(["--", ".tenaz/verify"]);
+            out.push_str(&self.git(&args)?);
+        }
+        Ok(out)
+    }
+}
+
 fn diff_args<'a>(
     from: &'a str,
     to: Option<&'a str>,
@@ -421,7 +443,7 @@ impl Vcs for GitRepo {
     }
 
     fn diff(&self, from: &str, to: &str, exclude_agent: bool) -> Result<String, VcsError> {
-        self.git(&diff_args(from, Some(to), false, exclude_agent))
+        self.diff_with_verify(from, Some(to), false, exclude_agent)
     }
 
     fn diff_stat(
@@ -430,7 +452,7 @@ impl Vcs for GitRepo {
         to: Option<&str>,
         exclude_agent: bool,
     ) -> Result<String, VcsError> {
-        self.git(&diff_args(from, to, true, exclude_agent))
+        self.diff_with_verify(from, to, true, exclude_agent)
     }
 }
 
@@ -493,6 +515,22 @@ mod tests {
         assert!(repo.diff(&base, &second, true).unwrap().contains("edited"));
         assert!(!repo.diff(&base, &second, true).unwrap().contains("T001"));
         assert!(repo.diff(&base, &second, false).unwrap().contains("T001"));
+        // An existing project's verify lives under .tenaz/ and stays visible.
+        std::fs::write(dir.path().join(".tenaz/verify"), "#!/bin/sh\nexit 0\n").unwrap();
+        let with_verify = repo.commit_all("verify").unwrap();
+        let shown = repo.diff(&second, &with_verify, true).unwrap();
+        assert!(shown.contains("+++ b/.tenaz/verify"), "{shown}");
+        assert!(
+            repo.diff_stat(&second, Some(&with_verify), true)
+                .unwrap()
+                .contains(".tenaz/verify")
+        );
+        assert!(
+            !repo
+                .diff(&base, &with_verify, true)
+                .unwrap()
+                .contains("T001")
+        );
         assert!(
             repo.diff_stat(&base, Some(&second), true)
                 .unwrap()

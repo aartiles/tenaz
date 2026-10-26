@@ -169,6 +169,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- In an existing project, a change to `.tenaz/verify` (the project's
+  `verify`) is shown in the reviewer's diff and in the builder's list of
+  changes kept from earlier attempts. Both left out all of `.tenaz/`, so a
+  reviewer could not see an edit to the checks' runner.
 - The media MCP server keeps a session open for a day without requests
   instead of 5 minutes (rmcp's default). fx opens its session when an agent
   session starts; a first image call more than 5 minutes later failed with
