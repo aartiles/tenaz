@@ -191,6 +191,10 @@ uses [Semantic Versioning](https://semver.org/).
   write before stopping: a reviewer its verdict file, the final reviewer
   `FINAL.md`, a planner its cards. All were told to write handoff notes,
   and reviewers did, in notes files that were then reverted.
+- A review asks for changes only with at least one MAJOR finding: the
+  reviewer prompt says so, and a `CHANGES` whose findings are all MINOR is
+  accepted. One such review cost a whole builder and review cycle for a
+  missing line in a decisions file.
 - fx writes one ACP log per session instead of overwriting a shared one.
 - An ACP session handles a proxy observation before the prompt's end, so
   per-request usage is no longer occasionally lost or attributed to the

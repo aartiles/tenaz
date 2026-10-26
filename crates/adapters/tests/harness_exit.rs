@@ -436,3 +436,28 @@ async fn a_reviewer_over_its_context_is_asked_for_its_verdict_not_notes() {
         assert!(!line.contains("handoff notes"), "{line}");
     }
 }
+
+#[tokio::test]
+async fn a_review_with_minor_findings_only_accepts_the_task() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            minor_review: Some("T002".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    assert!(
+        log.contains("T002: the review asks for changes with MINOR findings only; accepted"),
+        "{log}"
+    );
+    // The fake's first T002 attempt fails on its own; the reviewed one is the second.
+    let reviews = project
+        .journal()
+        .iter()
+        .filter(
+            |e| matches!(&e.record, JournalRecord::Review { task, .. } if task.as_str() == "T002"),
+        )
+        .count();
+    assert_eq!(reviews, 1, "no further attempt for a MINOR finding:\n{log}");
+}

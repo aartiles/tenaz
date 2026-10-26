@@ -388,6 +388,18 @@ impl Project {
 
 /// The first `Verdict: ACCEPT` or `Verdict: CHANGES` line of `text`, also
 /// in Markdown bold (`**Verdict:** ACCEPT`, `**Verdict: ACCEPT**`).
+/// A review that asks for changes with MINOR findings only: the reviewer
+/// prompt reserves `CHANGES` for MAJOR ones. Untagged findings do not count
+/// as minor.
+pub fn only_minor_findings(review: &str) -> bool {
+    let tagged = |tag: &str| {
+        review
+            .lines()
+            .any(|line| line.to_ascii_uppercase().contains(tag))
+    };
+    tagged("[MINOR]") && !tagged("[MAJOR]")
+}
+
 pub fn verdict_in(text: &str) -> Option<String> {
     text.lines().find_map(|line| {
         let plain: String = line.chars().filter(|c| *c != '*' && *c != '_').collect();
@@ -410,6 +422,19 @@ mod tests {
         let p = Project::new(dir.path());
         p.create_layout().unwrap();
         (dir, p)
+    }
+
+    #[test]
+    fn only_minor_findings_needs_a_minor_one_and_no_major_one() {
+        assert!(only_minor_findings(
+            "Verdict: CHANGES\n- [MINOR] favicon not in DECISIONS.md"
+        ));
+        assert!(!only_minor_findings(
+            "Verdict: CHANGES\n- [MINOR] a\n- **[MAJOR]** b"
+        ));
+        assert!(!only_minor_findings(
+            "Verdict: CHANGES\n- the page is blank"
+        ));
     }
 
     #[test]

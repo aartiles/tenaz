@@ -88,6 +88,8 @@ pub struct ScriptedHarness {
     pub stepwise_bootstrap: bool,
     /// The first review of this task reads until its context is stopped.
     pub outgrow_review: Option<String>,
+    /// The first review of this task asks for changes with a MINOR finding.
+    pub minor_review: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -433,6 +435,8 @@ impl Player {
                 }
                 let verdict = if task == "T001" && n == 1 {
                     "Verdict: CHANGES\n- [MAJOR] fake finding\n"
+                } else if self.script.minor_review.as_deref() == Some(task.as_str()) && n == 1 {
+                    "Verdict: CHANGES\n- [MINOR] a decision is not recorded\n"
                 } else {
                     "Verdict: ACCEPT\n"
                 };

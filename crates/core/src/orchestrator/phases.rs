@@ -1060,6 +1060,16 @@ impl Runner {
         }
         Ok(match verdict.as_deref() {
             Some("ACCEPT") => Review::Accept,
+            Some(_)
+                if text
+                    .as_deref()
+                    .is_some_and(crate::project::only_minor_findings) =>
+            {
+                self.log(&format!(
+                    "  {task}: the review asks for changes with MINOR findings only; accepted"
+                ));
+                Review::Accept
+            }
             Some(_) => Review::Changes(text.unwrap_or_default()),
             None => Review::NoVerdict,
         })

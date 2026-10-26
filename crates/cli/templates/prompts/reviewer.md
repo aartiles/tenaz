@@ -19,7 +19,10 @@ You may read files and run commands, including `./verify` and the program
 itself. Edit no file except `.tenaz/reviews/<TASK>.md`.
 
 In that file, write `Verdict: ACCEPT` or `Verdict: CHANGES` on the first
-line. For `CHANGES`, list each finding as
-`- [MAJOR|MINOR] what is wrong — where — what to do`. Use `CHANGES` only for
-problems that matter for the requirements, not for style. Keep the file
-under 30 lines.
+line, then list each finding as
+`- [MAJOR|MINOR] what is wrong — where — what to do`. A MAJOR finding is a
+problem that matters for the requirements; anything else is MINOR. Write
+`CHANGES` only when there is at least one MAJOR finding. With MINOR
+findings only, write `ACCEPT` and list them: the task is accepted, and a
+`CHANGES` with no MAJOR finding is accepted too. Keep the file under 30
+lines.
