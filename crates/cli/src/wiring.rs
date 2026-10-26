@@ -140,6 +140,23 @@ fn reasoning_effort(thinking: Option<&str>) -> Option<&str> {
     }
 }
 
+/// The fields the proxy adds to completion requests that lack them: the
+/// `reasoning_effort` of the thinking level (fx does not forward its effort
+/// to a custom provider) and the run's pinned `temperature`.
+fn request_defaults(
+    thinking: Option<&str>,
+    temperature: Option<f64>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut defaults = serde_json::Map::new();
+    if let Some(effort) = reasoning_effort(thinking) {
+        defaults.insert("reasoning_effort".to_owned(), effort.into());
+    }
+    if let Some(temperature) = temperature {
+        defaults.insert("temperature".to_owned(), temperature.into());
+    }
+    defaults
+}
+
 fn split_command(text: &str) -> Vec<String> {
     text.split_whitespace().map(str::to_owned).collect()
 }
@@ -251,6 +268,7 @@ pub async fn wire(
             gate.clone(),
             feed.clone(),
             config.thinking.as_deref(),
+            ledger.params.temperature,
             effort.clone(),
             ledger.params.repair_tool_args.then(|| {
                 project
@@ -391,13 +409,15 @@ fn log_repair(log: &Path, request: u64, tool: &str, fields: &[String]) {
 const HARNESS_MAX_OUTPUT_TOKENS: u64 = 16_384;
 
 /// The engine proxy: per-request usage and errors go to `feed`, requests
-/// are given the `reasoning_effort` the thinking level asks for, and with a
+/// are given the `reasoning_effort` the thinking level asks for and the
+/// run's pinned temperature (see [`request_defaults`]), and with a
 /// `repairs` log, tool-call arguments sent as text are repaired and logged.
 async fn start_proxy(
     base_url: &str,
     gate: Gate,
     feed: tokio::sync::broadcast::Sender<EngineObservation>,
     thinking: Option<&str>,
+    temperature: Option<f64>,
     effort: Option<EffortDial>,
     repairs: Option<PathBuf>,
 ) -> anyhow::Result<tenaz_proxy::ProxyHandle> {
@@ -452,13 +472,7 @@ async fn start_proxy(
     proxy.repair_tool_args = repairs.is_some();
     proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
     proxy.effort = effort;
-    if let Some(effort) = reasoning_effort(thinking) {
-        // fx does not forward its effort to a custom provider; the proxy fills it in.
-        proxy.request_defaults.insert(
-            "reasoning_effort".to_owned(),
-            serde_json::Value::String(effort.to_owned()),
-        );
-    }
+    proxy.request_defaults = request_defaults(thinking, temperature);
     let handle = Arc::new(proxy)
         .start("127.0.0.1:0".parse()?)
         .await
@@ -621,7 +635,9 @@ fn link_fx_skills(project: &Project, home: &Path, skills: &[SkillPin]) -> anyhow
 
 #[cfg(test)]
 mod tests {
-    use super::{BTreeMap, Duration, MediaOptions, media_adapter, reasoning_effort};
+    use super::{
+        BTreeMap, Duration, MediaOptions, media_adapter, reasoning_effort, request_defaults,
+    };
 
     fn images(url: &str, model: Option<&str>) -> MediaOptions {
         MediaOptions {
@@ -659,6 +675,16 @@ mod tests {
             ..images("", None)
         };
         assert!(media_adapter(&none, llm).unwrap().is_none());
+    }
+
+    #[test]
+    fn the_proxy_fills_in_the_effort_and_a_pinned_temperature() {
+        let defaults = request_defaults(Some("medium"), Some(0.0));
+        assert_eq!(
+            serde_json::Value::Object(defaults),
+            serde_json::json!({"reasoning_effort": "medium", "temperature": 0.0})
+        );
+        assert!(request_defaults(Some("off"), None).is_empty());
     }
 
     #[test]

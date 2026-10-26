@@ -219,6 +219,10 @@ uses [Semantic Versioning](https://semver.org/).
   lowered one after a cut) and `max_tokens`. A field the request did not
   carry is left out: the engine used its own default. Only for requests
   through the proxy.
+- `--set temperature=<t>` pins the run's sampling temperature: the proxy
+  puts it in requests that carry none (fx sends none). Unset, as before,
+  each engine uses its own default, which made the TensorFold and mlx-serve
+  runs of the same goal sample at 0 and 0.8.
 - fx writes one ACP log per session instead of overwriting a shared one.
 - An ACP session handles a proxy observation before the prompt's end, so
   per-request usage is no longer occasionally lost or attributed to the

@@ -115,6 +115,10 @@ pub struct RunParams {
     pub sandbox_allow_write: String,
     /// Directories a sandboxed run may not read, comma-separated.
     pub sandbox_deny_read: String,
+    /// The sampling temperature the engine proxy puts in requests that
+    /// carry none (fx sends none). Unset, the engine's own default applies,
+    /// which differs between engines (0.8 in mlx-serve's app, for example).
+    pub temperature: Option<f64>,
 }
 
 impl Default for RunParams {
@@ -158,6 +162,7 @@ impl Default for RunParams {
             memory_sample_sec: 30,
             notify: true,
             existing_project: None,
+            temperature: None,
             agent_skills: false,
             repair_tool_args: true,
             sandbox: false,
@@ -278,6 +283,16 @@ mod tests {
         assert_eq!(p.replan_every, 2);
         assert!(!p.notify);
         assert!((p.context_budget - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_run_can_pin_its_temperature() {
+        let mut p = RunParams::default();
+        assert_eq!(p.temperature, None);
+        p.apply_override("temperature=0").unwrap();
+        assert_eq!(p.temperature, Some(0.0));
+        p.apply_override("temperature=0.6").unwrap();
+        assert_eq!(p.temperature, Some(0.6));
     }
 
     #[test]

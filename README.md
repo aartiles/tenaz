@@ -303,7 +303,10 @@ tenaz init --project my-goal --brief brief.md --model my-model --base-url http:/
 ```
 
 `--vision` says the model reads images. `--set key=value` overrides a
-parameter; `tenaz params` lists them.
+parameter; `tenaz params` lists them. Tenaz does not set the sampling
+temperature, so each engine uses its own default; `--set temperature=0`
+pins it for the run (through the proxy), which makes runs on different
+engines comparable.
 
 ### Pi instead of fx
 
