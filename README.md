@@ -1,14 +1,16 @@
 # Tenaz
 
+Tenaz drives a local model through a coding agent until the goal passes its
+checks. It does not trust the model: it writes a `verify` script first, every
+small task gets a fresh session, and only work that passes `verify` and a
+review is committed. A failed task is reverted and retried or split.
+
 ![A scripted tenaz demo run, then tenaz status](docs/demo/demo.gif)
 
 A scripted run (`tenaz demo`, sped up 2x, output trimmed): no model and no
 agent, but the real runner, `verify` and git commits.
 [`docs/demo/demo.tape`](docs/demo/demo.tape) and `docs/demo/render.sh`
 regenerate it.
-
-Give it a goal; it plans the work, splits it into tasks and drives a coding
-agent session by session until the goal is met, on a local model.
 
 Tenaz is built for machines that fit **one model at a time**: a laptop or a
 single GPU running a local LLM. Long agent runs on that kind of hardware fail
