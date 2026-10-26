@@ -14,7 +14,7 @@ below; this page is about the real ones.
 | Harness | [fx](https://github.com/vercel-labs/fx) 0.0.14 over ACP | Tested end to end: preflight, bootstrap, build, review, steering, pause and resume. |
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 in RPC mode | Tested end to end to a COMPLETE run with the user's own `models.json`. The generated configuration, through the proxy, is tested against a mock engine only. No media tools (see below). |
 | | Other ACP agents | Should work through the same adapter; fx-specific settings are only applied to fx. Untested. |
-| Engine | Sushi 1.2.4 (`--engine sushi`) | Tested for inference. Load and unload through its API are tested against a mock only. |
+| Engine | Sushi 1.2.4 and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Load and unload through their API are tested against a mock only. |
 | | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock only. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
@@ -67,10 +67,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   `http://127.0.0.1:12345/v1` (Sushi's default).
 - ComfyUI is wherever `--comfyui` points, usually `http://127.0.0.1:8188`.
 - `tenaz init`'s wizard and `tenaz doctor` look for engines on 12345
-  (Sushi), 8080 (llama.cpp, llama-swap), 1234 (LM Studio), 11434 (Ollama)
+  (Sushi), 11234 (mlx-serve), 8080 (llama.cpp, llama-swap), 1234 (LM Studio), 11434 (Ollama)
   and 8000 (vLLM), and for image engines (an engine on those ports that
-  lists an image model, a server on 1337 (Atomic Chat) or 11234
-  (mlx-serve) that does, and ComfyUI on 8188), with an 800 ms timeout
+  lists an image model, a server on 1337 (Atomic Chat) that does, and
+  ComfyUI on 8188), with an 800 ms timeout
   each. Whether mlx-serve lists its image models at `/v1/models` and
   serves `/v1/images/generations` has not been checked. With
   `TENAZ_NO_PROBE` set, neither looks at these ports: only the addresses

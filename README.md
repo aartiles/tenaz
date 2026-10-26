@@ -253,10 +253,10 @@ interface the skill relies on:
   `.tenaz/run.json`, and makes the first commit. Everything it writes is
   under `.tenaz/`, with its own `.tenaz/.gitignore`; the project's
   `AGENTS.md`, `CLAUDE.md` and `.gitignore` are left as they are. The
-  wizard looks for engines on Sushi's port 12345, llama.cpp's 8080, LM
-  Studio's 1234, Ollama's 11434 and vLLM's 8000. It offers an image tool
-  when one of those engines, or a server on 1337 (Atomic Chat) or 11234
-  (mlx-serve), lists an image model, the LLM's own engine first, and
+  wizard looks for engines on Sushi's port 12345, mlx-serve's 11234,
+  llama.cpp's 8080, LM Studio's 1234, Ollama's 11434 and vLLM's 8000. It
+  offers an image tool when one of those engines, or a server on 1337
+  (Atomic Chat), lists an image model, the LLM's own engine first, and
   otherwise when ComfyUI answers on 8188.
 - `run` reads all of that from `run.json`. A launch flag given to `run`
   (`--comfyui`, `--engine-start`, ...) replaces the pinned value and is
@@ -331,9 +331,10 @@ Before each image it frees the LLM, and after it loads the LLM again. The
 OpenAI API has no standard way to unload a model, so how Tenaz does that
 depends on the engine:
 
-- **An engine with a load and unload API.** Tenaz uses it. Sushi is the one
-  it supports today (`--engine sushi`); `init` detects it from the engine's
-  answers.
+- **An engine with a load and unload API** (`/v1/load-model` and
+  `/v1/unload-model`, as Sushi and mlx-serve have). Tenaz uses it
+  (`--engine load-api`; `sushi`, its earlier name, still works); `init`
+  detects it from the engine's answers.
 - **Any other engine** (`--engine generic`). Give Tenaz two
   commands at `init`, or let the wizard ask for them:
   - `--engine-stop` frees the memory, for example by stopping the engine's

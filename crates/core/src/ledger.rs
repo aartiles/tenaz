@@ -128,9 +128,12 @@ impl ModelConfig {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EngineApi {
-    /// Sushi's `/v1/load-model` and `/v1/unload-model`.
+    /// The engine loads and unloads models over HTTP (`/v1/load-model` and
+    /// `/v1/unload-model`), as Sushi and mlx-serve do. `sushi`, its first
+    /// name, is still read.
     #[default]
-    Sushi,
+    #[serde(rename = "load-api", alias = "sushi")]
+    LoadApi,
     /// Any OpenAI-compatible engine, started and stopped by commands.
     Generic,
 }
@@ -680,6 +683,13 @@ mod tests {
             input: vec!["text".into(), "image".into()],
             thinking: Some("medium".into()),
         }
+    }
+
+    #[test]
+    fn the_load_api_engine_reads_its_old_name() {
+        let old: EngineApi = serde_json::from_str("\"sushi\"").unwrap();
+        assert_eq!(old, EngineApi::LoadApi);
+        assert_eq!(serde_json::to_string(&old).unwrap(), "\"load-api\"");
     }
 
     #[test]

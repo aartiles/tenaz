@@ -196,8 +196,9 @@ fn harness_name(harness: HarnessKind) -> &'static str {
 /// Which engine API loads and unloads the model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum EngineKind {
-    /// Sushi: `/v1/load-model` and `/v1/unload-model`.
-    Sushi,
+    /// `/v1/load-model` and `/v1/unload-model` (Sushi, mlx-serve).
+    #[value(name = "load-api", alias = "sushi")]
+    LoadApi,
     /// Any OpenAI-compatible engine with start and stop commands.
     Generic,
 }
@@ -205,14 +206,14 @@ enum EngineKind {
 impl EngineKind {
     fn api(self) -> EngineApi {
         match self {
-            Self::Sushi => EngineApi::Sushi,
+            Self::LoadApi => EngineApi::LoadApi,
             Self::Generic => EngineApi::Generic,
         }
     }
 
     fn from_api(api: EngineApi) -> Self {
         match api {
-            EngineApi::Sushi => Self::Sushi,
+            EngineApi::LoadApi => Self::LoadApi,
             EngineApi::Generic => Self::Generic,
         }
     }
@@ -222,8 +223,8 @@ impl EngineKind {
 /// (the default before engines were detected), generic elsewhere.
 fn guess_api(base_url: Option<&str>) -> EngineApi {
     match base_url {
-        None => EngineApi::Sushi,
-        Some(url) if url.contains(":12345") => EngineApi::Sushi,
+        None => EngineApi::LoadApi,
+        Some(url) if url.contains(":12345") => EngineApi::LoadApi,
         Some(_) => EngineApi::Generic,
     }
 }
@@ -349,7 +350,7 @@ impl InitArgs {
             "engine",
             self.engine.map(|e| {
                 match e {
-                    EngineKind::Sushi => "sushi",
+                    EngineKind::LoadApi => "load-api",
                     EngineKind::Generic => "generic",
                 }
                 .to_owned()
@@ -1132,7 +1133,7 @@ async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     };
     let engine = wiring::EngineOptions {
         kind: match launch.engine {
-            EngineApi::Sushi => wiring::EngineChoice::Sushi,
+            EngineApi::LoadApi => wiring::EngineChoice::LoadApi,
             EngineApi::Generic => wiring::EngineChoice::Generic {
                 start: launch.engine_start.clone(),
                 stop: launch.engine_stop.clone(),

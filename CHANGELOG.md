@@ -162,6 +162,11 @@ uses [Semantic Versioning](https://semver.org/).
   drafted the whole bootstrap in its reasoning and hit the output limit
   before writing any file, even at low effort.
 
+- The engine API Tenaz loads and unloads models with is called `load-api`
+  (`--engine load-api`, `"engine": "load-api"` in `run.json`) instead of
+  `sushi`, since mlx-serve has the same API; `sushi` is still read. mlx-serve
+  is detected on its port 11234 and named as itself, not as Sushi.
+
 ### Fixed
 
 - `generate_image` without a width or height fills a ComfyUI workflow's

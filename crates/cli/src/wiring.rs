@@ -11,7 +11,7 @@ use tenaz_acp::fx::{FxLaunch, FxSettings, ProfileMcpServer, write_profile};
 use tenaz_acp::{EngineObservation, McpEndpoint, stop_reason_for_finish};
 use tenaz_adapters::clock::SystemClock;
 use tenaz_adapters::engine::generic::{Commands, GenericEngine};
-use tenaz_adapters::engine::sushi::SushiEngine;
+use tenaz_adapters::engine::load_api::LoadApiEngine;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::media::comfyui::ComfyUi;
 use tenaz_adapters::media::openai_images::OpenAiImages;
@@ -35,7 +35,7 @@ use tenaz_pi::PiLaunch;
 use tenaz_proxy::{Proxy, ProxyEvent};
 
 pub enum EngineChoice {
-    Sushi,
+    LoadApi,
     Generic {
         start: Option<String>,
         stop: Option<String>,
@@ -183,7 +183,7 @@ pub async fn wire(
         .clone()
         .context("the ledger has no engine base URL")?;
     let engine_adapter: Arc<dyn EngineAdapter> = match &engine.kind {
-        EngineChoice::Sushi => Arc::new(SushiEngine::new(&base_url)),
+        EngineChoice::LoadApi => Arc::new(LoadApiEngine::new(&base_url)),
         EngineChoice::Generic { start, stop } => {
             let commands = Commands {
                 start: start.as_deref().map(split_command),

@@ -1,4 +1,5 @@
-//! Sushi: `POST /v1/load-model` and `POST /v1/unload-model`, and a `/v1/models`
+//! An engine that loads and unloads models over HTTP, as Sushi and mlx-serve
+//! do: `POST /v1/load-model` and `POST /v1/unload-model`, and a `/v1/models`
 //! that reports `loaded`, `state` and `context_length`.
 
 use std::time::Duration;
@@ -9,13 +10,13 @@ use tenaz_core::ports::{EngineAdapter, EngineError, ModelState};
 use super::openai::list_models;
 
 #[derive(Clone, Debug)]
-pub struct SushiEngine {
+pub struct LoadApiEngine {
     base_url: String,
     client: reqwest::Client,
     load_timeout: Duration,
 }
 
-impl SushiEngine {
+impl LoadApiEngine {
     /// `base_url` such as `http://127.0.0.1:12345/v1`.
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
@@ -55,16 +56,16 @@ impl SushiEngine {
 }
 
 #[async_trait]
-impl EngineAdapter for SushiEngine {
+impl EngineAdapter for LoadApiEngine {
     fn name(&self) -> &str {
-        "sushi"
+        "load-api"
     }
 
     async fn models(&self) -> Result<Vec<ModelState>, EngineError> {
         list_models(&self.client, &self.base_url, Duration::from_secs(5)).await
     }
 
-    /// Returns when the model is ready (Sushi answers once the weights are mapped).
+    /// Returns when the model is ready (the engine answers once the weights are mapped).
     async fn load(&self, model: &str) -> Result<(), EngineError> {
         self.post("load-model", model, self.load_timeout).await
     }
@@ -86,7 +87,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn loads_and_unloads_through_the_sushi_api() {
+    async fn loads_and_unloads_through_the_load_api() {
         let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let app = axum::Router::new()
             .route("/v1/models", get(|| async { axum::Json(serde_json::json!({"data": [{"id": "q", "loaded": true, "state": "ready", "context_length": 131072}, {"id": "other", "loaded": false}]})) }))
@@ -102,7 +103,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let engine = SushiEngine::new(format!("http://127.0.0.1:{port}/v1/"));
+        let engine = LoadApiEngine::new(format!("http://127.0.0.1:{port}/v1/"));
         let models = engine.models().await.unwrap();
         assert_eq!(
             models[0],
@@ -134,7 +135,7 @@ mod tests {
             vec!["load \"q\"", "unload \"q\"", "unload \"bad\""]
         );
         assert!(matches!(
-            SushiEngine::new("http://127.0.0.1:1/v1")
+            LoadApiEngine::new("http://127.0.0.1:1/v1")
                 .models()
                 .await
                 .unwrap_err(),

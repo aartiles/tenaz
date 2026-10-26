@@ -98,7 +98,7 @@ pub async fn machine(base_url: Option<&str>) -> doctor::Machine {
 }
 
 /// Where image servers usually listen, besides [`ENGINE_PORTS`].
-pub const IMAGE_PORTS: [(u16, &str); 2] = [(1337, "Atomic Chat"), (11234, "mlx-serve")];
+pub const IMAGE_PORTS: [(u16, &str); 1] = [(1337, "Atomic Chat")];
 
 /// Where `ComfyUI` usually listens.
 pub const COMFYUI_URL: &str = "http://127.0.0.1:8188";
@@ -188,8 +188,9 @@ impl Engine {
 
 /// Where engines usually listen, with the name to show and the provider
 /// name to give the harness.
-pub const ENGINE_PORTS: [(u16, &str, &str); 5] = [
+pub const ENGINE_PORTS: [(u16, &str, &str); 6] = [
     (12345, "Sushi", "sushi"),
+    (11234, "mlx-serve", "mlxserve"),
     (8080, "llama.cpp", "llamacpp"),
     (1234, "LM Studio", "lmstudio"),
     (11434, "Ollama", "ollama"),
@@ -243,7 +244,7 @@ pub async fn engine_at(client: &reqwest::Client, base_url: &str) -> Option<Engin
     let base_url = normalize_base_url(base_url);
     let list = get_json(client, &format!("{base_url}/models")).await?;
     let origin = base_url.trim_end_matches("/v1").to_owned();
-    let (label, provider) = identify(&list, port_of(&base_url));
+    let (label, provider, load_api) = identify(&list, port_of(&base_url));
     let mut models = parse_models(&list);
     // Engines that keep the details elsewhere.
     match provider.as_str() {
@@ -260,8 +261,8 @@ pub async fn engine_at(client: &reqwest::Client, base_url: &str) -> Option<Engin
         _ => {}
     }
     Some(Engine {
-        api: if provider == "sushi" {
-            EngineApi::Sushi
+        api: if load_api {
+            EngineApi::LoadApi
         } else {
             EngineApi::Generic
         },
@@ -319,30 +320,41 @@ fn port_of(base_url: &str) -> Option<u16> {
     authority.rsplit_once(':')?.1.parse().ok()
 }
 
-/// The engine's name and provider: from the shape of its model list first
-/// (Sushi reports a load state, the others an owner), then from the port.
-fn identify(list: &Value, port: Option<u16>) -> (String, String) {
+/// The engine's name and provider, and whether it loads models over HTTP:
+/// from the shape of its model list first (an engine with the load API
+/// reports a load state, the others an owner), then from the port.
+fn identify(list: &Value, port: Option<u16>) -> (String, String, bool) {
     let first = list["data"].get(0);
     let owner = first
         .and_then(|m| m["owned_by"].as_str())
         .unwrap_or_default();
-    let by_shape = if first.is_some_and(|m| m.get("loaded").is_some() && m.get("state").is_some()) {
-        Some("sushi")
-    } else {
-        match owner {
-            "llamacpp" => Some("llamacpp"),
-            "vllm" => Some("vllm"),
-            "library" | "ollama" => Some("ollama"),
-            "organization_owner" => Some("lmstudio"),
-            _ => None,
-        }
+    let load_api = first.is_some_and(|m| m.get("loaded").is_some() && m.get("state").is_some());
+    let by_port = port.and_then(|port| ENGINE_PORTS.iter().find(|(p, _, _)| *p == port));
+    if load_api {
+        return match by_port {
+            Some((_, label, provider)) => ((*label).to_owned(), (*provider).to_owned(), true),
+            None => (
+                "engine with a load API".to_owned(),
+                "local".to_owned(),
+                true,
+            ),
+        };
+    }
+    let by_shape = match owner {
+        "llamacpp" => Some("llamacpp"),
+        "vllm" => Some("vllm"),
+        "library" | "ollama" => Some("ollama"),
+        "organization_owner" => Some("lmstudio"),
+        _ => None,
     };
     let known = by_shape.and_then(|p| ENGINE_PORTS.iter().find(|(_, _, provider)| *provider == p));
-    let known =
-        known.or_else(|| port.and_then(|port| ENGINE_PORTS.iter().find(|(p, _, _)| *p == port)));
-    match known {
-        Some((_, label, provider)) => ((*label).to_owned(), (*provider).to_owned()),
-        None => ("OpenAI-compatible engine".to_owned(), "local".to_owned()),
+    match known.or(by_port) {
+        Some((_, label, provider)) => ((*label).to_owned(), (*provider).to_owned(), false),
+        None => (
+            "OpenAI-compatible engine".to_owned(),
+            "local".to_owned(),
+            false,
+        ),
     }
 }
 
@@ -480,8 +492,16 @@ mod tests {
 
     #[test]
     fn engines_are_told_apart_by_their_model_list_then_their_port() {
-        let sushi = json!({"data": [{"id": "q", "loaded": true, "state": "ready", "context_length": 131072}]});
-        assert_eq!(identify(&sushi, Some(9999)).1, "sushi");
+        let loads = json!({"data": [{"id": "q", "loaded": true, "state": "ready", "context_length": 131072}]});
+        assert_eq!(
+            identify(&loads, Some(12345)),
+            ("Sushi".into(), "sushi".into(), true)
+        );
+        assert_eq!(
+            identify(&loads, Some(11234)),
+            ("mlx-serve".into(), "mlxserve".into(), true)
+        );
+        assert!(identify(&loads, Some(9999)).2);
         let llama = json!({"data": [{"id": "m.gguf", "owned_by": "llamacpp", "meta": {"n_ctx_train": 262144}}]});
         assert_eq!(identify(&llama, Some(12345)).1, "llamacpp");
         let ollama = json!({"data": [{"id": "qwen3:8b", "owned_by": "library"}]});

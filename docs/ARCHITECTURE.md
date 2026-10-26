@@ -7,7 +7,7 @@ on the core, the core depends on nothing of theirs.
 crates/
   core/      tenaz-core      domain + ports + orchestration. No process, network or git code.
   adapters/  tenaz-adapters  git, verify runner, macOS memory probe, notifier, engine adapters
-                           (generic commands, Sushi), media adapters (ComfyUI, OpenAI Images),
+                           (generic commands, a load API as Sushi's), media adapters (ComfyUI, OpenAI Images),
                            Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
                            engine error classification, tool-argument repair, the lowered
