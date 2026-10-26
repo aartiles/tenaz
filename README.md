@@ -365,8 +365,10 @@ Tenaz, `tenaz run --resume --refresh-templates` gives a started run the new
 ones.
 
 Skill directories passed with `--skill` at `init` are pinned read-only into
-`.tenaz/skills/`, and are the only skills the agent sees; `--set
-agentSkills=true` also lets it load the ones it finds by itself.
+`.tenaz/skills/`, and are the only skills the agent is offered; `--set
+agentSkills=true` also lets it load the ones it finds by itself. fx 0.0.14
+can still find and load the skills in the folders above the project; see
+[Known gaps](docs/COMPATIBILITY.md#known-gaps).
 
 ### Sandbox
 

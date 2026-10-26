@@ -30,9 +30,11 @@ pub struct FxSettings {
     /// engine proxy fills `reasoning_effort` into the requests instead.
     pub effort: Option<String>,
     /// Lists skills to the model. Off, fx's skill catalog gets a budget of
-    /// 0 bytes: no skill reaches the context, including those fx finds in
-    /// the folders above the project (`~/.claude/skills` for a project under
-    /// the home folder).
+    /// 0 bytes, so the prompt lists none of the skills fx finds, including
+    /// those of the folders above the project (`~/.claude/skills` for a
+    /// project under the home folder: fx stops that walk only at `HOME`,
+    /// which here is inside the project). fx 0.0.14 still returns them from
+    /// `capability_search` and loads them with `skill`, without asking.
     pub skill_catalog: bool,
 }
 

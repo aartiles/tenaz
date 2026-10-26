@@ -97,7 +97,9 @@ pub struct RunParams {
     pub existing_project: Option<bool>,
     /// Let the coding agent also load the skills it finds by itself (its own
     /// skill folders, and with fx those of the folders above the project).
-    /// Off, it sees only the skills pinned with `init --skill`, if any.
+    /// Off, Pi sees only the skills pinned with `init --skill`, if any, and
+    /// fx's prompt lists no others, though fx 0.0.14 can still find and load
+    /// them (see "Known gaps" in docs/COMPATIBILITY.md).
     pub agent_skills: bool,
     /// The engine proxy parses back tool-call arguments the engine sent as
     /// JSON text where the tool's schema accepts only an object, and logs

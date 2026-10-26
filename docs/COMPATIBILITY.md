@@ -92,16 +92,29 @@ above), so a 32k context is the practical floor (`contextFloor`).
   settings, credentials (`auth.json`), extensions and context files are
   not used: a provider you signed in to with `/login` needs its `apiKey`
   in `models.json` instead.
-- Skills: by default the agent sees only the skills pinned with
-  `init --skill`, and none without them. Pi gets `--no-skills` plus each
-  pinned skill. fx's skill catalog gets a 0-byte budget, because fx also
-  lists the skills of every folder above the project (`~/.claude/skills`
-  and `~/.agents/skills` for a project under the home folder); pinned
-  skills are linked into its isolated `HOME`, and with them fx lists those
-  folders' skills again. `--set agentSkills=true` lets the agent load the
-  skills it finds by itself.
+- Skills: by default Pi sees only the skills pinned with `init --skill`,
+  and none without them: it gets `--no-skills` plus each pinned skill.
+  fx's skill catalog gets a 0-byte budget, so its prompt lists no skills,
+  but see the known gap below; pinned skills are linked into its isolated
+  `HOME`, and with them fx lists the skills of the folders above the
+  project again. `--set agentSkills=true` lets the agent load the skills
+  it finds by itself.
 
 ## Known gaps
+
+- **fx and the skills above the project.** fx looks for skills from the
+  project upward and stops only at `HOME`. Tenaz gives fx a `HOME` inside
+  the project, so for a project under your home folder fx goes on past it
+  and finds the skills you installed for other agents (`~/.claude/skills`,
+  `~/.agents/skills`, `~/.codex/skills`, and a repository's `skills/` when
+  the run is in a worktree beside it). The 0-byte catalog keeps them out
+  of the prompt, but fx 0.0.14 still returns them from `capability_search`
+  and loads any of them with its `skill` tool, without a permission
+  request, so Tenaz cannot refuse it. Seen with a scripted model over
+  `fx acp`: 354 skills under the home folder, none for a project in
+  `/tmp`. In the image-landing run of 2026-10-25 one `capability_search`
+  returned a cloud media skill, which the model did not load. A project
+  outside your home folder avoids it; a fix needs fx.
 
 - **Pi and the proxy.** Pi's requests go through the proxy, so the engine
   hold covers them, but the media tools are fx only (Pi runs with
