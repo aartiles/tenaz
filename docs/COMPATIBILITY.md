@@ -114,7 +114,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   `fx acp`: 354 skills under the home folder, none for a project in
   `/tmp`. In the image-landing run of 2026-10-25 one `capability_search`
   returned a cloud media skill, which the model did not load. A project
-  outside your home folder avoids it; a fix needs fx.
+  outside your home folder avoids it; a fix needs fx
+  ([vercel-labs/fx#1458](https://github.com/vercel-labs/fx/issues/1458)).
 
 - **Pi and the proxy.** Pi's requests go through the proxy, so the engine
   hold covers them, but the media tools are fx only (Pi runs with
