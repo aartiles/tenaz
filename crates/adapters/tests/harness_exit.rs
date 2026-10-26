@@ -461,3 +461,45 @@ async fn a_review_with_minor_findings_only_accepts_the_task() {
         .count();
     assert_eq!(reviews, 1, "no further attempt for a MINOR finding:\n{log}");
 }
+
+#[tokio::test]
+async fn the_reviewer_is_given_the_images_the_change_adds() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            image_task: Some("T004".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    let reviewers: Vec<String> = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.contains("-reviewer-") => Some(s.label.clone()),
+            _ => None,
+        })
+        .collect();
+    let prompt = |label: &str| {
+        project
+            .read(&format!(".tenaz/private/{label}.prompt.md"))
+            .unwrap()
+    };
+    let t004 = reviewers
+        .iter()
+        .find(|l| l.ends_with("-reviewer-T004"))
+        .expect("T004 is reviewed");
+    let text = prompt(t004);
+    assert!(
+        text.contains("## Images this change adds or replaces\n\n- assets/T004.png"),
+        "{text}"
+    );
+    let t001 = reviewers
+        .iter()
+        .find(|l| l.ends_with("-reviewer-T001"))
+        .expect("T001 is reviewed");
+    assert!(
+        !prompt(t001).contains("Images this change adds"),
+        "a change without images gets no image section:\n{log}"
+    );
+}

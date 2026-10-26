@@ -90,6 +90,8 @@ pub struct ScriptedHarness {
     pub outgrow_review: Option<String>,
     /// The first review of this task asks for changes with a MINOR finding.
     pub minor_review: Option<String>,
+    /// The builder of this task also writes an image, `assets/<task>.png`.
+    pub image_task: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -695,6 +697,10 @@ impl Player {
         }
         self.write_tool(&format!("src/{task}.txt"), &format!("{task}\n"), false)
             .await;
+        if self.script.image_task.as_deref() == Some(task) {
+            self.write_tool(&format!("assets/{task}.png"), "not really a PNG\n", false)
+                .await;
+        }
         if self.script.forget_checks_task.as_deref() == Some(task)
             && self.bump(&format!("forget-{task}")) == 1
         {

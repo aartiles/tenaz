@@ -205,6 +205,14 @@ uses [Semantic Versioning](https://semver.org/).
   reviewer prompt says so, and a `CHANGES` whose findings are all MINOR is
   accepted. One such review cost a whole builder and review cycle for a
   missing line in a decisions file.
+- A reviewer's briefing lists the images the change adds or replaces, and
+  the reviewer prompt asks to look at them first, in one contact sheet when
+  there are more than two, and to check they match the project's other
+  images. The final reviewer looks at all the product's images first. In
+  the image-landing run on mlx-serve the reviewers opened page screenshots
+  only, and the final reviewer marked the visual requirements manual
+  without seeing the images, so a product that changed from image to image
+  went unnoticed.
 - fx writes one ACP log per session instead of overwriting a shared one.
 - An ACP session handles a proxy observation before the prompt's end, so
   per-request usage is no longer occasionally lost or attributed to the

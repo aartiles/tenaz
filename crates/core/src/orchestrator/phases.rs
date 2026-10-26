@@ -969,6 +969,7 @@ impl Runner {
     async fn review_task(&mut self, input: &ReviewInput<'_>) -> Result<Review, RunError> {
         let task = &input.card.id;
         let mut diff = self.deps.vcs.diff(input.base, "HEAD", true)?;
+        let images = briefing::changed_images(&diff);
         if diff.len() > self.params.diff_limit_bytes {
             let stat = self.deps.vcs.diff_stat(input.base, Some("HEAD"), false)?;
             let cut = diff.floor_char_boundary(self.params.diff_limit_bytes);
@@ -1000,6 +1001,19 @@ impl Runner {
                 "Builder notes".to_owned(),
                 self.project.note(task.as_str()).unwrap_or_default(),
             ));
+            if !images.is_empty() {
+                extra.push((
+                    "Images this change adds or replaces".to_owned(),
+                    format!(
+                        "{}\n\nLook at each one before you judge the task (see the role prompt).",
+                        images
+                            .iter()
+                            .map(|path| format!("- {path}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                ));
+            }
             extra.push((
                 "Diff since the task started".to_owned(),
                 format!("```diff\n{diff}\n```"),

@@ -11,6 +11,12 @@ Check that:
 - existing checks were not weakened or removed;
 - earlier behaviour still works, and there are no obvious bugs or leftover
   debug code;
+- every image the change adds or replaces (listed in the briefing) fits the
+  card and the brief and matches the project's other images: the same
+  subject, style and details. Look at them before anything else, while you
+  have context to spare: with more than two, combine them into one small
+  contact sheet in `.tenaz/private/` (for example with ffmpeg's `tile`
+  filter) and read that; otherwise read each one;
 - the `artifacts` that `verify` lists (screenshots, rendered output) look
   right. Open each relevant one with the read tool; an image is shown to you
   when the model can see images.

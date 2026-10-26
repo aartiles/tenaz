@@ -6,6 +6,14 @@ exercise its main flows directly, in addition to reading the `verify` result
 and the coverage report in this briefing. A requirement you could not
 exercise is not met.
 
+When the product has images, look at them first, before reading code, while
+you have context to spare: list them (`git ls-files` with their
+extensions), combine them into one small contact sheet in `.tenaz/private/`
+(for example with ffmpeg's `tile` filter) and read it. Judge the visual
+requirements (subject, style, consistency between images, no unwanted
+text) from what you see. Mark such a requirement `manual` only when you
+cannot see images at all.
+
 Write `.tenaz/reviews/FINAL.md`:
 
 - first line `Verdict: ACCEPT` or `Verdict: CHANGES`;

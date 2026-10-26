@@ -111,6 +111,30 @@ pub fn bootstrap_step(role_prompt: &str, step: u32) -> String {
     format!("{common}\n\n{}", body[..end].trim_end())
 }
 
+/// The image files a diff adds or changes (`diff --git` headers of PNG,
+/// JPEG, WebP or GIF files that were not deleted).
+pub fn changed_images(diff: &str) -> Vec<String> {
+    const EXTENSIONS: [&str; 5] = [".png", ".jpg", ".jpeg", ".webp", ".gif"];
+    let mut images = Vec::new();
+    for file in diff.split("diff --git ").skip(1) {
+        let Some(header) = file.lines().next() else {
+            continue;
+        };
+        let Some(path) = header.rsplit(" b/").next() else {
+            continue;
+        };
+        let deleted = file
+            .lines()
+            .take(4)
+            .any(|line| line.starts_with("deleted file mode"));
+        let lower = path.to_ascii_lowercase();
+        if !deleted && EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
+            images.push(path.to_owned());
+        }
+    }
+    images
+}
+
 /// What changes in a bootstrap when the project had code before the run.
 /// It comes after the role prompt and overrides it where they differ.
 pub const EXISTING_PROJECT: &str = "This project already has code, conventions and tests; the brief asks for a change to it. Where this section and the role prompt differ, this section wins.
@@ -157,6 +181,21 @@ pub fn dependency_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_images_lists_added_and_modified_images_only() {
+        let diff = "diff --git a/assets/hero.png b/assets/hero.png\nnew file mode 100644\nBinary files /dev/null and b/assets/hero.png differ\n\
+diff --git a/src/main.js b/src/main.js\nindex 1..2 100644\n--- a/src/main.js\n+++ b/src/main.js\n@@ -1 +1 @@\n-a\n+b\n\
+diff --git a/assets/old.JPG b/assets/old.JPG\ndeleted file mode 100644\nBinary files a/assets/old.JPG and /dev/null differ\n\
+diff --git a/assets/card 1.webp b/assets/card 1.webp\nindex 3..4 100644\nBinary files a/assets/card 1.webp and b/assets/card 1.webp differ\n";
+        assert_eq!(
+            changed_images(diff),
+            vec![
+                "assets/hero.png".to_owned(),
+                "assets/card 1.webp".to_owned()
+            ]
+        );
+    }
 
     #[test]
     fn a_bootstrap_step_gets_the_common_part_and_its_own_section() {
