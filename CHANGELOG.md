@@ -8,6 +8,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The README opens with a GIF of a scripted `tenaz demo` run, recorded
+  with VHS from `docs/demo/demo.tape`.
 - `tenaz` binary with `init`, `run`, `status`, `finish` and `params`.
 - `--help` describes the workflow with a non-interactive example; `run --help`
   lists the exit codes and `status --help` what each phase means.
