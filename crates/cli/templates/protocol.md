@@ -63,7 +63,9 @@ file; the code of its checks goes in `checks/`, never in a folder named
 - A check tests behaviour (run the program and assert on its output or
   state), not merely that a file exists.
 - Never delete or weaken an existing check to make it pass. If a check is
-  wrong, say so in your notes.
+  wrong, say so in your notes. An attempt after which `./verify --all`
+  passes fewer checks of other tasks than when the last task was done
+  fails.
 
 ## Task cards
 

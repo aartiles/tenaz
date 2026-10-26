@@ -723,6 +723,13 @@ impl Runner {
                             Review::Accept => reviewed = true,
                         }
                     }
+                    // The floor only goes up.
+                    self.ledger.passed_checks = Some(
+                        built
+                            .all
+                            .passed()
+                            .max(self.ledger.passed_checks.unwrap_or(0)),
+                    );
                     return self.complete_task(task, attempt, reviewed);
                 }
             }
@@ -774,6 +781,13 @@ impl Runner {
                 "./verify --all fails after the attempt:\n{}",
                 all.summary
             ))
+        } else if let Some(why) = crate::verify::fewer_checks(
+            task.id.as_str(),
+            all.passed(),
+            own_checks,
+            self.ledger.passed_checks,
+        ) {
+            Some(why)
         } else if !own.ok || own_checks < 1 {
             Some(format!(
                 "./verify --task {} must run at least one passing check with ID prefix \"{}.\" (got {own_checks}).\n{}",

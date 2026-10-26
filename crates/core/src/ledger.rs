@@ -321,6 +321,10 @@ pub struct Ledger {
     /// runs at a lower reasoning effort.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lower_effort: bool,
+    /// Checks `./verify --all` passed when the last task was done; an
+    /// attempt that leaves fewer fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passed_checks: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_errors: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -382,6 +386,7 @@ impl Ledger {
             cap_raised: false,
             cap_ceiling: None,
             lower_effort: false,
+            passed_checks: None,
             last_errors: None,
             pending_continuation: false,
             paused_at: None,

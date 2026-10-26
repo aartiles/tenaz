@@ -48,6 +48,21 @@ pub struct VerifyOutcome {
     pub summary: String,
 }
 
+/// Why an attempt at `task` fails when the checks of other tasks that
+/// `./verify --all` passes (`passed` in all, less `own` with the task's
+/// prefix) are fewer than at the last checkpoint: one was removed, or
+/// `verify` no longer runs it. The task's own checks are new since then, so
+/// they cannot make up for a removed one.
+pub fn fewer_checks(task: &str, passed: u64, own: u64, floor: Option<u64>) -> Option<String> {
+    let floor = floor?;
+    let others = passed.saturating_sub(own);
+    (others < floor).then(|| {
+        format!(
+            "./verify --all passes {others} checks besides {task}'s, fewer than the {floor} that passed when the last task was done: a check was removed or is no longer run. Put it back; if a check is wrong, say so in your notes instead."
+        )
+    })
+}
+
 impl VerifyOutcome {
     /// The number of passed checks, 0 without a report.
     pub fn passed(&self) -> u64 {
@@ -160,6 +175,19 @@ pub fn retarget(text: &str, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fewer_passing_checks_than_the_last_checkpoint_fail() {
+        assert_eq!(fewer_checks("T004", 5, 0, None), None);
+        assert_eq!(fewer_checks("T004", 7, 2, Some(5)), None);
+        assert_eq!(fewer_checks("T004", 6, 0, Some(5)), None);
+        // One earlier check removed and one of the task's added: still fewer.
+        let why = fewer_checks("T004", 5, 1, Some(5)).unwrap();
+        assert!(
+            why.contains("passes 4 checks besides T004's, fewer than the 5"),
+            "{why}"
+        );
+    }
 
     #[test]
     fn retarget_points_the_text_at_the_verify_path() {

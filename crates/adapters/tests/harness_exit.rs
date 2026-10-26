@@ -519,3 +519,35 @@ async fn each_request_line_records_what_the_request_asked_for() {
         serde_json::json!({"reasoning_effort": "medium", "max_tokens": 16384})
     );
 }
+
+#[tokio::test]
+async fn an_attempt_that_leaves_fewer_passing_checks_fails() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            drop_check_task: Some("T004".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    let builders: Vec<String> = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-builder-T004") => {
+                Some(s.label.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        builders.len() >= 2,
+        "T004 is tried again: {builders:?}\n{log}"
+    );
+    let second = project
+        .read(&format!(".tenaz/private/{}.prompt.md", builders[1]))
+        .unwrap();
+    assert!(second.contains("fewer than the"), "{second}");
+    assert!(project.exists("checks/T001.exists.sh"), "the check is back");
+    assert!(log.contains("T004 done (2 attempts"), "{log}");
+}

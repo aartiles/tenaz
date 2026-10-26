@@ -223,6 +223,10 @@ uses [Semantic Versioning](https://semver.org/).
   puts it in requests that carry none (fx sends none). Unset, as before,
   each engine uses its own default, which made the TensorFold and mlx-serve
   runs of the same goal sample at 0 and 0.8.
+- An attempt fails when `./verify --all` passes fewer checks of other tasks
+  than when the last task was done (`passed_checks` in `run.json`): a check
+  was removed or `verify` no longer runs it. Before, only the reviewer could
+  notice. A check weakened without being removed still passes this rule.
 - fx writes one ACP log per session instead of overwriting a shared one.
 - An ACP session handles a proxy observation before the prompt's end, so
   per-request usage is no longer occasionally lost or attributed to the

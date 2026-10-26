@@ -44,7 +44,9 @@ project's own tests.
   session with a short context. The spec, task cards, notes and progress live
   in the project under `.tenaz/`, and every step is a git commit.
 - **The runner decides, not the model.** Tenaz runs `verify` itself, commits
-  or reverts, and decides when to retry, split a task, block or replan.
+  or reverts, and decides when to retry, split a task, block or replan. An
+  attempt that leaves fewer passing checks of other tasks than when the last
+  task was done fails, so a check cannot be dropped to make a task pass.
 - **Engine failures are not task failures.** A crash, a refused connection or
   a smaller context than expected is retried with backoff without charging
   the task. A reply cut at the output limit is the session's: it counts as

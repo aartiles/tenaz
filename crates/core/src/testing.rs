@@ -92,6 +92,9 @@ pub struct ScriptedHarness {
     pub minor_review: Option<String>,
     /// The builder of this task also writes an image, `assets/<task>.png`.
     pub image_task: Option<String>,
+    /// The first attempt of this task deletes T001's check; later ones put
+    /// it back.
+    pub drop_check_task: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -720,6 +723,13 @@ impl Player {
             )
             .await;
             return self.finish("Done.");
+        }
+        if self.script.drop_check_task.as_deref() == Some(task) {
+            if self.bump(&format!("drop-check-{task}")) == 1 {
+                let _ = std::fs::remove_file(self.cwd.join("checks/T001.exists.sh"));
+            } else {
+                self.write_check("T001").await;
+            }
         }
         self.write_check(task).await;
         self.write_tool(
