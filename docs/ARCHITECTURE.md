@@ -7,14 +7,16 @@ on the core, the core depends on nothing of theirs.
 crates/
   core/      tenaz-core      domain + ports + orchestration. No process, network or git code.
   adapters/  tenaz-adapters  git, verify runner, macOS memory probe, notifier, engine adapters
-                           (generic commands, Sushi), ComfyUI media adapter, Prometheus metrics.
+                           (generic commands, Sushi), media adapters (ComfyUI, OpenAI Images),
+                           Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
-                           engine error classification.
+                           engine error classification, tool-argument repair, the lowered
+                           reasoning effort, and replies at the output limit reported as cut.
   acp/       tenaz-acp       HarnessAdapter over ACP (fx and any ACP agent), harness as a subprocess.
   pi/        tenaz-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
   mcp/       tenaz-mcp       MCP server (streamable HTTP) exposing media tools that take the lease.
   cli/       tenaz           the `tenaz` binary: init (flags or the setup wizard), run, status,
-                           finish, guide (prints the agent skill in skill/SKILL.md).
+                           finish, guide (prints the agent skill in skills/tenaz/SKILL.md).
 ```
 
 ## Core (`tenaz-core`)
@@ -30,7 +32,9 @@ Pure modules, each unit-tested without I/O:
 | `verify` | The `verify` contract: last-line JSON, exit code, clipping. |
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction and provider-error rules; emits steer or abort. |
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal). |
-| `briefing` | Prompt packing: role prompt, spec, map, card, notes, continuation notes. |
+| `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |
+| `role` | The session roles, their prompt paths and what a steered session is asked to write before it stops. |
+| `effort` | The dial that lowers the reasoning effort for one session after a reply cut at the output limit. |
 | `ownership` | Which paths each role may write; the rest is reverted. |
 | `ledger` | `run.json` and the `journal.jsonl` record types. |
 | `metrics` | Engine Prometheus counters, per-request deltas, engine summary. |
@@ -43,7 +47,8 @@ Pure modules, each unit-tested without I/O:
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
 holds the scripted harness that plays a fixed session script and a fast
 clock, for the crates above the core.
-`orchestrator` is the application service: phases (bootstrap, loop, final),
+`orchestrator` is the application service: phases (bootstrap in three
+steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations,
 the task attempt loop with review, split and block, and pause and resume.
 
@@ -62,11 +67,11 @@ module with unit tests turns the harness's own records into those events.
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
 | Per session | `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
 | Prompt | `session/prompt` | `{"id":"prompt-N","type":"prompt","message":...}`; a `response` that is not `success` or whose disposition is `handled` becomes `PromptRejected` |
-| Steer | none in ACP; recorded only | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
+| Steer | fx's extension: a `session/prompt` with `_meta.fx.steer: true` while a prompt runs; otherwise dropped | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
 | Abort | `session/cancel` | `clear_queue` then `abort`; `agent_settled {aborted:true}` follows |
 | Usage per request | from the engine proxy's observation feed | from Pi's `message_end.message.usage` (input, output, cacheRead, cacheWrite) |
 | Permissions | `request_permission`, answered by the runner | none: Pi's built-in tools run unasked in RPC mode |
-| Raw log | the translated events, one JSON line each | Pi's own stdout lines, verbatim |
+| Raw log | the translated events, one JSON line each; the reasoning text goes to `<label>.thinking.md` | Pi's own stdout lines, verbatim |
 | Close | end the connection, wait, kill after the grace | end stdin (Pi's orderly shutdown), wait, kill after the grace |
 | Engine path | through the proxy (usage, hold while swapping) | direct: Pi reads the provider's `baseUrl` from `~/.pi/agent/models.json`; the proxy is not on its path |
 

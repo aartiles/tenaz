@@ -24,17 +24,19 @@ it is done.
 
 You write the goal as a short brief. The **bootstrap** turns it into
 numbered requirements, a `verify` script and a list of small tasks, in three
-sessions: one step each, so no session has to plan everything at once. Each task then gets its own session: the agent builds it, Tenaz runs
-`verify`, and a fresh session of the same model reviews the diff. A task
-that passes is committed; one that fails is undone and retried, split into
+sessions, one step each, so no session has to plan everything at once. Each
+task then gets its own session: the agent builds it, Tenaz runs `verify`,
+and a fresh session of the same model reviews the diff. A review asks for
+changes only for a problem that matters for the requirements. A task that
+passes is committed; one that fails is undone and retried, split into
 smaller tasks or marked blocked. When every task is done, a final review
 checks the whole goal against the brief.
 
 **`verify` decides when the work is done.** It is an executable at the
 project root, in any language, that runs every check and ends its output
-with a one-line JSON result. The bootstrap writes it with at least one
-check that passes from the start, and each task adds the checks for what it
-builds. The model saying it is done counts for nothing; only `verify`
+with a one-line JSON result. The bootstrap writes it as one small file with
+a check that passes from the start, and each task adds the checks for what
+it builds, as files in `checks/`. The model saying it is done counts for nothing; only `verify`
 passing does. In an existing project it is a thin wrapper around the
 project's own tests.
 
@@ -45,7 +47,8 @@ project's own tests.
   or reverts, and decides when to retry, split a task, block or replan.
 - **Engine failures are not task failures.** A crash, a refused connection or
   a smaller context than expected is retried with backoff without charging
-  the task.
+  the task. A reply cut at the output limit is the session's: it counts as
+  an attempt, and the next session reasons at a lower effort.
 - **Watchdogs.** Loops, repeated calls, idle turns and huge outputs get a
   steering message first, then the session is stopped.
 - **One resident model.** When the agent asks for an image, Tenaz unloads the
@@ -193,7 +196,9 @@ it best; a run takes hours.
    tenaz status
    ```
 
-   `tenaz watch` follows it session by session instead.
+   `tenaz watch` follows it session by session instead. Each session's
+   prompt, events and, with fx, the model's reasoning are kept in
+   `.tenaz/private/` (`<label>.prompt.md`, `.rpc.jsonl`, `.thinking.md`).
 
 4. When the run is done (or stopped), turn it into something to review:
 
@@ -352,7 +357,12 @@ the agent finding a context file. The project's own `AGENTS.md` or
 `CLAUDE.md`, which agents such as Pi load by themselves, still apply to how
 the code is written; where they disagree with the protocol about how the
 work is done (commits, branches, scope), the protocol wins. Sessions may not
-edit either file.
+edit either file. `bootstrap.md` has a `## Step N` section for each
+bootstrap step; a session gets the common part and its own step.
+
+A run keeps the protocol and prompts it was started with. After updating
+Tenaz, `tenaz run --resume --refresh-templates` gives a started run the new
+ones.
 
 Skill directories passed with `--skill` at `init` are pinned read-only into
 `.tenaz/skills/`, and are the only skills the agent sees; `--set

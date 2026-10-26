@@ -87,10 +87,13 @@ Leave out the plan: Tenaz makes its own. Keep it to one page.
 4. When `run` exits, its code says how it ended (`tenaz run --help`).
 
 When it is blocked, read `blocked_reason` and the newest notes in
-`.tenaz/notes/`. Fix what you can (an engine down, an unclear brief: tell the
-user, since the brief cannot change after `init`), then
-`tenaz run --project <dir> --resume`. Do not edit `.tenaz/run.json` or the
-task cards to force progress.
+`.tenaz/notes/`. To see why a session went wrong, read its briefing and,
+with fx, the model's reasoning: `.tenaz/private/<label>.prompt.md` and
+`<label>.thinking.md` (the label is in `tenaz status`). Fix what you can (an
+engine down, an unclear brief: tell the user, since the brief cannot change
+after `init`), then `tenaz run --project <dir> --resume`; after updating
+Tenaz, add `--refresh-templates` so the run gets the new prompts. Do not
+edit `.tenaz/run.json` or the task cards to force progress.
 
 ## Check the result
 

@@ -131,20 +131,22 @@ above), so a 32k context is the practical floor (`contextFloor`).
   arguments with `finish_reason: tool_calls` at 16384 of 16384 tokens, and
   fx reported `InvalidToolArguments`; the proxy now reports any reply that
   reaches the request's output limit (16384 when the request does not say)
-  as `length`. Tested against a fake engine only.
+  as `length`. Tested against a fake engine only: no reply reached the
+  limit in the run since.
   Each fx session's reasoning text is kept in
   `.tenaz/private/<label>.thinking.md` to show what such a reply was
-  doing. It relies on fx sending the reasoning as ACP thought chunks;
-  tested with the fake ACP agent only.
+  doing; fx 0.0.14 sends it as ACP thought chunks, seen in the
+  image-landing runs of 2026-10-25.
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
 - The bootstrap runs in three steps, one session each (ADR 0003): the
   spec and map, then a minimal `verify`, then the task cards. A
   model that writes more than its step has the later steps passed by
-  their checks. Tested with the fake harness only; not yet run with fx and
-  a real model.
-- `maxBootstrapAttempts` applies to each bootstrap step.
-  A pause during a bootstrap session counts as one of its attempts. An
+  their checks. Run once with fx and Qwen3.8 27B on TensorFold
+  (image-landing, 2026-10-25): three sessions, 13 minutes, each step
+  passed on its first attempt. Not yet run with Pi or on an existing
+  project.
+- `maxBootstrapAttempts` applies to each bootstrap step. A pause during a bootstrap session counts as one of its attempts. An
   attempt that leaves fewer problems than the one before does not count,
   up to `maxBootstrapAttempts` such attempts. `--resume` on a run blocked
   in bootstrap starts both counts again. Task cards a model wrapped in a
@@ -185,6 +187,17 @@ These are not runner bugs, but they decide whether a run gets far:
 - **Reasoning-only answers.** With thinking at `medium` or `high`, the
   tested model often ended a bootstrap turn with reasoning only and no
   tool call. The runner retries the bootstrap, but a run can block there.
+- **Drafting everything before writing.** Qwen3.8 27B on TensorFold, given
+  the whole bootstrap in one session, drafted every file in its reasoning
+  and hit the 16384-token output limit before writing any, even at low
+  effort; the bootstrap in steps (ADR 0003) is the answer to that. It
+  still reasons long in reviews: in the image-landing run the reviewers
+  took about 88 minutes against 106 for the builders.
+- **Steered reviewers and MINOR findings.** In the same run, reviewers
+  steered for context wrote handoff notes they may not write, and one
+  asked for changes over a MINOR finding. Steers now ask each role for
+  the file it owns, and a `CHANGES` with MINOR findings only is accepted;
+  neither has been run against a real model yet.
 - **Lost tool arguments.** The engine sometimes streamed `{}` as a tool
   call's arguments; the harness rejects them and the watchdog stops the
   session.
