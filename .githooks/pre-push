@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # The same gates as CI. Enable with: git config core.hooksPath .githooks
 set -euo pipefail
+# Git points hooks at this repository through GIT_DIR and friends. Unset
+# them, or a test's `git init` in a temp directory reinitialises this
+# repository instead (from a worktree it sets core.bare = true).
+unset $(git rev-parse --local-env-vars)
 export PATH="$HOME/.cargo/bin:$PATH"
 cargo fmt --all -- --check
 scripts/check-architecture.sh
