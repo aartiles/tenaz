@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
@@ -46,6 +47,14 @@ impl std::fmt::Debug for MediaTools {
 
 /// The width and height a workflow gets when the call gives none.
 const DEFAULT_SIZE: u32 = 1024;
+
+/// How long an MCP session may go without a request before the server ends
+/// it. rmcp's default is 5 minutes, but fx opens its session when an agent
+/// session starts and may make the first media call 20 minutes later; fx
+/// then reopens the session yet fails that call (`McpSessionExpired`),
+/// which costs the run one call of its image budget. A day outlasts any
+/// agent session; the server itself stops with the run.
+const SESSION_IDLE_LIMIT: Duration = Duration::from_hours(24);
 
 /// Arguments of `generate_image`.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -224,6 +233,13 @@ impl McpHandle {
     }
 }
 
+/// Sessions that stay open while the agent works without media calls.
+fn session_manager() -> LocalSessionManager {
+    let mut manager = LocalSessionManager::default();
+    manager.session_config.keep_alive = Some(SESSION_IDLE_LIMIT);
+    manager
+}
+
 /// Serves the tools over streamable HTTP at `/mcp` on `addr` (port 0 for an ephemeral port).
 pub async fn serve(tools: MediaTools, addr: SocketAddr) -> std::io::Result<McpHandle> {
     let shutdown = CancellationToken::new();
@@ -231,7 +247,7 @@ pub async fn serve(tools: MediaTools, addr: SocketAddr) -> std::io::Result<McpHa
     config.cancellation_token = shutdown.child_token();
     let service = StreamableHttpService::new(
         move || Ok(tools.clone()),
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(session_manager()),
         config,
     );
     let app = axum::Router::new().nest_service("/mcp", service);
@@ -248,4 +264,18 @@ pub async fn serve(tools: MediaTools, addr: SocketAddr) -> std::io::Result<McpHa
         shutdown,
         task,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_session_outlives_a_long_stretch_without_media_calls() {
+        let keep_alive = session_manager().session_config.keep_alive;
+        assert!(
+            keep_alive.is_some_and(|k| k >= Duration::from_hours(4)),
+            "{keep_alive:?}"
+        );
+    }
 }

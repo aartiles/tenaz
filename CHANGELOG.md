@@ -169,6 +169,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The media MCP server keeps a session open for a day without requests
+  instead of 5 minutes (rmcp's default). fx opens its session when an agent
+  session starts; a first image call more than 5 minutes later failed with
+  `McpSessionExpired` and cost a call of the image budget, in both
+  image-landing runs.
 - `generate_image` without a width or height fills a ComfyUI workflow's
   size placeholders with 1024 instead of leaving `{{width}}` as text,
   which ComfyUI rejected.
