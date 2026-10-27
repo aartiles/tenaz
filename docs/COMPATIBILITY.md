@@ -102,6 +102,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **A tool call over `toolMinutes`.** Tenaz aborts the turn and prompts
+  the same session again (ADR 0004). Tested with the fake harness only:
+  that Pi takes a prompt after `abort` with its context, and that fx stays
+  usable after `session/cancel`, have not been run against the real tools.
 - **fx and the skills above the project.** fx looks for skills from the
   project upward and stops only at `HOME`. Tenaz gives fx a `HOME` inside
   the project, so for a project under your home folder fx goes on past it

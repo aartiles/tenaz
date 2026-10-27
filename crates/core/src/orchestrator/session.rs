@@ -99,9 +99,10 @@ impl Runner {
             self.deps.engine_metrics.clone(),
             clock.clone(),
         );
-        let mut turn_started: Option<u64> = None;
-        let mut first_token: Option<u64> = None;
+        let mut timing = TurnTiming::default();
         let mut kill_at: Option<u64> = None;
+        // What to prompt once a turn stopped at its tool time limit settles.
+        let mut resume: Option<String> = None;
         let mut prompt_index = 0;
         if let Some(first) = prompts.first() {
             session.prompt(first).await?;
@@ -116,15 +117,18 @@ impl Runner {
                 tracing::debug!("{label}: kill deadline passed");
                 break;
             }
-            if kill_at.is_none() && elapsed >= wall_ms {
-                let actions = watchdog.abort_external(
-                    &format!("session exceeded {} minutes", self.params.session_minutes),
-                    elapsed,
-                );
-                kill_at = self.apply(&mut *session, actions, now, kill_at).await;
+            if kill_at.is_none()
+                && let Some(actions) = self.deadline_actions(label, &mut watchdog, elapsed)
+            {
+                kill_at = self
+                    .apply(&mut *session, actions, now, kill_at, &mut resume)
+                    .await;
                 continue;
             }
-            let wall_left = Duration::from_millis(wall_ms.saturating_sub(elapsed));
+            // The session's wall clock, or sooner the oldest tool call's
+            // limit: a hung call sends no event to wake on.
+            let deadline = watchdog.tool_deadline().map_or(wall_ms, |d| d.min(wall_ms));
+            let deadline_left = Duration::from_millis(deadline.saturating_sub(elapsed));
             let kill_left = Duration::from_millis(kill_at.map_or(0, |k| k.saturating_sub(now)));
             let event = tokio::select! {
                 event = session.next_event() => event,
@@ -132,12 +136,13 @@ impl Runner {
                     tracing::debug!("{label}: kill timer fired");
                     break;
                 }
-                // Both deadlines below start when the wait ends: `now` is from
-                // before it, and the abort's grace would already be over.
-                () = clock.sleep(wall_left), if kill_at.is_none() => {
+                // What the deadline asks starts when the wait ends: `now` is
+                // from before it, and an abort's grace would already be over.
+                () = clock.sleep(deadline_left), if kill_at.is_none() => {
                     let now = clock.monotonic_ms();
-                    let actions = watchdog.abort_external(&format!("session exceeded {} minutes", self.params.session_minutes), now.saturating_sub(started));
-                    kill_at = self.apply(&mut *session, actions, now, kill_at).await;
+                    if let Some(actions) = self.deadline_actions(label, &mut watchdog, now.saturating_sub(started)) {
+                        kill_at = self.apply(&mut *session, actions, now, kill_at, &mut resume).await;
+                    }
                     continue;
                 }
                 () = self.stop.cancelled(), if kill_at.is_none() => {
@@ -165,34 +170,7 @@ impl Runner {
                         .await;
                     continue;
                 }
-                SessionEvent::TurnStart => {
-                    turn_started = Some(now);
-                    first_token = None;
-                }
-                SessionEvent::FirstToken => {
-                    first_token.get_or_insert(now);
-                }
-                SessionEvent::MessageEnd {
-                    usage,
-                    stop_reason,
-                    server,
-                    sent,
-                    ..
-                } => {
-                    let timing = ClientTiming {
-                        turn_started,
-                        first_token,
-                        now,
-                    };
-                    recorder.record(RequestInput {
-                        usage: *usage,
-                        stop_reason: stop_reason.clone(),
-                        server: *server,
-                        sent: sent.clone(),
-                        timing,
-                    });
-                }
-                _ => {}
+                _ => timing.observe(&event, now, &recorder),
             }
             let vcs = self.deps.vcs.clone();
             let actions = watchdog.handle(&event, elapsed, move || {
@@ -201,8 +179,17 @@ impl Runner {
             for action in &actions {
                 self.log(&format!("  {label}: {}", describe(action)));
             }
-            kill_at = self.apply(&mut *session, actions, now, kill_at).await;
+            kill_at = self
+                .apply(&mut *session, actions, now, kill_at, &mut resume)
+                .await;
             if let SessionEvent::Settled { aborted } = event {
+                if let Some(note) = resume.take()
+                    && !watchdog.aborting()
+                    && !self.stopping()
+                {
+                    session.prompt(&note).await?;
+                    continue;
+                }
                 if aborted || watchdog.aborting() || self.stopping() {
                     break;
                 }
@@ -274,6 +261,7 @@ impl Runner {
         actions: Vec<Action>,
         now: u64,
         kill_at: Option<u64>,
+        resume: &mut Option<String>,
     ) -> Option<u64> {
         let mut kill_at = kill_at;
         for action in actions {
@@ -281,6 +269,10 @@ impl Runner {
                 Action::Steer { message, .. } => {
                     let message = retarget(&message, self.params.verify_path());
                     let _ = session.steer(&message).await;
+                }
+                Action::Interrupt { message } => {
+                    let _ = session.abort().await;
+                    *resume = Some(retarget(&message, self.params.verify_path()));
                 }
                 Action::Abort { .. } => {
                     tracing::debug!("aborting the session; kill in {ABORT_GRACE:?}");
@@ -292,6 +284,30 @@ impl Runner {
             }
         }
         kill_at
+    }
+
+    /// What a passed deadline asks, logged: the session's wall clock, then
+    /// the oldest tool call's time limit. `None` before either.
+    fn deadline_actions(
+        &self,
+        label: &str,
+        watchdog: &mut Watchdog,
+        elapsed: u64,
+    ) -> Option<Vec<Action>> {
+        let actions = if elapsed >= self.params.session_minutes * 60_000 {
+            watchdog.abort_external(
+                &format!("session exceeded {} minutes", self.params.session_minutes),
+                elapsed,
+            )
+        } else if watchdog.tool_deadline().is_some_and(|d| elapsed >= d) {
+            watchdog.tool_timeout(elapsed)
+        } else {
+            return None;
+        };
+        for action in &actions {
+            self.log(&format!("  {label}: {}", describe(action)));
+        }
+        Some(actions)
     }
 
     /// Reverts the changes a session left where its role may not write.
@@ -924,10 +940,53 @@ fn event_name(event: &SessionEvent) -> &'static str {
     }
 }
 
+/// When the current turn started and gave its first token, for the
+/// requests recorded at each message end.
+#[derive(Default)]
+struct TurnTiming {
+    turn_started: Option<u64>,
+    first_token: Option<u64>,
+}
+
+impl TurnTiming {
+    fn observe(&mut self, event: &SessionEvent, now: u64, recorder: &RequestRecorder) {
+        match event {
+            SessionEvent::TurnStart => {
+                self.turn_started = Some(now);
+                self.first_token = None;
+            }
+            SessionEvent::FirstToken => {
+                self.first_token.get_or_insert(now);
+            }
+            SessionEvent::MessageEnd {
+                usage,
+                stop_reason,
+                server,
+                sent,
+                ..
+            } => recorder.record(RequestInput {
+                usage: *usage,
+                stop_reason: stop_reason.clone(),
+                server: *server,
+                sent: sent.clone(),
+                timing: ClientTiming {
+                    turn_started: self.turn_started,
+                    first_token: self.first_token,
+                    now,
+                },
+            }),
+            _ => {}
+        }
+    }
+}
+
 fn describe(action: &Action) -> String {
     match action {
         Action::Steer { key, .. } => format!("steer:{key}"),
         Action::Abort { reason } => format!("abort — {reason}"),
+        Action::Interrupt { .. } => {
+            "tool call over its time limit; stopped, the session goes on".to_owned()
+        }
     }
 }
 

@@ -25,6 +25,15 @@ use tokio_util::sync::CancellationToken;
 /// Runs the fake goal to the end with `harness` and `maxAttempts`; the
 /// project and its log.
 async fn run(harness: ScriptedHarness, max_attempts: u32) -> (tempfile::TempDir, Project, String) {
+    run_with(harness, max_attempts, &[]).await
+}
+
+/// [`run`] with more parameter overrides.
+async fn run_with(
+    harness: ScriptedHarness,
+    max_attempts: u32,
+    set: &[&str],
+) -> (tempfile::TempDir, Project, String) {
     let work = tempfile::tempdir().unwrap();
     let brief = work.path().join("brief.md");
     std::fs::write(&brief, "# Fake brief\n\nBuild four trivial files.\n").unwrap();
@@ -36,6 +45,9 @@ async fn run(harness: ScriptedHarness, max_attempts: u32) -> (tempfile::TempDir,
         "engineRetryBaseSec=0",
         "notify=false",
     ] {
+        params.apply_override(pair).unwrap();
+    }
+    for pair in set {
         params.apply_override(pair).unwrap();
     }
     let config = ModelConfig {
@@ -612,4 +624,95 @@ async fn the_final_reviewer_judges_the_product_against_the_brief_as_a_whole() {
         .unwrap();
     assert!(prompt.contains("judge the product as a whole"), "{prompt}");
     assert!(prompt.contains("under `## Overall`"), "{prompt}");
+}
+
+/// A builder's shell call that never ends, as `./verify --all` with an
+/// endless loop did under Pi in the Digger 3D run of 2026-10-27, is stopped
+/// at `toolMinutes`. The session is told why and goes on with its context
+/// to do the task.
+#[tokio::test]
+async fn a_tool_call_over_its_time_is_stopped_and_the_session_goes_on() {
+    let (_work, project, log) = run_with(
+        ScriptedHarness {
+            hang_task: Some("T001".into()),
+            hang_times: 1,
+            ..Default::default()
+        },
+        3,
+        &["toolMinutes=1"],
+    )
+    .await;
+    assert!(
+        log.contains("tool call over its time limit; stopped, the session goes on"),
+        "{log}"
+    );
+    let sessions: Vec<_> = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-builder-T001") => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    // The fake's first T001 session that does the work then outgrows its
+    // context on purpose; that, not the tool call, is what ends it.
+    let first = &sessions[0];
+    assert_eq!(first.attempt, Some(1));
+    assert!(
+        first
+            .abort_reason
+            .as_deref()
+            .is_some_and(|r| r.starts_with("context budget exceeded")),
+        "{first:?}"
+    );
+    let stopped = first
+        .watchdog
+        .iter()
+        .find(|e| e.kind == "tool-timeout")
+        .expect("the timeout is in the session record");
+    assert_eq!(stopped.detail.as_deref(), Some("./verify --all"));
+    let raw = project
+        .read(&format!(".tenaz/private/{}.rpc.jsonl", first.label))
+        .unwrap();
+    assert!(
+        raw.contains("src/T001.txt"),
+        "the session went on to do the task"
+    );
+}
+
+/// A second call over the time limit in the same session ends it, and the
+/// attempt counts.
+#[tokio::test]
+async fn a_second_tool_call_over_its_time_ends_the_session() {
+    let (_work, project, log) = run_with(
+        ScriptedHarness {
+            hang_task: Some("T001".into()),
+            hang_times: 2,
+            ..Default::default()
+        },
+        3,
+        &["toolMinutes=1"],
+    )
+    .await;
+    assert!(
+        log.contains("abort — a tool call ran over 1 minutes twice"),
+        "{log}"
+    );
+    let sessions: Vec<_> = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-builder-T001") => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(!sessions[0].ok);
+    assert_eq!(
+        sessions[0].abort_reason.as_deref(),
+        Some("a tool call ran over 1 minutes twice")
+    );
+    assert!(
+        sessions.iter().any(|s| s.attempt == Some(2) && s.ok),
+        "the next attempt does the task: {sessions:?}"
+    );
 }

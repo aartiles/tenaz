@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- A time limit per tool call, `toolMinutes` (10 by default, 0 turns it
+  off). A call that runs over it, such as a script in an endless loop, is
+  stopped and the same session is told which call and what to do; a second
+  one ends the session. Pi's `bash` has no default timeout, and a hung call
+  held a session for 21 minutes. See ADR 0004.
+
 ### Fixed
 
 - `verify` runs in a process group of its own, and Tenaz kills the group

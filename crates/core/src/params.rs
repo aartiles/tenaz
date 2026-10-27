@@ -73,6 +73,9 @@ pub struct RunParams {
     pub cited_spec: bool,
     /// Wall-clock limit of one session.
     pub session_minutes: u64,
+    /// Time limit of one tool call. Past it the turn is stopped and the
+    /// session told why; the second time ends the session. 0 turns it off.
+    pub tool_minutes: u64,
     /// Time limit of one `verify` run.
     pub verify_timeout_sec: u64,
     /// Bootstrap sessions per step before the run blocks.
@@ -152,6 +155,7 @@ impl Default for RunParams {
             context_split: true,
             cited_spec: true,
             session_minutes: 90,
+            tool_minutes: 10,
             verify_timeout_sec: 120,
             max_bootstrap_attempts: 3,
             max_final_cycles: 2,

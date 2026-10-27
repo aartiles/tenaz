@@ -98,6 +98,10 @@ pub struct ScriptedHarness {
     /// The first builder session of this task keeps writing new files until
     /// it is stopped at its turn budget.
     pub long_task: Option<String>,
+    /// The first `hang_times` builder turns of this task start a shell call
+    /// that never ends until the turn is aborted.
+    pub hang_task: Option<String>,
+    pub hang_times: u32,
 }
 
 impl ScriptedHarness {
@@ -127,6 +131,7 @@ impl Harness for ScriptedHarness {
             rx,
             aborted: Arc::new(AtomicBool::new(false)),
             prompts: 0,
+            first: String::new(),
             role: String::new(),
             play: None,
             script: self.clone(),
@@ -143,6 +148,8 @@ struct ScriptedSession {
     rx: mpsc::UnboundedReceiver<SessionEvent>,
     aborted: Arc<AtomicBool>,
     prompts: u32,
+    /// The first prompt, which a prompt after a stopped tool call continues.
+    first: String,
     /// The `Role` field of the first prompt.
     role: String,
     play: Option<tokio::task::JoinHandle<()>>,
@@ -153,7 +160,17 @@ struct ScriptedSession {
 impl Session for ScriptedSession {
     async fn prompt(&mut self, text: &str) -> Result<(), HarnessError> {
         self.prompts += 1;
-        if let Some(role) = field(text, "Role")
+        self.aborted.store(false, Ordering::SeqCst);
+        if self.first.is_empty() {
+            text.clone_into(&mut self.first);
+        }
+        // After a stopped tool call the session goes on with its first task.
+        let text = if text.contains("was stopped") {
+            self.first.clone()
+        } else {
+            text.to_owned()
+        };
+        if let Some(role) = field(&text, "Role")
             && self.role.is_empty()
         {
             role.clone_into(&mut self.role);
@@ -167,7 +184,7 @@ impl Session for ScriptedSession {
             call: 0,
             script: self.script.clone(),
         };
-        let prompt = text.to_owned();
+        let prompt = text;
         self.play = Some(tokio::spawn(async move { player.play(&prompt).await }));
         Ok(())
     }
@@ -520,6 +537,29 @@ impl Player {
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
+    /// A shell call that runs until the turn is aborted, as a script in an
+    /// endless loop would.
+    async fn hang(&mut self) {
+        self.call += 1;
+        let id = format!("call_{}", self.call);
+        self.emit(SessionEvent::TurnStart);
+        self.emit(SessionEvent::ToolCallStart {
+            id: id.clone(),
+            name: "bash".to_owned(),
+            args: serde_json::json!({ "command": "./verify --all" }),
+        });
+        while !self.aborted() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        self.emit(SessionEvent::ToolCallEnd {
+            id,
+            name: "bash".to_owned(),
+            result_text: "Command aborted".to_owned(),
+            is_error: true,
+        });
+        self.finish("Stopped.");
+    }
+
     /// One reply that reasons until it is cut at the output limit, then the
     /// harness exits with code 1, as fx does on `OutputTruncated`.
     async fn truncate(&mut self) {
@@ -704,6 +744,11 @@ impl Player {
         }
         if self.script.outgrow_task.as_deref() == Some(task) {
             return self.outgrow().await;
+        }
+        if self.script.hang_task.as_deref() == Some(task)
+            && self.bump(&format!("hang-{task}")) <= self.script.hang_times
+        {
+            return self.hang().await;
         }
         if self.script.long_task.as_deref() == Some(task) && self.bump(&format!("long-{task}")) == 1
         {
