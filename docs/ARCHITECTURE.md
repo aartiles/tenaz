@@ -45,8 +45,10 @@ Pure modules, each unit-tested without I/O:
 `Session`, `Vcs`, `VerifyRunner`, `Clock`, `Notifier`, `MemoryProbe`,
 `EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
-holds the scripted harness that plays a fixed session script and a fast
-clock, for the crates above the core.
+holds the scripted harness that plays a fixed session script, a fast
+clock, and `Replay`, which answers for the memory probe and the engine
+counters with readings a test gives it (ADR 0005), for the core's own tests
+and the crates above it.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations,

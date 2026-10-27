@@ -1,6 +1,6 @@
 //! Fakes for tests: a scripted harness that exercises every orchestrator
-//! path without a model (a fixed session script), and a clock that runs
-//! faster than real time.
+//! path without a model (a fixed session script), a clock that runs faster
+//! than real time, and replayed memory readings and engine counters.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,6 +9,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+
+mod replay;
+
+pub use replay::Replay;
 
 use crate::ports::{
     Clock, Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit,

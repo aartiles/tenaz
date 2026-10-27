@@ -109,3 +109,40 @@ impl Sampler {
         state.window.take()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::MemoryReading;
+    use crate::testing::{FastClock, Replay};
+
+    fn reading(swapins: u64, server_mem_gib: f64) -> MemoryReading {
+        MemoryReading {
+            swapins: Some(swapins),
+            server_mem_gib: Some(server_mem_gib),
+            page_bytes: 16_384,
+            ..MemoryReading::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_window_holds_what_happened_during_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::new(dir.path());
+        let sampler = Sampler::new(
+            Arc::new(Replay::new([reading(10, 20.0), reading(14, 30.0)])),
+            Arc::new(FastClock::new(100)),
+            project.clone(),
+            Duration::from_secs(30),
+        );
+        sampler.begin("001-bootstrap").await;
+        let window = sampler.end().await.unwrap();
+        assert_eq!(window.samples, 1);
+        assert_eq!(window.swapins, 4);
+        assert!((window.server_mem_max_gib - 30.0).abs() < f64::EPSILON);
+        let log = project.read(".tenaz/private/memory.jsonl").unwrap();
+        assert_eq!(log.lines().count(), 2);
+        assert!(log.lines().all(|l| l.contains("001-bootstrap")), "{log}");
+        assert_eq!(sampler.end().await, None, "a second end has no window");
+    }
+}

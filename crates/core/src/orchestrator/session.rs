@@ -1016,6 +1016,39 @@ mod tests {
     use super::*;
     use crate::session::{StopReason, Usage};
 
+    fn counters(requests: f64, tokens: f64) -> EngineCounters {
+        EngineCounters::from([
+            ("requests".to_owned(), requests),
+            ("tokens".to_owned(), tokens),
+        ])
+    }
+
+    #[tokio::test]
+    async fn the_engine_delta_waits_for_the_counters_to_move_and_no_longer() {
+        let source = crate::testing::Replay::new([
+            counters(3.0, 100.0),
+            counters(3.0, 100.0),
+            counters(4.0, 160.0),
+            counters(5.0, 200.0),
+        ]);
+        let clock = crate::testing::FastClock::new(100);
+        let prior = counters(3.0, 100.0);
+        let mut before = Some(prior.clone());
+        let change = engine_delta(&source, &clock, &prior, &mut before, 3).await;
+        assert_eq!(change, Some(counters(1.0, 60.0)));
+        assert_eq!(before, Some(counters(4.0, 160.0)));
+    }
+
+    #[tokio::test]
+    async fn counters_that_never_move_give_a_zero_delta() {
+        let source = crate::testing::Replay::new([counters(3.0, 100.0)]);
+        let clock = crate::testing::FastClock::new(100);
+        let prior = counters(3.0, 100.0);
+        let mut before = Some(prior.clone());
+        let change = engine_delta(&source, &clock, &prior, &mut before, 2).await;
+        assert_eq!(change, Some(counters(0.0, 0.0)));
+    }
+
     #[test]
     fn raises_go_halfway_and_stop_at_the_ceiling_a_failed_raise_set() {
         // No ceiling: halfway to the configured budget, then all the way.
