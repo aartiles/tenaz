@@ -14,11 +14,11 @@ below; this page is about the real ones.
 | Harness | [fx](https://github.com/vercel-labs/fx) 0.0.14 over ACP | Tested end to end: preflight, bootstrap, build, review, steering, pause and resume. |
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 in RPC mode | Tested end to end to a COMPLETE run with the user's own `models.json`. The generated configuration, through the proxy, is tested against a mock engine only. No media tools (see below). |
 | | Other ACP agents | Should work through the same adapter; fx-specific settings are only applied to fx. Untested. |
-| Engine | Sushi 1.2.4 and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Load and unload through their API are tested against a mock only. |
-| | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock only. |
+| Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve's load and unload through the API are tested against a mock only. |
+| | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run. The servers named here are untried. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
-| Media | ComfyUI images (`generate_image` over MCP) | Tested against a mock. Needs an API-format workflow with `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}` and `{{height}}` placeholders. |
+| Media | ComfyUI images (`generate_image` over MCP) | Tested against a mock, and in real runs with FLUX models next to TensorFold and Sushi (8 and 10 images). Needs an API-format workflow with `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}` and `{{height}}` placeholders. |
 | | OpenAI Images API (`--images`, `POST /v1/images/generations`): mlx-serve, Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock, and by hand against mlx-serve 26.10.3 (see Known gaps). Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Does not unload the image model after a job. On the LLM's own origin the LLM stays loaded. |
 | | TTS, STT, video | Not built. |
 
@@ -113,7 +113,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   request, so Tenaz cannot refuse it. Seen with a scripted model over
   `fx acp`: 354 skills under the home folder, none for a project in
   `/tmp`. In the image-landing run of 2026-10-25 one `capability_search`
-  returned a cloud media skill, which the model did not load. A project
+  returned a cloud media skill, which the model did not load. With skills
+  pinned, the catalog is on: in the explainer run of 2026-10-27 fx listed
+  about 350 skills next to the 5 pinned ones, and the model loaded only
+  pinned ones. A project
   outside your home folder avoids it; a fix needs fx
   ([vercel-labs/fx#1458](https://github.com/vercel-labs/fx/issues/1458)).
 
@@ -195,12 +198,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
   not yet with a real model.
 - Whether fx loads the project's `AGENTS.md` by itself has not been
   checked; Pi does. The Tenaz protocol is in every prompt either way.
-- **Install script and Homebrew formula.** The install script has been run
-  on macOS against a local copy of the release files, not against a
-  published release. It skips the checksum check on macOS, where there is
-  no `sha256sum`. The Homebrew formula and the job that pushes it to the
-  tap have not run yet, and need the `aartiles/homebrew-tap` repository
-  and a `HOMEBREW_TAP_TOKEN` secret that can push to it.
+- **Install script and Homebrew formula.** Both installed `tenaz` 0.1.0
+  from the published v0.1.0 release on macOS (Apple silicon): the install
+  script into a scratch folder, `brew install aartiles/tap/tenaz` into
+  Homebrew. Neither has been tried on Linux. The install script skips the
+  checksum check on macOS, where there is no `sha256sum`. The job that
+  pushes the formula needs `HOMEBREW_TAP_TOKEN` to have write access to
+  `aartiles/homebrew-tap` (Contents: read and write on that repository).
 - **`tenaz doctor`'s advice** has been checked on macOS with Sushi running
   and with nothing on `PATH`. The install commands it gives for Pi and fx
   come from their READMEs and were not run; the context settings it gives

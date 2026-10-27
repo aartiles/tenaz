@@ -24,6 +24,23 @@ or Codex hand it a long goal through Tenaz's
 [companion skill](#delegate-from-another-agent) and check the result when
 it is done.
 
+### Real runs
+
+Unattended runs on one Apple M5 Pro, each with its run sheet (what was
+built, the checks, the engine numbers and what went wrong):
+
+- [Wild West Showdown 3D](https://aartiles.github.io/local-model-benchmarks-site/runs/wild-west-showdown-3d-sushi-v124-tenaz/):
+  a playable 3D game, Qwen 3.8 Flash Next on Sushi 1.2.4. Complete after
+  104 hours, 575 sessions, 86 tasks.
+- [Tenaz explainer](https://aartiles.github.io/local-model-benchmarks-site/runs/tenaz-explainer-sushi-v130/): a 45-second video
+  with ComfyUI images, Qwen 3.8 Flash Next on Sushi 1.3.0. Complete after 12 hours, 54
+  sessions, 15 tasks; one image slot missing.
+- [Image landing, TensorFold](https://aartiles.github.io/local-model-benchmarks-site/runs/image-landing-tensorfold-native/): a
+  product page with FLUX images, Qwen 3.8 27B. Complete in 3 h 49 min.
+- [Image landing, mlx-serve](https://aartiles.github.io/local-model-benchmarks-site/runs/image-landing-mlx-serve/): the same goal
+  with Qwen-Image 2.1 on the LLM's own server. Complete with one gap in
+  3 h 22 min.
+
 ## How it works
 
 ```text
