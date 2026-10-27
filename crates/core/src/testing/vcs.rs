@@ -55,14 +55,20 @@ impl SnapshotVcs {
         listing
     }
 
-    fn resolve(state: &State, rev: &str) -> Result<Tree, VcsError> {
+    /// The commit id `rev` names: `HEAD` or an id.
+    fn resolve_id(state: &State, rev: &str) -> Result<String, VcsError> {
         let id = if rev == "HEAD" {
             state.head.clone()
         } else {
             Some(rev.to_owned())
         };
-        id.and_then(|id| state.commits.get(&id).cloned())
+        id.filter(|id| state.commits.contains_key(id))
             .ok_or_else(|| VcsError(format!("unknown revision {rev}")))
+    }
+
+    fn resolve(state: &State, rev: &str) -> Result<Tree, VcsError> {
+        let id = Self::resolve_id(state, rev)?;
+        Ok(state.commits[&id].clone())
     }
 
     fn head_tree(state: &State) -> Tree {
@@ -257,6 +263,24 @@ fn text(bytes: Option<&Vec<u8>>) -> String {
         .unwrap_or_default()
 }
 
+/// Git's header for one changed path, which marks a file added or deleted.
+fn header(path: &str, before: bool, after: bool) -> String {
+    let (mode, old, new) = match (before, after) {
+        (false, _) => (
+            "new file mode 100644\n",
+            "/dev/null".to_owned(),
+            format!("b/{path}"),
+        ),
+        (_, false) => (
+            "deleted file mode 100644\n",
+            format!("a/{path}"),
+            "/dev/null".to_owned(),
+        ),
+        _ => ("", format!("a/{path}"), format!("b/{path}")),
+    };
+    format!("diff --git a/{path} b/{path}\n{mode}--- {old}\n+++ {new}\n")
+}
+
 /// A whole-file diff of each changed path: every old line out, every new
 /// line in, under git's headers.
 fn patch(a: &Tree, b: &Tree, exclude_agent: bool) -> String {
@@ -265,10 +289,7 @@ fn patch(a: &Tree, b: &Tree, exclude_agent: bool) -> String {
         .into_iter()
         .filter(|p| shown(p, exclude_agent))
     {
-        let _ = writeln!(
-            out,
-            "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}"
-        );
+        out.push_str(&header(path, a.contains_key(path), b.contains_key(path)));
         for line in text(a.get(path)).lines() {
             let _ = writeln!(out, "-{line}");
         }
@@ -358,9 +379,14 @@ impl Vcs for SnapshotVcs {
     }
 
     fn reset_hard(&self, sha: &str) -> Result<(), VcsError> {
-        let target = Self::resolve(&self.state(), sha)?;
+        let (id, target) = {
+            let state = self.state();
+            let id = Self::resolve_id(&state, sha)?;
+            let target = state.commits[&id].clone();
+            (id, target)
+        };
         self.check_out(&target, &[], &Tree::new())?;
-        self.state().head = Some(sha.to_owned());
+        self.state().head = Some(id);
         Ok(())
     }
 

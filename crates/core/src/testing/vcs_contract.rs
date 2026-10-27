@@ -20,6 +20,8 @@ macro_rules! vcs_contract_tests {
             changed_paths_and_reverts,
             fingerprint_reset_and_restore,
             diffs_leave_out_tenaz_but_its_verify,
+            diffs_mark_added_and_deleted_files,
+            a_reset_to_head_keeps_head_a_commit,
             ignored_files_are_left_alone);
     };
     (@each $make:expr; $($check:ident),*) => {
@@ -167,6 +169,30 @@ pub fn diffs_leave_out_tenaz_but_its_verify(make: MakeVcs<'_>) {
     write(dir.path(), "b.txt", "b\n");
     let stat = vcs.diff_stat(&with_verify, None, true).unwrap();
     assert!(stat.contains("a.txt") && !stat.contains("b.txt"), "{stat}");
+}
+
+/// The reviewer is shown the images a change adds, not the ones it deletes.
+pub fn diffs_mark_added_and_deleted_files(make: MakeVcs<'_>) {
+    let (dir, vcs) = repo(make);
+    write(dir.path(), "assets/old.png", "old\n");
+    let base = vcs.commit_all("old image").unwrap();
+    std::fs::remove_file(dir.path().join("assets/old.png")).unwrap();
+    write(dir.path(), "assets/new.png", "new\n");
+    let next = vcs.commit_all("new image").unwrap();
+    let diff = vcs.diff(&base, &next, true).unwrap();
+    assert!(diff.contains("deleted file mode"), "{diff}");
+    assert!(diff.contains("new file mode"), "{diff}");
+    let images = crate::briefing::changed_images(&diff);
+    assert_eq!(images, ["assets/new.png"], "{diff}");
+}
+
+pub fn a_reset_to_head_keeps_head_a_commit(make: MakeVcs<'_>) {
+    let (dir, vcs) = repo(make);
+    let head = vcs.head().unwrap();
+    write(dir.path(), "a.txt", "edited\n");
+    vcs.reset_hard("HEAD").unwrap();
+    assert_eq!(vcs.head().unwrap(), head);
+    assert_eq!(read(dir.path(), "a.txt").as_deref(), Some("a\n"));
 }
 
 pub fn ignored_files_are_left_alone(make: MakeVcs<'_>) {
