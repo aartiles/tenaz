@@ -4,26 +4,21 @@
 //! real Pi, which answers `abort` with an `aborted` message after the
 //! runner had already given up on it.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tenaz_adapters::git::GitRepo;
-use tenaz_adapters::notify::SilentNotifier;
-use tenaz_adapters::verify::VerifyProcess;
-use tenaz_core::ledger::{HarnessKind, ModelConfig};
-use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
-use tenaz_core::params::RunParams;
-use tenaz_core::ports::{
-    Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit, SessionSpec,
-};
-use tenaz_core::project::Project;
-use tenaz_core::session::{SessionEvent, StopReason, Usage};
-use tenaz_core::testing::{FastClock, ScriptedHarness};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+use super::{deps, fake_project, run};
+use crate::ports::{
+    Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit, SessionSpec,
+};
+use crate::project::Project;
+use crate::session::{SessionEvent, StopReason, Usage};
+use crate::testing::{FastClock, ScriptedHarness};
 
 /// The scripted harness, except that bootstrap sessions think silently
 /// until aborted and then end the turn shortly after.
@@ -101,84 +96,35 @@ impl Session for Thinking {
     }
 }
 
+/// Stops the run 200 ms (20 s on the test clock) after its bootstrap
+/// session starts; the handle says whether it started at all.
+fn stop_into_the_bootstrap(
+    project: &Project,
+    stop: CancellationToken,
+) -> tokio::task::JoinHandle<bool> {
+    let log = project.path(".tenaz/private/orchestrator.log");
+    tokio::spawn(async move {
+        for _ in 0..3000 {
+            if std::fs::read_to_string(&log).is_ok_and(|t| t.contains("bootstrap started")) {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                stop.cancel();
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    })
+}
+
 #[tokio::test]
 async fn a_pause_after_a_long_wait_keeps_the_aborted_turn() {
     let work = tempfile::tempdir().unwrap();
-    let brief = work.path().join("brief.md");
-    std::fs::write(&brief, "# Fake brief\n\nBuild one trivial file.\n").unwrap();
-    let project = Project::new(work.path().join("project"));
-    let mut params = RunParams::default();
-    params.apply_override("notify=false").unwrap();
-    let config = ModelConfig {
-        harness: HarnessKind::Fake,
-        harness_version: "fake-pi 0.0.1".into(),
-        model: "fake/fake".into(),
-        provider: Some("fake".into()),
-        id: "fake".into(),
-        base_url: None,
-        context_window: 131_072,
-        input: vec!["text".into()],
-        thinking: Some("medium".into()),
-    };
-    let templates =
-        Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();
-    let options = InitOptions {
-        launch: tenaz_core::ledger::Launch::default(),
-        brief: Some(brief),
-        config,
-        params,
-        skills: vec![],
-        runner_version: "test".into(),
-    };
-    let clock = Arc::new(FastClock::new(100));
-    init(
-        &project,
-        &GitRepo::new(project.root()),
-        &*clock,
-        &templates,
-        options,
-    )
-    .unwrap();
-
-    // Pause 200 ms (20 s on the test clock) into the silent bootstrap.
+    let (project, vcs) = fake_project(work.path(), &[]);
     let stop = CancellationToken::new();
-    let watcher = {
-        let (stop, log) = (
-            stop.clone(),
-            project.path(".tenaz/private/orchestrator.log"),
-        );
-        tokio::spawn(async move {
-            for _ in 0..3000 {
-                if std::fs::read_to_string(&log).is_ok_and(|t| t.contains("bootstrap started")) {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                    stop.cancel();
-                    return true;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            false
-        })
-    };
-    let deps = Deps {
-        harness: Arc::new(SilentBootstrap(ScriptedHarness::default())),
-        vcs: Arc::new(GitRepo::new(project.root())),
-        verify: Arc::new(VerifyProcess::new(project.root())),
-        clock,
-        notifier: Arc::new(SilentNotifier),
-        engine: None,
-        lease: None,
-        engine_metrics: None,
-        memory: None,
-        effort: None,
-    };
-    let mut runner = Runner::open(project.clone(), deps, stop).unwrap();
-    runner
-        .run(RunOptions {
-            runner_version: "test".into(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    let watcher = stop_into_the_bootstrap(&project, stop.clone());
+    let harness = Arc::new(SilentBootstrap(ScriptedHarness::default()));
+    let clock = Arc::new(FastClock::new(100));
+    run(&project, deps(&project, vcs, harness, clock), stop).await;
     assert!(
         watcher.await.unwrap(),
         "the bootstrap session never started"

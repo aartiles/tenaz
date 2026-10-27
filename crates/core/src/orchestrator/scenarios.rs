@@ -1,6 +1,8 @@
 //! Whole runs against the scripted harness and the in-memory fakes: no
 //! git, no shell (ADR 0005).
 
+mod stop_grace;
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
