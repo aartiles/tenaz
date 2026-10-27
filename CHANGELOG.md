@@ -16,6 +16,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The engine proxy no longer garbles a character that the network splits
+  across two chunks of a streamed reply. It decoded each chunk on its own,
+  so an accented letter or emoji cut in half reached the harness as `�`
+  in every repaired stream. It now decodes only whole events.
+
 - A request the harness cancels because Tenaz stopped the turn no longer
   counts as an engine error. Pi reports it as one ("This operation was
   aborted"), so a session aborted at its second compaction was rerun as an

@@ -13,6 +13,7 @@ use crate::events::{
     ProxyEvent, classify_error, finish_reason_from_json, output_limit, reported_finish_reason,
     usage_from_json,
 };
+use crate::sse::SseFramer;
 use crate::{Proxy, elapsed_ms};
 use tenaz_core::session::RequestSettings;
 
@@ -26,8 +27,7 @@ pub(crate) struct Tap {
     completion: bool,
     started: Instant,
     first_byte: Option<Instant>,
-    /// Pending SSE text not yet terminated by a blank line.
-    sse_buffer: String,
+    sse: SseFramer,
     /// The whole body of a non-streaming or error response (bounded).
     body: Vec<u8>,
     usage: Option<crate::ProxyUsage>,
@@ -60,7 +60,7 @@ impl Tap {
             completion,
             started,
             first_byte: None,
-            sse_buffer: String::new(),
+            sse: SseFramer::default(),
             body: Vec::new(),
             usage: None,
             finish_reason: None,
@@ -95,10 +95,7 @@ impl Tap {
             }
             return;
         }
-        self.sse_buffer.push_str(&String::from_utf8_lossy(chunk));
-        while let Some(at) = self.sse_buffer.find("\n\n") {
-            let event = self.sse_buffer[..at].to_owned();
-            self.sse_buffer.drain(..at + 2);
+        for event in self.sse.push(chunk) {
             self.sse_event(&event);
         }
     }
@@ -134,8 +131,8 @@ impl Tap {
             return;
         }
         self.done = true;
-        if !self.sse_buffer.is_empty() {
-            let rest = std::mem::take(&mut self.sse_buffer);
+        let rest = self.sse.finish();
+        if !rest.is_empty() {
             self.sse_event(&rest);
         }
         if self.status >= 400 {

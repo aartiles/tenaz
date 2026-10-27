@@ -25,6 +25,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
+use crate::sse::SseFramer;
+
 /// Per tool name, what the repairs need to know about its arguments.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ObjectArgs(BTreeMap<String, ToolArgs>);
@@ -352,8 +354,7 @@ struct Held {
 #[derive(Debug, Default)]
 pub struct StreamRepair {
     watched: ObjectArgs,
-    /// Pending text not yet terminated by a blank line.
-    buffer: String,
+    framer: SseFramer,
     /// Held calls by (choice index, tool call index).
     held: BTreeMap<(u64, u64), Held>,
     /// The last chunk's `id`, `model` and `created`, for the deltas it adds.
@@ -371,11 +372,8 @@ impl StreamRepair {
 
     /// The bytes to send for `chunk`: complete events, possibly rewritten.
     pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
-        self.buffer.push_str(&String::from_utf8_lossy(chunk));
         let mut out = String::new();
-        while let Some(at) = self.buffer.find("\n\n") {
-            let event = self.buffer[..at].to_owned();
-            self.buffer.drain(..at + 2);
+        for event in self.framer.push(chunk) {
             self.event(&event, &mut out);
         }
         out.into_bytes()
@@ -384,7 +382,7 @@ impl StreamRepair {
     /// The bytes still owed at the end of the stream.
     pub fn finish(&mut self) -> Vec<u8> {
         let mut out = String::new();
-        let rest = std::mem::take(&mut self.buffer);
+        let rest = self.framer.finish();
         if !rest.trim().is_empty() {
             self.event(rest.trim_end_matches('\n'), &mut out);
         }
@@ -765,6 +763,18 @@ mod tests {
         );
         assert_eq!(repair.repairs.len(), 1);
         assert!(out.ends_with("data: [DONE]\n\n"));
+    }
+
+    #[test]
+    fn a_character_split_across_chunks_reaches_the_harness_whole() {
+        let mut repair = StreamRepair::new(ObjectArgs::from_request(&fx_tools()));
+        let event = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"año\"}}]}\n\n";
+        // Cut between the two UTF-8 bytes of `ñ`.
+        let at = event.find('ñ').unwrap() + 1;
+        let mut out = repair.push(&event.as_bytes()[..at]);
+        out.extend(repair.push(&event.as_bytes()[at..]));
+        out.extend(repair.finish());
+        assert_eq!(String::from_utf8(out).unwrap(), event);
     }
 
     #[test]

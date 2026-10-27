@@ -5,6 +5,7 @@
 
 mod events;
 mod repair;
+mod sse;
 mod tap;
 
 use std::net::SocketAddr;
