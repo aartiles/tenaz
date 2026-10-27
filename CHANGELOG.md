@@ -8,6 +8,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `tenaz --version` and `runner_version` in `run.json` name the commit a
+  binary was built from a git checkout of (`tenaz 0.1.0 (816e1d8)`). Three
+  benchmark runs of different code all recorded `tenaz 0.1.0`. A build
+  from a source archive, without git, shows the version alone.
 - The final reviewer first judges the product as a whole against what the
   brief says it is for and what it says to avoid, under `## Overall` in
   `FINAL.md`, and asks for changes when it misses that even if every

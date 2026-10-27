@@ -16,6 +16,25 @@ fn params_lists_the_defaults() {
     assert!(text.contains("contextFloor=32768\n"));
 }
 
+/// `--version` names the commit when the binary was built from a git
+/// checkout, as these tests are.
+#[test]
+fn version_names_the_commit_of_a_checkout_build() {
+    let out = tenaz().arg("--version").output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    let expected = format!("tenaz {} (", env!("CARGO_PKG_VERSION"));
+    assert!(text.starts_with(&expected), "{text}");
+    let commit = text
+        .trim()
+        .trim_start_matches(&expected)
+        .trim_end_matches(')');
+    assert!(
+        commit.len() >= 7 && commit.chars().all(|c| c.is_ascii_hexdigit()),
+        "{text}"
+    );
+}
+
 /// `guide` prints the skill shipped with the binary, frontmatter first.
 #[test]
 fn guide_prints_the_skill() {

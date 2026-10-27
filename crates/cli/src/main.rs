@@ -24,9 +24,14 @@ use tenaz_core::project::Project;
 use tenaz_pi::models::ModelEntry;
 use tokio_util::sync::CancellationToken;
 
+/// The version and, for a build from a git checkout, its commit
+/// (`0.1.0 (816e1d8)`), set by `build.rs`; the commit tells builds of one
+/// version apart.
+const VERSION: &str = env!("TENAZ_VERSION");
+
 /// The runner's version string, journaled per run.
 fn runner_version() -> String {
-    format!("tenaz {}", env!("CARGO_PKG_VERSION"))
+    format!("tenaz {VERSION}")
 }
 
 /// The project directory as an absolute path: harnesses, `verify` and git
@@ -165,7 +170,7 @@ and the session notes in notes/.
 #[derive(Parser, Debug)]
 #[command(
     name = "tenaz",
-    version,
+    version = VERSION,
     about = "Tenaz, a single-model runner: one resident model, a goal, a verified result.",
     after_help = WORKFLOW_HELP
 )]
