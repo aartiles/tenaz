@@ -1,7 +1,8 @@
 //! Fakes for tests: a scripted harness that exercises every orchestrator
 //! path without a model (a fixed session script), a clock that runs faster
-//! than real time, replayed memory readings and engine counters, and the
-//! scripted harness's `verify` judged without a shell.
+//! than real time, replayed memory readings and engine counters, the
+//! scripted harness's `verify` judged without a shell, and a repository kept
+//! as snapshots in memory with the contract that holds it to git.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,9 +13,13 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 mod replay;
+mod vcs;
+pub mod vcs_contract;
 mod verify;
 
 pub use replay::Replay;
+pub use vcs::SnapshotVcs;
+pub use vcs_contract::MakeVcs;
 pub use verify::ScriptedVerify;
 
 use crate::ports::{

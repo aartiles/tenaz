@@ -47,9 +47,11 @@ Pure modules, each unit-tested without I/O:
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
 holds the scripted harness that plays a fixed session script, a fast
 clock, and `Replay`, which answers for the memory probe and the engine
-counters with readings a test gives it, and `ScriptedVerify`, which judges
-the scripted harness's checks without a shell (ADR 0005), for the core's
-own tests and the crates above it.
+counters with readings a test gives it, `ScriptedVerify`, which judges
+the scripted harness's checks without a shell, and `SnapshotVcs`, a
+repository kept as snapshots in memory; `vcs_contract_tests!` holds it and
+`GitRepo` to the same checks (ADR 0005). They serve the core's own tests
+and the crates above it.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations,
