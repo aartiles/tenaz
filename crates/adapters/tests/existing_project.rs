@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::verify::VerifyProcess;
-use tenaz_core::ledger::{HarnessKind, Launch, ModelConfig, Phase};
+use tenaz_core::ledger::{HarnessKind, JournalRecord, Launch, ModelConfig, Phase, TaskOutcome};
 use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
@@ -43,6 +43,29 @@ fn assert_own_files_untouched(project: &Project) {
     for (path, text) in OWN {
         assert_eq!(project.read(path).unwrap(), text, "{path} changed");
     }
+}
+
+/// After the run: `verify` stayed under `.tenaz/`, the project's own files
+/// are as they were, and on real git the failed T003 was split with its
+/// work reset away and the brief a session edited was put back.
+fn assert_after_the_run(project: &Project) {
+    assert!(project.exists(".tenaz/verify"));
+    assert!(!project.exists("verify"), "verify written at the root");
+    assert_own_files_untouched(project);
+    let records: Vec<JournalRecord> = project.journal().into_iter().map(|e| e.record).collect();
+    let split = records.iter().any(|r| {
+        matches!(r, JournalRecord::Task { task, outcome: TaskOutcome::Split, .. } if task.as_str() == "T003")
+    });
+    assert!(split, "T003 was not split");
+    assert!(
+        !project.exists("checks/T003.exists.sh"),
+        "T003's work was not reset"
+    );
+    let reverted = records.iter().any(|r| {
+        matches!(r, JournalRecord::Session(s) if s.reverted.iter().any(|p| p == ".tenaz/brief.md"))
+    });
+    assert!(reverted, "the edited brief was not reverted");
+    assert_eq!(project.brief().unwrap(), "# Goal\n\nAdd a flag.\n");
 }
 
 #[tokio::test]
@@ -143,7 +166,5 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
         Phase::Complete,
         "run did not complete:\n{log}"
     );
-    assert!(project.exists(".tenaz/verify"));
-    assert!(!project.exists("verify"), "verify written at the root");
-    assert_own_files_untouched(&project);
+    assert_after_the_run(&project);
 }
