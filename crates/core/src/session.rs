@@ -316,6 +316,13 @@ impl SessionMetrics {
             .is_some_and(|r| r.starts_with("context budget exceeded"))
     }
 
+    /// The session was stopped at one and a half times its turn budget.
+    pub fn turns_stopped(&self) -> bool {
+        self.abort_reason
+            .as_deref()
+            .is_some_and(|r| r.starts_with("turn budget exceeded"))
+    }
+
     /// The smallest context the engine said it could hold, if it said so.
     pub fn capacity_limit(&self) -> Option<u64> {
         self.capacity_limits.iter().copied().min()

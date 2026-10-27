@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::briefing::{CONTINUATION, image_continuation, without_map};
+use crate::briefing::{CONTINUATION, TURN_CONTINUATION, image_continuation, without_map};
 use crate::ledger::{Inflight, JournalRecord, SessionRecord};
 use crate::memory::MemoryWindow;
 use crate::metrics::{EngineCounters, RequestRecord, delta, engine_summary};
@@ -446,14 +446,17 @@ impl Runner {
         let mut capacity = 0;
         let mut continued = 0;
         let mut image_stopped: Option<String> = None;
+        let mut turns_stopped = false;
         loop {
             let resumed = std::mem::take(&mut self.ledger.pending_continuation);
             if resumed {
                 self.save()?;
             }
-            let note = image_stopped
-                .as_deref()
-                .map_or_else(|| CONTINUATION.to_owned(), image_continuation);
+            let note = match (&image_stopped, turns_stopped) {
+                (Some(refusal), _) => image_continuation(refusal),
+                (None, true) => TURN_CONTINUATION.to_owned(),
+                (None, false) => CONTINUATION.to_owned(),
+            };
             let text = if continued > 0 || resumed {
                 format!("{}\n\n{note}", without_map(prompt))
             } else {
@@ -470,6 +473,7 @@ impl Runner {
             }
             if metrics.context_stopped() && continued < self.params.context_continuations {
                 continued += 1;
+                turns_stopped = false;
                 self.journal(JournalRecord::ContextContinuation {
                     label: label.clone(),
                     context_peak: result.record.context_peak,
@@ -483,6 +487,7 @@ impl Runner {
                 && continued < self.params.context_continuations
             {
                 continued += 1;
+                turns_stopped = false;
                 image_stopped = Some(refusal.clone());
                 self.journal(JournalRecord::ImageContinuation {
                     label: label.clone(),
@@ -490,6 +495,25 @@ impl Runner {
                     continuation: continued,
                 });
                 self.log(&format!("  {label}: the engine refused an image the session read; a fresh session continues the same work ({continued}/{}, not counted as an attempt)", self.params.context_continuations));
+                continue;
+            }
+            // A session that edits files and ran out of turns was working, not
+            // looping (the loop, repeat and idle rules stop those first): its
+            // changes are kept, like a context stop, and a fresh session
+            // finishes them instead of the attempt counting as failed.
+            if metrics.turns_stopped()
+                && role.edits_code()
+                && continued < self.params.context_continuations
+            {
+                continued += 1;
+                turns_stopped = true;
+                image_stopped = None;
+                self.journal(JournalRecord::TurnContinuation {
+                    label: label.clone(),
+                    turns: metrics.turns,
+                    continuation: continued,
+                });
+                self.log(&format!("  {label}: stopped at its turn budget; a fresh session continues the same work ({continued}/{}, not counted as an attempt)", self.params.context_continuations));
                 continue;
             }
             image_stopped = None;

@@ -95,6 +95,9 @@ pub struct ScriptedHarness {
     /// The first attempt of this task deletes T001's check; later ones put
     /// it back.
     pub drop_check_task: Option<String>,
+    /// The first builder session of this task keeps writing new files until
+    /// it is stopped at its turn budget.
+    pub long_task: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -701,6 +704,16 @@ impl Player {
         }
         if self.script.outgrow_task.as_deref() == Some(task) {
             return self.outgrow().await;
+        }
+        if self.script.long_task.as_deref() == Some(task) && self.bump(&format!("long-{task}")) == 1
+        {
+            let mut n = 0;
+            while !self.aborted() && n < 200 {
+                n += 1;
+                self.write_tool(&format!("src/{task}-part{n}.txt"), "part\n", false)
+                    .await;
+            }
+            return self.finish("Done.");
         }
         if task == "T003" {
             self.write_tool("checks/T003.exists.sh", "exit 1\n", false)

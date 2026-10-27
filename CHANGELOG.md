@@ -8,6 +8,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- A builder or bootstrap session stopped at its turn budget is continued
+  by a fresh session, like one stopped at its context budget, instead of
+  failing the attempt: its changes are kept and the new session is told to
+  finish from them. In the explainer run three builders ran out of turns
+  while working, and each cost its task an attempt.
 - The package description (shown by `brew info` and on the release) says
   what Tenaz does now: it drives a local model through a coding agent
   until the goal passes its checks.

@@ -551,3 +551,45 @@ async fn an_attempt_that_leaves_fewer_passing_checks_fails() {
     assert!(project.exists("checks/T001.exists.sh"), "the check is back");
     assert!(log.contains("T004 done (2 attempts"), "{log}");
 }
+
+#[tokio::test]
+async fn a_builder_stopped_at_its_turn_budget_is_continued_not_charged() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            long_task: Some("T001".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    assert!(
+        log.contains("stopped at its turn budget; a fresh session continues the same work (1/3, not counted as an attempt)"),
+        "{log}"
+    );
+    let continued = project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::TurnContinuation { label, .. } => Some(label.clone()),
+            _ => None,
+        })
+        .expect("the turn stop is journaled");
+    assert!(continued.ends_with("-builder-T001"), "{continued}");
+    let next = project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s)
+                if s.label.ends_with("-builder-T001") && s.label != continued =>
+            {
+                Some(s.clone())
+            }
+            _ => None,
+        })
+        .expect("a fresh session continues T001");
+    assert_eq!(next.attempt, Some(1), "the turn stop cost no attempt");
+    let prompt = project
+        .read(&format!(".tenaz/private/{}.prompt.md", next.label))
+        .unwrap();
+    assert!(prompt.contains("used up its turn budget"), "{prompt}");
+}

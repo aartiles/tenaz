@@ -510,6 +510,13 @@ pub enum JournalRecord {
         refusal: String,
         continuation: u32,
     },
+    /// A session that edits files was stopped at its turn budget; a fresh
+    /// session continues its work.
+    TurnContinuation {
+        label: String,
+        turns: u32,
+        continuation: u32,
+    },
     ContextCap {
         label: String,
         engine_max_context: u64,

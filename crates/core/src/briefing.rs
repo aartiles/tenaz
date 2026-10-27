@@ -149,6 +149,9 @@ pub const EXISTING_PROJECT: &str = "This project already has code, conventions a
 /// The note a fresh session gets when it continues work stopped at the context budget.
 pub const CONTINUATION: &str = "## Continuation\n\nAn earlier session on this same work was stopped because its context grew past the budget. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Do not reread large files whole. The repository map is `.tenaz/map.md`, if you need it.";
 
+/// The note a fresh session gets when it continues work stopped at the turn budget.
+pub const TURN_CONTINUATION: &str = "## Continuation\n\nAn earlier session on this same work was stopped because it used up its turn budget. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then finish from there in few turns: do not explore again what it already read. The repository map is `.tenaz/map.md`, if you need it.";
+
 /// The note after the engine refused an image the earlier session read.
 pub fn image_continuation(refusal: &str) -> String {
     let quoted: String = refusal
