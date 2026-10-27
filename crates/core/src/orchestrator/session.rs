@@ -538,7 +538,7 @@ impl Runner {
             }
             // A prompt larger than the engine's current memory allows fails the same way
             // after any wait. If the reported maximum is still usable, lower the budget and
-            // rerun at once; a tiny maximum means something else holds the memory, so wait.
+            // rerun after a pause; a tiny maximum means something else holds it, so back off.
             if let Some(limit) = metrics.capacity_limit()
                 && limit >= self.params.context_floor
             {
@@ -550,7 +550,7 @@ impl Runner {
                 }
                 capacity += 1;
                 self.lower_context_cap(&label, limit, capacity)?;
-                self.deps.clock.sleep(Duration::from_secs(10)).await;
+                self.capacity_wait(&label, role, ctx).await?;
                 continue;
             }
             if retry >= self.params.engine_retries {
@@ -585,6 +585,22 @@ impl Runner {
             attempt: ctx.attempt,
         });
         Ok(RunError::Paused(label.to_owned()))
+    }
+
+    /// Waits `capacityRetryWaitSec` before a session is rerun at a lowered
+    /// budget; a stop during the wait pauses the run instead.
+    async fn capacity_wait(
+        &mut self,
+        label: &str,
+        role: Role,
+        ctx: &SessionCtx,
+    ) -> Result<(), RunError> {
+        self.sleep_unless_stopped(self.params.capacity_retry_wait())
+            .await;
+        if self.stopping() {
+            return Err(self.pause(label, role, ctx)?);
+        }
+        Ok(())
     }
 
     /// Lowers the run's context budget to a share of what the engine said it can hold.
@@ -692,8 +708,13 @@ impl Runner {
         if retry == 0 && cause == "engine" {
             self.notify("The engine is failing (often memory). Free memory; the run retries the same session.");
         }
+        self.sleep_unless_stopped(Duration::from_secs(wait)).await;
+    }
+
+    /// Sleeps `wait`, or less when the run is stopped.
+    async fn sleep_unless_stopped(&self, wait: Duration) {
         tokio::select! {
-            () = self.deps.clock.sleep(Duration::from_secs(wait)) => {}
+            () = self.deps.clock.sleep(wait) => {}
             () = self.stop.cancelled() => {}
         }
     }

@@ -6,6 +6,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 
+mod common;
+
 /// The binary, kept from the engines and image servers running on this
 /// machine: it looks only where the test points it.
 fn tenaz() -> Command {
@@ -67,7 +69,7 @@ fn the_wizard_pins_everything_run_needs() {
         .args(["init", "--interactive", "--harness", "fake"])
         .args(["--base-url", &format!("{origin}/v1")])
         .args(["--comfyui", &origin])
-        .args(["--set", "engineRetryBaseSec=0", "--set", "notify=false"])
+        .args(common::FAST)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

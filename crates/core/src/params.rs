@@ -48,8 +48,11 @@ pub struct RunParams {
     pub capacity_headroom: f64,
     /// A reported maximum below this is memory starvation: wait instead of shrinking the budget.
     pub context_floor: u64,
-    /// Immediate reruns after the context budget was lowered, before blocking.
+    /// Reruns after the context budget was lowered, before blocking.
     pub capacity_retries: u32,
+    /// Seconds to wait before each of those reruns, while the engine frees
+    /// the memory the failed request held (0 reruns at once).
+    pub capacity_retry_wait_sec: u64,
     /// Sessions in a row without a memory failure before a lowered context
     /// budget is raised halfway back; doubles after each raise that fails,
     /// up to four times as many (0 keeps it lowered).
@@ -147,6 +150,7 @@ impl Default for RunParams {
             capacity_headroom: 0.8,
             context_floor: 32768,
             capacity_retries: 4,
+            capacity_retry_wait_sec: 10,
             capacity_recover_sessions: 4,
             big_output_tokens: 8000,
             context_abort: 1.3,
@@ -202,6 +206,11 @@ pub enum ParamError {
 }
 
 impl RunParams {
+    /// The pause before a rerun after the context budget was lowered.
+    pub fn capacity_retry_wait(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.capacity_retry_wait_sec)
+    }
+
     /// Where the `verify` executable is, relative to the project root.
     pub fn verify_path(&self) -> &'static str {
         if self.existing_project == Some(true) {
@@ -348,6 +357,7 @@ mod tests {
     fn serializes_with_task_loop_names() {
         let json = serde_json::to_value(RunParams::default()).unwrap();
         assert_eq!(json["engineRetryBaseSec"], 60);
+        assert_eq!(json["capacityRetryWaitSec"], 10);
         assert_eq!(json["bigOutputTokens"], 8000);
     }
 }

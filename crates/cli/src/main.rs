@@ -1205,6 +1205,8 @@ async fn demo(project: PathBuf) -> anyhow::Result<ExitCode> {
         "--set",
         "engineRetryBaseSec=0",
         "--set",
+        "capacityRetryWaitSec=0",
+        "--set",
         "notify=false",
     ];
     let Command::Init(args) = Cli::try_parse_from(init_line)?.command else {

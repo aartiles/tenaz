@@ -3,6 +3,8 @@
 
 use std::process::Command;
 
+mod common;
+
 fn tenaz() -> Command {
     Command::new(env!("CARGO_BIN_EXE_tenaz"))
 }
@@ -72,11 +74,8 @@ fn init_run_and_status_with_the_fake_harness() {
             "maxAttempts=2",
             "--set",
             "replanEvery=2",
-            "--set",
-            "engineRetryBaseSec=0",
-            "--set",
-            "notify=false",
         ])
+        .args(common::FAST)
         .output()
         .unwrap();
     assert!(

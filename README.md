@@ -154,7 +154,7 @@ real run needs.
 
 ## Try it without a model
 
-Right after installing, this shows a whole run in about a minute. It needs
+Right after installing, this shows a whole run in seconds. It needs
 no agent and no engine:
 
 ```bash
@@ -168,7 +168,8 @@ new `tenaz-demo` folder (`--project` picks another). The runner, the
 `tenaz-demo/.tenaz/` and `git -C tenaz-demo log --oneline`.
 
 `tenaz demo` is `tenaz init` with `--harness fake --model fake --provider
-fake --set engineRetryBaseSec=0 --set notify=false`, then `tenaz run`.
+fake --set engineRetryBaseSec=0 --set capacityRetryWaitSec=0 --set
+notify=false`, then `tenaz run`.
 
 ## Before a real run
 

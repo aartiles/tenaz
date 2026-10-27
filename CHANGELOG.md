@@ -8,6 +8,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `capacityRetryWaitSec` (10 by default): the pause before a session is
+  rerun after the engine ran out of memory and Tenaz lowered the context
+  budget. It was a fixed 10 seconds. A stop (Ctrl-C) during the pause now
+  pauses the run at once; before, the pause ran out and the next session
+  started first. `tenaz demo` sets it to 0, so the demo ends about 10
+  seconds sooner.
+
 - A time limit per tool call, `toolMinutes` (10 by default, 0 turns it
   off). A call that runs over it, such as a script in an endless loop, is
   stopped and the same session is told which call and what to do; a second
