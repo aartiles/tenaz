@@ -9,18 +9,16 @@
 //! The bootstrap runs in steps, and a step that fails is retried with the
 //! files the earlier session left.
 
-use std::path::Path;
 use std::sync::Arc;
 
-use tenaz_adapters::git::GitRepo;
-use tenaz_adapters::notify::SilentNotifier;
-use tenaz_adapters::verify::VerifyProcess;
-use tenaz_core::ledger::{BootstrapStep, HarnessKind, JournalRecord, ModelConfig, Phase};
-use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
-use tenaz_core::params::RunParams;
-use tenaz_core::project::Project;
-use tenaz_core::testing::{FastClock, ScriptedHarness};
 use tokio_util::sync::CancellationToken;
+
+use super::{deps, fake_project};
+use crate::effort::EffortDial;
+use crate::ledger::{BootstrapStep, JournalRecord, Phase};
+use crate::orchestrator::Deps;
+use crate::project::Project;
+use crate::testing::{FastClock, ScriptedHarness};
 
 /// Runs the fake goal to the end with `harness` and `maxAttempts`; the
 /// project and its log.
@@ -35,65 +33,16 @@ async fn run_with(
     set: &[&str],
 ) -> (tempfile::TempDir, Project, String) {
     let work = tempfile::tempdir().unwrap();
-    let brief = work.path().join("brief.md");
-    std::fs::write(&brief, "# Fake brief\n\nBuild four trivial files.\n").unwrap();
-    let project = Project::new(work.path().join("project"));
-    let mut params = RunParams::default();
-    for pair in [
-        &format!("maxAttempts={max_attempts}"),
-        "replanEvery=2",
-        "engineRetryBaseSec=0",
-        "notify=false",
-    ] {
-        params.apply_override(pair).unwrap();
-    }
-    for pair in set {
-        params.apply_override(pair).unwrap();
-    }
-    let config = ModelConfig {
-        harness: HarnessKind::Fake,
-        harness_version: "fake-pi 0.0.1".into(),
-        model: "fake/fake".into(),
-        provider: Some("fake".into()),
-        id: "fake".into(),
-        base_url: None,
-        context_window: 131072,
-        input: vec!["text".into()],
-        thinking: Some("medium".into()),
-    };
-    let vcs = GitRepo::new(project.root());
-    let templates =
-        Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();
-    let options = InitOptions {
-        launch: tenaz_core::ledger::Launch::default(),
-        brief: Some(brief),
-        config,
-        params,
-        skills: vec![],
-        runner_version: "test".into(),
-    };
-    init(&project, &vcs, &FastClock::new(100), &templates, options).unwrap();
-
+    let attempts = format!("maxAttempts={max_attempts}");
+    let mut overrides = vec![attempts.as_str(), "replanEvery=2"];
+    overrides.extend_from_slice(set);
+    let (project, vcs) = fake_project(work.path(), &overrides);
+    let clock = Arc::new(FastClock::new(100));
     let deps = Deps {
-        harness: Arc::new(harness),
-        vcs: Arc::new(GitRepo::new(project.root())),
-        verify: Arc::new(VerifyProcess::new(project.root())),
-        clock: Arc::new(FastClock::new(100)),
-        notifier: Arc::new(SilentNotifier),
-        engine: None,
-        lease: None,
-        engine_metrics: None,
-        memory: None,
-        effort: Some(tenaz_core::effort::EffortDial::new()),
+        effort: Some(EffortDial::new()),
+        ..deps(&project, vcs, Arc::new(harness), clock)
     };
-    let mut runner = Runner::open(project.clone(), deps, CancellationToken::new()).unwrap();
-    runner
-        .run(RunOptions {
-            runner_version: "test".into(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    super::run(&project, deps, CancellationToken::new()).await;
     let log = project.read(".tenaz/private/orchestrator.log").unwrap();
     assert_eq!(
         project.load_ledger().unwrap().phase,
@@ -560,7 +509,10 @@ async fn an_attempt_that_leaves_fewer_passing_checks_fails() {
         .read(&format!(".tenaz/private/{}.prompt.md", builders[1]))
         .unwrap();
     assert!(second.contains("fewer than the"), "{second}");
-    assert!(project.exists("checks/T001.exists.sh"), "the check is back");
+    assert!(
+        project.exists("checks/T001.exists.sh"),
+        "the builder put the check back"
+    );
     assert!(log.contains("T004 done (2 attempts"), "{log}");
 }
 

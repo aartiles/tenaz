@@ -1,6 +1,7 @@
 //! Whole runs against the scripted harness and the in-memory fakes: no
 //! git, no shell (ADR 0005).
 
+mod harness_exit;
 mod stop_grace;
 
 use std::path::Path;
@@ -21,7 +22,7 @@ use crate::testing::{FastClock, ScriptedHarness, ScriptedVerify, SilentNotifier,
 /// the snapshots live in memory, so the run must use the same one.
 fn fake_project(work: &Path, overrides: &[&str]) -> (Project, Arc<SnapshotVcs>) {
     let brief = work.join("brief.md");
-    std::fs::write(&brief, "# Fake brief\n\nBuild one trivial file.\n").unwrap();
+    std::fs::write(&brief, "# Fake brief\n\nBuild four trivial files.\n").unwrap();
     let project = Project::new(work.join("project"));
     let mut params = RunParams::default();
     for pair in ["notify=false", "engineRetryBaseSec=0"]
