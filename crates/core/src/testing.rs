@@ -1,6 +1,7 @@
 //! Fakes for tests: a scripted harness that exercises every orchestrator
 //! path without a model (a fixed session script), a clock that runs faster
-//! than real time, and replayed memory readings and engine counters.
+//! than real time, replayed memory readings and engine counters, and the
+//! scripted harness's `verify` judged without a shell.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,8 +12,10 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 mod replay;
+mod verify;
 
 pub use replay::Replay;
+pub use verify::ScriptedVerify;
 
 use crate::ports::{
     Clock, Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit,
@@ -267,7 +270,8 @@ fn field<'a>(prompt: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
-const VERIFY: &str = r#"#!/bin/sh
+/// The `verify` the scripted harness writes at bootstrap.
+pub const VERIFY: &str = r#"#!/bin/sh
 # Runs checks/<ID>.<name>.sh; --task T007 selects the T007. prefix.
 prefix=""
 [ "$1" = "--task" ] && prefix="$2."
