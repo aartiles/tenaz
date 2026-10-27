@@ -8,6 +8,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The final reviewer first judges the product as a whole against what the
+  brief says it is for and what it says to avoid, under `## Overall` in
+  `FINAL.md`, and asks for changes when it misses that even if every
+  requirement passes. In the explainer run each motion requirement passed
+  and the review accepted a video that read like the slides the brief
+  ruled out.
 - A builder or bootstrap session stopped at its turn budget is continued
   by a fresh session, like one stopped at its context budget, instead of
   failing the attempt: its changes are kept and the new session is told to

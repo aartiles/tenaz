@@ -593,3 +593,23 @@ async fn a_builder_stopped_at_its_turn_budget_is_continued_not_charged() {
         .unwrap();
     assert!(prompt.contains("used up its turn budget"), "{prompt}");
 }
+
+#[tokio::test]
+async fn the_final_reviewer_judges_the_product_against_the_brief_as_a_whole() {
+    let (_work, project, _log) = run(ScriptedHarness::default(), 3).await;
+    let label = project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-final-reviewer") => {
+                Some(s.label.clone())
+            }
+            _ => None,
+        })
+        .expect("a final review ran");
+    let prompt = project
+        .read(&format!(".tenaz/private/{label}.prompt.md"))
+        .unwrap();
+    assert!(prompt.contains("judge the product as a whole"), "{prompt}");
+    assert!(prompt.contains("under `## Overall`"), "{prompt}");
+}

@@ -14,11 +14,21 @@ requirements (subject, style, consistency between images, no unwanted
 text) from what you see. Mark such a requirement `manual` only when you
 cannot see images at all.
 
+Then judge the product as a whole against what the brief says it is for
+and what it says to avoid: its goal, its audience, its tone. Every
+requirement can pass while the product still misses that (a video that
+the brief says must not look like slides, and does). Say what you saw.
+If it misses the brief's intent, that is a gap, and the verdict is
+`CHANGES`.
+
 Write `.tenaz/reviews/FINAL.md`:
 
 - first line `Verdict: ACCEPT` or `Verdict: CHANGES`;
+- under `## Overall`, a few lines: does the product as a whole do what the
+  brief asks, and look and read the way it asks?
 - a table `R | met/not met/manual | evidence (what you ran and what you saw)`;
-- under `## Gaps`, one bullet for each problem that matters.
+- under `## Gaps`, one bullet for each problem that matters, including
+  any from `## Overall`.
 
 For `CHANGES`, also create one new task card per gap in `.tenaz/tasks/`,
 using the next free IDs and `status: todo`, so the orchestrator can schedule
