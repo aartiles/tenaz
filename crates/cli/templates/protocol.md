@@ -22,7 +22,9 @@ and you do not commit, push, open pull requests or switch branches.
 - The orchestrator runs `./verify` after your session and decides the outcome
   from its result. Make the checks pass; a claim of success counts for
   nothing. It runs it with `CI=1 NO_COLOR=1`, without a terminal; run it the
-  same way when a check passes for you and fails for the orchestrator.
+  same way when a check passes for you and fails for the orchestrator. When
+  `verify` ends it kills every process it started, so a check that needs a
+  server starts its own.
 - Check your work with `./verify` (or `./verify --task <ID>`) rather than
   improvised one-off commands. If you need a new kind of check, add it to
   `verify`.

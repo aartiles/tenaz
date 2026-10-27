@@ -8,6 +8,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `verify` runs in a process group of its own, and Tenaz kills the group
+  when it ends or times out. A check that started `npm run dev` and failed
+  left Vite running on its fixed port, so the next check failed on the port
+  (with `--strictPort`), and a leftover process that kept verify's output
+  open made Tenaz wait for it.
+
 - `verify` runs with `NO_COLOR=1` as well as `CI=1`. `CI` turns colours
   on in some tools (Vite), so a check that read their output failed under
   Tenaz and passed in the builder's shell. Escape codes are also left out of
