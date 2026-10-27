@@ -47,14 +47,6 @@ impl Notifier for DesktopNotifier {
     }
 }
 
-/// Drops every notification.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SilentNotifier;
-
-impl Notifier for SilentNotifier {
-    fn notify(&self, _message: &str) {}
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
