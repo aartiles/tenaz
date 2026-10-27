@@ -2,6 +2,7 @@
 //! git, no shell (ADR 0005).
 
 mod harness_exit;
+mod scripted_run;
 mod stop_grace;
 
 use std::path::Path;
@@ -145,23 +146,4 @@ async fn a_stop_during_the_capacity_wait_pauses_before_the_rerun() {
     });
     assert!(capped.is_some(), "the engine never ran out of memory");
     assert_eq!(paused, capped, "the run did not pause in the capacity wait");
-}
-
-/// The scripted run, with the recoveries it plays, reaches COMPLETE with
-/// five tasks done and one split.
-#[tokio::test]
-async fn the_scripted_run_completes() {
-    let work = tempfile::tempdir().unwrap();
-    let (project, vcs) = fake_project(work.path(), &["maxAttempts=2", "replanEvery=2"]);
-    let harness = Arc::new(ScriptedHarness::default());
-    let clock = Arc::new(FastClock::new(100));
-    run(
-        &project,
-        deps(&project, vcs, harness, clock),
-        CancellationToken::new(),
-    )
-    .await;
-    let status = super::status_text(&project);
-    assert!(status.starts_with("Phase: COMPLETE\n"), "{status}");
-    assert!(status.contains("Tasks: done 5, split 1"), "{status}");
 }
