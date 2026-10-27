@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-27
+
 ### Changed
 
 - `tenaz --version` and `runner_version` in `run.json` name the commit a
