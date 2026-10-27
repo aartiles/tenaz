@@ -1,0 +1,11 @@
+{"type":"compaction_start","reason":"threshold"}
+{"type":"compaction_start","reason":"threshold"}
+{"type":"queue_update","steering":[],"followUp":[]}
+{"type":"response","command":"clear_queue","success":true,"data":{"steering":[],"followUp":[]}}
+{"type":"compaction_end","reason":"threshold","aborted":true,"willRetry":false}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"mlx-serve","model":"prism-ml/Ternary-Bonsai-2-27B-mlx-2bit","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","errorMessage":"This operation was aborted","timestamp":1793124844475,"durationMs":0,"thinkingLevel":"medium"}}
+{"type":"message_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"mlx-serve","model":"prism-ml/Ternary-Bonsai-2-27B-mlx-2bit","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","errorMessage":"This operation was aborted","timestamp":1793124844475,"durationMs":0,"thinkingLevel":"medium"}}
+{"type":"turn_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"mlx-serve","model":"prism-ml/Ternary-Bonsai-2-27B-mlx-2bit","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","errorMessage":"This operation was aborted","timestamp":1793124844475,"durationMs":0,"thinkingLevel":"medium"},"toolResults":[]}
+{"type":"agent_settled","aborted":true}
+{"type":"response","command":"abort","success":true}

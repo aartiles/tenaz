@@ -440,6 +440,16 @@ impl Watchdog {
         elapsed_ms: u64,
         actions: &mut Vec<Action>,
     ) {
+        // A request cancelled because the runner stopped the turn is part of
+        // that stop, not an engine failure. Pi reports it as an error ("This
+        // operation was aborted").
+        let stop_reason = if *stop_reason == StopReason::Error
+            && (self.metrics.abort_reason.is_some() || self.interrupting)
+        {
+            &StopReason::Aborted
+        } else {
+            stop_reason
+        };
         self.metrics.usage.add(usage);
         self.metrics.reasoning_chars += thinking_chars;
         self.metrics.context_peak = self.metrics.context_peak.max(usage.context());

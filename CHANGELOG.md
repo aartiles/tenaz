@@ -16,6 +16,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A request the harness cancels because Tenaz stopped the turn no longer
+  counts as an engine error. Pi reports it as one ("This operation was
+  aborted"), so a session aborted at its second compaction was rerun as an
+  engine failure: the attempt did not count and an engine retry was spent.
+
 - `verify` runs in a process group of its own, and Tenaz kills the group
   when it ends or times out. A check that started `npm run dev` and failed
   left Vite running on its fixed port, so the next check failed on the port
