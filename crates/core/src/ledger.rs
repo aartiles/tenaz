@@ -472,6 +472,14 @@ pub enum TaskOutcome {
     Blocked,
 }
 
+/// A reviewer's verdict, journaled as the reviewer wrote it (`ACCEPT`, `CHANGES`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Verdict {
+    Accept,
+    Changes,
+}
+
 /// One line of `journal.jsonl`, tagged by `type`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[expect(
@@ -590,11 +598,11 @@ pub enum JournalRecord {
         task: TaskId,
         attempt: u32,
         review: u32,
-        verdict: Option<String>,
+        verdict: Option<Verdict>,
     },
     FinalReview {
         cycle: u32,
-        verdict: Option<String>,
+        verdict: Option<Verdict>,
         verify_ok: bool,
         coverage: Coverage,
         added: Vec<TaskId>,
@@ -682,6 +690,17 @@ fn is_zero(n: &u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verdicts_are_journaled_as_reviewers_write_them() {
+        let line = r#"{"at":"t","type":"review","task":"T001","attempt":1,"review":2,"verdict":"CHANGES"}"#;
+        let entry: JournalEntry = serde_json::from_str(line).unwrap();
+        let JournalRecord::Review { verdict, .. } = &entry.record else {
+            panic!("not a review: {entry:?}");
+        };
+        assert_eq!(*verdict, Some(Verdict::Changes));
+        assert_eq!(serde_json::to_string(&entry).unwrap(), line);
+    }
 
     fn config() -> ModelConfig {
         ModelConfig {

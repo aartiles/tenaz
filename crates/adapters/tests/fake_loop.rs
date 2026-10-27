@@ -11,7 +11,7 @@ use std::time::Duration;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::notify::SilentNotifier;
 use tenaz_adapters::verify::VerifyProcess;
-use tenaz_core::ledger::{JournalRecord, ModelConfig, Phase, TaskOutcome};
+use tenaz_core::ledger::{JournalRecord, ModelConfig, Phase, TaskOutcome, Verdict};
 use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
@@ -35,6 +35,10 @@ fn deps(project: &Project, harness: ScriptedHarness) -> Deps {
         memory: None,
         effort: None,
     }
+}
+
+fn reviewed(record: &JournalRecord, verdict: Verdict) -> bool {
+    matches!(record, JournalRecord::Review { verdict: Some(v), .. } if *v == verdict)
 }
 
 fn card_line(project: &Project, id: &str, prefix: &str) -> Option<String> {
@@ -318,12 +322,12 @@ async fn the_fake_run_completes_with_every_recovery_path_exercised() {
     );
     assert!(
         has(
-            &|r| matches!(r, JournalRecord::Review { task, attempt: 1, review: 2, verdict: Some(v) } if task.as_str() == "T004" && v == "ACCEPT")
+            &|r| matches!(r, JournalRecord::Review { task, attempt: 1, review: 2, verdict: Some(Verdict::Accept) } if task.as_str() == "T004")
         ),
         "T004 review without a verdict was not retried"
     );
     assert!(
-        has(&|r| matches!(r, JournalRecord::Review { verdict: Some(v), .. } if v == "CHANGES")),
+        has(&|r| reviewed(r, Verdict::Changes)),
         "review rejection not recorded"
     );
     assert!(

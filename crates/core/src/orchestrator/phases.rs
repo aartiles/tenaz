@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::backlog::Backlog;
 use crate::briefing::{self, Briefing};
 use crate::ledger::{
-    BootstrapStep, CurrentTask, JournalRecord, Phase, StoppedAttempt, TaskOutcome,
+    BootstrapStep, CurrentTask, JournalRecord, Phase, StoppedAttempt, TaskOutcome, Verdict,
 };
 use crate::project::BRIEF;
 use crate::role::Role;
@@ -996,7 +996,7 @@ impl Runner {
         }
         let review_path = format!(".tenaz/reviews/{task}.md");
         self.project.remove(&review_path)?;
-        let mut verdict: Option<String> = None;
+        let mut verdict: Option<Verdict> = None;
         let mut text: Option<String> = None;
         for review in 1..=2 {
             if verdict.is_some() {
@@ -1083,12 +1083,12 @@ impl Runner {
                 task: task.clone(),
                 attempt: input.attempt,
                 review,
-                verdict: verdict.clone(),
+                verdict,
             });
         }
-        Ok(match verdict.as_deref() {
-            Some("ACCEPT") => Review::Accept,
-            Some(_)
+        Ok(match verdict {
+            Some(Verdict::Accept) => Review::Accept,
+            Some(Verdict::Changes)
                 if text
                     .as_deref()
                     .is_some_and(crate::project::only_minor_findings) =>
@@ -1098,7 +1098,7 @@ impl Runner {
                 ));
                 Review::Accept
             }
-            Some(_) => Review::Changes(text.unwrap_or_default()),
+            Some(Verdict::Changes) => Review::Changes(text.unwrap_or_default()),
             None => Review::NoVerdict,
         })
     }
@@ -1241,12 +1241,12 @@ impl Runner {
             .commit_all(&format!("tenaz: final review {}", self.ledger.final_cycles))?;
         self.journal(JournalRecord::FinalReview {
             cycle: self.ledger.final_cycles,
-            verdict: verdict.clone(),
+            verdict,
             verify_ok: all.ok,
             coverage: cov.clone(),
             added: added.clone(),
         });
-        if verdict.as_deref() == Some("ACCEPT") && all.ok && cov.missing.is_empty() {
+        if verdict == Some(Verdict::Accept) && all.ok && cov.missing.is_empty() {
             return self.finish(Phase::Complete);
         }
         if !added.is_empty() && self.ledger.final_cycles < self.params.max_final_cycles {
