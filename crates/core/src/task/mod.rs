@@ -218,7 +218,7 @@ impl TaskCard {
     pub fn text_is_done(text: &str) -> bool {
         text.lines().any(|line| {
             line.strip_prefix("status:")
-                .is_some_and(|rest| rest.trim() == "done")
+                .is_some_and(|rest| rest.trim() == TaskStatus::Done.as_str())
         })
     }
 }

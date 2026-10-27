@@ -363,10 +363,7 @@ impl Runner {
             return Ok(());
         }
         for id in backlog.ids() {
-            self.project.set_card_fields(
-                id,
-                &[("status", "todo".to_owned()), ("attempts", "0".to_owned())],
-            )?;
+            self.project.reset_card(id)?;
         }
         self.ledger.phase = Phase::Loop;
         self.ledger.checkpoint = Some(self.deps.vcs.commit_all("tenaz: bootstrap accepted")?);
@@ -465,17 +462,13 @@ impl Runner {
         }
         for t in after.cards() {
             match tasks.get(&t.id) {
-                None if t.status != TaskStatus::Todo => self.project.set_card_fields(
-                    &t.id,
-                    &[("status", "todo".to_owned()), ("attempts", "0".to_owned())],
-                )?,
+                None if t.status != TaskStatus::Todo => self.project.reset_card(&t.id)?,
                 Some(old)
                     if old.status != t.status
                         && !(t.status == TaskStatus::Dropped
                             && matches!(old.status, TaskStatus::Todo | TaskStatus::Blocked)) =>
                 {
-                    self.project
-                        .set_card_fields(&t.id, &[("status", old.status.to_string())])?;
+                    self.project.set_status(&t.id, old.status)?;
                 }
                 _ => {}
             }
@@ -555,8 +548,7 @@ impl Runner {
                 .map(|c| c.id.clone())
                 .collect();
             if ok && children.len() >= 2 {
-                self.project
-                    .set_card_fields(&task.id, &[("status", "split".to_owned())])?;
+                self.project.set_status(&task.id, TaskStatus::Split)?;
                 let names = children
                     .iter()
                     .map(ToString::to_string)
@@ -582,8 +574,7 @@ impl Runner {
                 self.deps.vcs.reset_hard(&base)?;
             }
         }
-        self.project
-            .set_card_fields(&task.id, &[("status", "blocked".to_owned())])?;
+        self.project.set_status(&task.id, TaskStatus::Blocked)?;
         self.ledger.checkpoint = Some(
             self.deps
                 .vcs
@@ -610,8 +601,7 @@ impl Runner {
             .as_ref()
             .is_none_or(|c| c.task != task.id)
         {
-            self.project
-                .set_card_fields(&task.id, &[("status", "active".to_owned())])?;
+            self.project.set_status(&task.id, TaskStatus::Active)?;
             let base = self
                 .deps
                 .vcs
@@ -851,8 +841,7 @@ impl Runner {
         attempt: u32,
         reviewed: bool,
     ) -> Result<(), RunError> {
-        self.project
-            .set_card_fields(&task.id, &[("status", "done".to_owned())])?;
+        self.project.set_status(&task.id, TaskStatus::Done)?;
         self.ledger.checkpoint = Some(
             self.deps
                 .vcs
@@ -1230,10 +1219,7 @@ impl Runner {
             .cloned()
             .collect();
         for id in &added {
-            self.project.set_card_fields(
-                id,
-                &[("status", "todo".to_owned()), ("attempts", "0".to_owned())],
-            )?;
+            self.project.reset_card(id)?;
         }
         self.ledger.final_cycles += 1;
         self.deps
