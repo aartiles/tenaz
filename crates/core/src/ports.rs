@@ -30,7 +30,9 @@ pub struct SessionSpec {
     /// Where the harness may keep its own session state (`.tenaz/private/sessions`).
     /// `None` asks for no persistence.
     pub persist_dir: Option<PathBuf>,
-    /// Where the raw event stream is appended (`.tenaz/private/<label>.rpc.jsonl`).
+    /// Where the raw event stream is appended (`.tenaz/private/<label>.rpc.jsonl`):
+    /// the harness's own records where it has a line protocol (Pi), else the
+    /// translated session events (fx over ACP).
     pub raw_log: Option<PathBuf>,
     /// Where the model's reasoning text is appended
     /// (`.tenaz/private/<label>.thinking.md`), for harnesses whose raw

@@ -1,8 +1,9 @@
 //! `tenaz watch`: follows a run from its files, as `tail -f` would, at a
 //! chosen level of detail. It reads `.tenaz/private/orchestrator.log`, the
-//! current session's event stream (`<label>.rpc.jsonl`, the same for every
-//! harness) and, at `debug`, the harness's own logs (`<label>.*.log`). It
-//! only reads, so it is safe while a run works.
+//! current session's event stream (`<label>.rpc.jsonl`: session events
+//! for fx, Pi's own RPC records for Pi, translated here as the Pi adapter
+//! does) and, at `debug`, the harness's own logs (`<label>.*.log`). It only
+//! reads, so it is safe while a run works.
 
 use std::fmt::Write as _;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
@@ -189,6 +190,8 @@ impl Tail {
 struct SessionTail {
     label: String,
     events: Tail,
+    /// For a Pi session, whose stream holds Pi's records.
+    pi: tenaz_pi::Translator,
     logs: Vec<Tail>,
     private: PathBuf,
 }
@@ -198,6 +201,7 @@ impl SessionTail {
         Self {
             label: label.to_owned(),
             events: Tail::new(private.join(format!("{label}{RPC}"))),
+            pi: tenaz_pi::Translator::new(),
             logs: Vec::new(),
             private: private.to_owned(),
         }
@@ -207,10 +211,10 @@ impl SessionTail {
     fn read(&mut self, level: Level) -> std::io::Result<Vec<String>> {
         let mut lines = Vec::new();
         for raw in self.events.read_lines()? {
-            match serde_json::from_str::<SessionEvent>(&raw) {
-                Ok(event) => lines.extend(render(&event, level)),
-                Err(_) if level == Level::Debug => lines.push(format!("  ? {raw}")),
-                Err(_) => {}
+            match self.events_of(&raw) {
+                Some(events) => lines.extend(events.iter().flat_map(|e| render(e, level))),
+                None if level == Level::Debug => lines.push(format!("  ? {raw}")),
+                None => {}
             }
         }
         if level == Level::Debug {
@@ -230,6 +234,18 @@ impl SessionTail {
             }
         }
         Ok(lines)
+    }
+
+    /// The session events of one stream line: a session event as fx's
+    /// stream has it, or a Pi record (`type`, where events have `kind`),
+    /// most of which make no event. `None` for a line that is neither.
+    fn events_of(&mut self, raw: &str) -> Option<Vec<SessionEvent>> {
+        if let Ok(event) = serde_json::from_str::<SessionEvent>(raw) {
+            return Some(vec![event]);
+        }
+        let record: serde_json::Value = serde_json::from_str(raw).ok()?;
+        record.get("type")?;
+        Some(self.pi.event(&record))
     }
 
     /// `<label>.*.log` files that appeared since the last look.
@@ -546,6 +562,30 @@ mod tests {
             "06:57:52 Session 051-builder-T026a started"
         );
         assert_eq!(run_line("plain"), "plain");
+    }
+
+    #[test]
+    fn a_pi_session_shows_like_an_fx_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("001-builder-T001.rpc.jsonl"),
+            include_str!("../../pi/tests/fixtures/pi-1.1.0-pong.rpc.jsonl"),
+        )
+        .unwrap();
+        let mut session = SessionTail::open(dir.path(), "001-builder-T001");
+        assert_eq!(
+            session.read(Level::Actions).unwrap(),
+            [
+                "  » pong",
+                "    ctx 2.3k · out 17 · think 55 ch",
+                "  ■ settled"
+            ]
+        );
+        // Pi's records that make no event are not shown as unreadable.
+        let mut session = SessionTail::open(dir.path(), "001-builder-T001");
+        let debug = session.read(Level::Debug).unwrap();
+        assert!(debug.contains(&"    turn".to_owned()), "{debug:?}");
+        assert!(!debug.iter().any(|l| l.starts_with("  ?")), "{debug:?}");
     }
 
     #[test]

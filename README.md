@@ -225,8 +225,9 @@ it best; a run takes hours.
    ```
 
    `tenaz watch` follows it session by session instead. Each session's
-   prompt, events and, with fx, the model's reasoning are kept in
-   `.tenaz/private/` (`<label>.prompt.md`, `.rpc.jsonl`, `.thinking.md`).
+   prompt, events (Pi's own records with Pi) and, with fx, the model's
+   reasoning are kept in `.tenaz/private/` (`<label>.prompt.md`,
+   `.rpc.jsonl`, `.thinking.md`).
 
 4. When the run is done (or stopped), turn it into something to review:
 

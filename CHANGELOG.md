@@ -6,6 +6,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `tenaz watch` shows Pi sessions. Pi's stream keeps Pi's own records,
+  which `watch` dropped (or showed raw, marked `?`, at `debug`); it now
+  translates them as the Pi adapter does.
+
 ## [0.1.1] - 2026-10-27
 
 ### Changed

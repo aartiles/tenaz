@@ -129,7 +129,7 @@ Example:
   tenaz watch --project ./my-app --level full
 
 Everything shown is in .tenaz/private/: orchestrator.log and, per session,
-<label>.rpc.jsonl (the events), <label>.prompt.md, <label>.thinking.md (the
+<label>.rpc.jsonl (the events; Pi's own records with Pi), <label>.prompt.md, <label>.thinking.md (the
 reasoning, with fx) and the harness logs.
 ";
 
