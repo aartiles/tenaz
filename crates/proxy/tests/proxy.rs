@@ -231,11 +231,15 @@ async fn holds_requests_while_the_gate_is_closed() {
     );
     gate.open();
     assert_eq!(request.await.unwrap(), 200);
+    // The proxy reports a hold only for a request that met the closed gate.
+    // How long it held depends on when the request reached the proxy, which
+    // on a slow runner can be well into the 100 ms above, so it is not
+    // asserted.
     let events = settle(&events, 2).await;
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, ProxyEvent::Held { ms, .. } if *ms >= 90)),
+            .any(|e| matches!(e, ProxyEvent::Held { request: 1, .. })),
         "{events:?}"
     );
     handle.stop().await;
