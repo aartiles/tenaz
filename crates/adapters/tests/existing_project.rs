@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::notify::SilentNotifier;
 use tenaz_adapters::verify::VerifyProcess;
-use tenaz_core::ledger::{Launch, ModelConfig, Phase};
+use tenaz_core::ledger::{HarnessKind, Launch, ModelConfig, Phase};
 use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
@@ -80,7 +80,7 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
     let options = InitOptions {
         brief: Some(brief),
         config: ModelConfig {
-            harness: "fake".into(),
+            harness: HarnessKind::Fake,
             harness_version: harness.version(),
             model: "fake/fake".into(),
             provider: Some("fake".into()),

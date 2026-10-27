@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::notify::SilentNotifier;
 use tenaz_adapters::verify::VerifyProcess;
-use tenaz_core::ledger::{JournalRecord, ModelConfig};
+use tenaz_core::ledger::{HarnessKind, JournalRecord, ModelConfig};
 use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::ports::Clock;
@@ -56,7 +56,7 @@ fn fake_project(work: &Path) -> (Project, FastClock) {
         params.apply_override(pair).unwrap();
     }
     let config = ModelConfig {
-        harness: "fake".into(),
+        harness: HarnessKind::Fake,
         harness_version: "fake-pi 0.0.1".into(),
         model: "fake/fake".into(),
         provider: Some("fake".into()),

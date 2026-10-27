@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use crate::ledger::Preflight;
+use crate::ledger::{HarnessKind, Preflight};
 use crate::metrics::engine_summary;
 use crate::session::StopReason;
 
@@ -85,7 +85,7 @@ impl Runner {
 }
 
 /// What failed in `preflight`, in words, for the error that stops the run.
-pub(crate) fn failures(harness: &str, preflight: Option<&Preflight>) -> String {
+pub(crate) fn failures(harness: HarnessKind, preflight: Option<&Preflight>) -> String {
     let Some(p) = preflight else {
         return "no result".to_owned();
     };
@@ -212,11 +212,11 @@ mod tests {
             engine: None,
             accepted_weak: false,
         };
-        let text = failures("fx", Some(&p));
+        let text = failures(HarnessKind::Fx, Some(&p));
         assert!(text.contains("with fx's shell tool"), "{text}");
         assert!(!text.contains("cache"), "{text}");
         let old = Preflight { tools: None, ..p };
-        assert_eq!(failures("fx", Some(&old)), "no check failed");
+        assert_eq!(failures(HarnessKind::Fx, Some(&old)), "no check failed");
     }
 
     #[test]

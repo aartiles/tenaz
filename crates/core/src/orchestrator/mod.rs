@@ -326,10 +326,7 @@ impl Runner {
             if !allow_weak_engine {
                 return Err(RunError::Precondition(format!(
                     "Engine preflight failed: {}. Details in .tenaz/run.json \"preflight\" and .tenaz/private/preflight.*; pass --allow-weak-engine to run anyway.",
-                    preflight::failures(
-                        &self.ledger.config.harness,
-                        self.ledger.preflight.as_ref()
-                    )
+                    preflight::failures(self.ledger.config.harness, self.ledger.preflight.as_ref())
                 )));
             }
             if let Some(p) = &mut self.ledger.preflight {

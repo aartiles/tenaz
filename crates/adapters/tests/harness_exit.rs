@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::notify::SilentNotifier;
 use tenaz_adapters::verify::VerifyProcess;
-use tenaz_core::ledger::{BootstrapStep, JournalRecord, ModelConfig, Phase};
+use tenaz_core::ledger::{BootstrapStep, HarnessKind, JournalRecord, ModelConfig, Phase};
 use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
@@ -51,7 +51,7 @@ async fn run_with(
         params.apply_override(pair).unwrap();
     }
     let config = ModelConfig {
-        harness: "fake".into(),
+        harness: HarnessKind::Fake,
         harness_version: "fake-pi 0.0.1".into(),
         model: "fake/fake".into(),
         provider: Some("fake".into()),
