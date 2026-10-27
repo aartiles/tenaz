@@ -8,6 +8,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `verify` runs with `NO_COLOR=1` as well as `CI=1`. `CI` turns colours
+  on in some tools (Vite), so a check that read their output failed under
+  Tenaz and passed in the builder's shell. Escape codes are also left out of
+  failure messages and output tails. The protocol tells builders the
+  environment `verify` runs in.
+
 - `tenaz watch` shows Pi sessions. Pi's stream keeps Pi's own records,
   which `watch` dropped (or showed raw, marked `?`, at `debug`); it now
   translates them as the Pi adapter does.

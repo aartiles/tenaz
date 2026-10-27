@@ -21,7 +21,8 @@ and you do not commit, push, open pull requests or switch branches.
   Do not edit them.
 - The orchestrator runs `./verify` after your session and decides the outcome
   from its result. Make the checks pass; a claim of success counts for
-  nothing.
+  nothing. It runs it with `CI=1 NO_COLOR=1`, without a terminal; run it the
+  same way when a check passes for you and fails for the orchestrator.
 - Check your work with `./verify` (or `./verify --task <ID>`) rather than
   improvised one-off commands. If you need a new kind of check, add it to
   `verify`.

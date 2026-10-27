@@ -40,9 +40,50 @@ pub fn approx_tokens(text: &str) -> usize {
     text.len().div_ceil(4)
 }
 
+/// `text` without terminal escape sequences: colours and other CSI
+/// sequences (`ESC [ … final`), OSC sequences (`ESC ] … BEL` or `ESC \\`)
+/// and two-character escapes.
+pub fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                let _ = chars.find(|c| ('\u{40}'..='\u{7e}').contains(c));
+            }
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_ansi_leaves_the_text() {
+        assert_eq!(
+            strip_ansi("\u{1b}[2m  \u{1b}[32m➜\u{1b}[39m  \u{1b}[1mLocal\u{1b}[22m: http://x"),
+            "  ➜  Local: http://x"
+        );
+        assert_eq!(
+            strip_ansi("\u{1b}]8;;http://a\u{7}link\u{1b}]8;;\u{1b}\\ done\u{1b}7"),
+            "link done"
+        );
+        assert_eq!(strip_ansi("plain ✓"), "plain ✓");
+    }
 
     #[test]
     fn clip_keeps_short_text_and_marks_long_text() {

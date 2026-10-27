@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::util::clip;
+use crate::util::{clip, strip_ansi};
 
 /// One failed check in the report.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,7 +119,21 @@ pub fn interpret(
             summary: "verify does not exist at the project root".to_owned(),
         };
     }
-    let parsed = final_json(&raw.stdout);
+    let stdout = strip_ansi(&raw.stdout);
+    let mut parsed = final_json(&stdout);
+    // A check's message often quotes coloured tool output; the JSON keeps
+    // the escapes as `\u001b`, so they survive parsing.
+    if let Some(failed) = parsed
+        .as_mut()
+        .and_then(|j| j.get_mut("failed"))
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for msg in failed.iter_mut().filter_map(|f| f.get_mut("msg")) {
+            if let Some(text) = msg.as_str() {
+                *msg = strip_ansi(text).into();
+            }
+        }
+    }
     let ok = raw.status == Some(0)
         && parsed
             .as_ref()
@@ -137,8 +151,8 @@ pub fn interpret(
         format!(
             "verify {argv} exited {} without a JSON last line.\nstdout tail:\n{}\nstderr tail:\n{}",
             exit_text(raw.status),
-            tail(&raw.stdout, 2000),
-            tail(&raw.stderr, 1500)
+            tail(&stdout, 2000),
+            tail(&strip_ansi(&raw.stderr), 1500)
         )
     };
     VerifyOutcome {
@@ -282,6 +296,29 @@ mod tests {
             "verify --all exited 2 without a JSON last line.\nstdout tail:\nboom\nstderr tail:\ntrace"
         );
         assert_eq!(text.json, None);
+    }
+
+    #[test]
+    fn colour_codes_are_left_out_of_messages_and_tails() {
+        let stdout = "\u{1b}[32mok\u{1b}[39m\n{\"ok\":false,\"passed\":3,\"failed\":[{\"id\":\"T001.dev-serves\",\"msg\":\"\\u001b[1mNetwork\\u001b[22m: use --host\"}]}\n";
+        let out = interpret(&["--all"], &raw(1, stdout), 120, 4000);
+        assert_eq!(out.report().unwrap().failed[0].msg, "Network: use --host");
+        assert!(!out.summary.contains("\\u001b"), "{}", out.summary);
+        let text = interpret(
+            &["--all"],
+            &RawVerifyOutput {
+                status: Some(1),
+                stdout: "\u{1b}[31mboom\u{1b}[0m".into(),
+                stderr: "\u{1b}[2mtrace\u{1b}[22m".into(),
+                ..Default::default()
+            },
+            120,
+            4000,
+        );
+        assert!(
+            text.summary
+                .ends_with("stdout tail:\nboom\nstderr tail:\ntrace")
+        );
     }
 
     #[test]

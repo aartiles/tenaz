@@ -69,6 +69,10 @@ impl VerifyRunner for VerifyProcess {
             .args(args)
             .current_dir(&self.root)
             .env("CI", "1")
+            // `CI` turns colours on in some tools (picocolors, so Vite);
+            // a check that reads their output would see escape codes the
+            // builder's shell never shows it.
+            .env("NO_COLOR", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -134,7 +138,7 @@ mod tests {
     #[tokio::test]
     async fn runs_verify_with_arguments_and_captures_output() {
         let (_dir, verify) = project(
-            "#!/bin/sh\necho \"args: $* CI=$CI\" >&2\necho progress\necho '{\"ok\":true,\"passed\":1,\"failed\":[]}'\nexit 0\n",
+            "#!/bin/sh\necho \"args: $* CI=$CI NO_COLOR=$NO_COLOR\" >&2\necho progress\necho '{\"ok\":true,\"passed\":1,\"failed\":[]}'\nexit 0\n",
         );
         let raw = verify
             .run(&["--task", "T001"], Duration::from_secs(5))
@@ -144,7 +148,7 @@ mod tests {
             raw.stdout
                 .ends_with("{\"ok\":true,\"passed\":1,\"failed\":[]}\n")
         );
-        assert_eq!(raw.stderr, "args: --task T001 CI=1\n");
+        assert_eq!(raw.stderr, "args: --task T001 CI=1 NO_COLOR=1\n");
         assert!(!raw.timed_out && !raw.missing);
     }
 
