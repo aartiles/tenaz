@@ -6,6 +6,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The package description (shown by `brew info` and on the release) says
+  what Tenaz does now: it drives a local model through a coding agent
+  until the goal passes its checks.
+
 ## [0.1.0] - 2026-10-27
 
 ### Added

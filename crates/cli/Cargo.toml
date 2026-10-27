@@ -7,7 +7,7 @@ publish.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Single-model runner: plans, builds and verifies a goal with one resident local model at a time."
+description = "Drives a local model through a coding agent until the goal passes its checks."
 
 # The workspace does not publish to crates.io, but dist ships this binary.
 [package.metadata.dist]
