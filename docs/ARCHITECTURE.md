@@ -89,8 +89,12 @@ protocol without a model: the adapter's integration tests spawn it.
 
 - Unit tests next to each core module.
 - Adapter conformance tests against fakes or a temporary git repository.
-- One end-to-end test drives the whole loop with a scripted fake harness
-  and a real temporary git repository.
+- Whole runs in `orchestrator/scenarios.rs` drive the loop with the scripted
+  harness, `SnapshotVcs` and `ScriptedVerify`: no git or shell, under a
+  second each (ADR 0005).
+- End-to-end tests in `crates/adapters/tests` drive the whole loop with the
+  scripted harness on a real temporary git repository and the real
+  `verify`; they move to the core one by one.
 - The `tenaz` binary runs the fake harness end to end through the real
   wiring (proxy, git, verify) in `crates/cli/tests/cli.rs`.
 - The Pi adapter runs against the scripted `fake-pi` binary: a tool turn,

@@ -5,6 +5,8 @@ mod init;
 mod phases;
 mod preflight;
 mod sampler;
+#[cfg(test)]
+mod scenarios;
 mod session;
 mod status;
 

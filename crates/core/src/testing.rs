@@ -12,11 +12,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+mod notifier;
 mod replay;
 mod vcs;
 pub mod vcs_contract;
 mod verify;
 
+pub use notifier::SilentNotifier;
 pub use replay::Replay;
 pub use vcs::SnapshotVcs;
 pub use vcs_contract::MakeVcs;
