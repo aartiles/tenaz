@@ -8,13 +8,7 @@ use std::process::{Command, Stdio};
 
 mod common;
 
-/// The binary, kept from the engines and image servers running on this
-/// machine: it looks only where the test points it.
-fn tenaz() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_tenaz"));
-    command.env("TENAZ_NO_PROBE", "1");
-    command
-}
+use common::tenaz;
 
 /// A tiny HTTP server: an OpenAI-compatible model list with two models and
 /// `ComfyUI`'s `/system_stats`. Returns its origin.

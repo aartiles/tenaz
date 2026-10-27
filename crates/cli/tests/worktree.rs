@@ -7,13 +7,12 @@ use std::process::{Command, Output};
 
 mod common;
 
-fn tenaz() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_tenaz"))
-}
+use common::tenaz;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .current_dir(dir)
+        .env("HOME", common::home())
         .args([
             "-c",
             "user.name=Someone",

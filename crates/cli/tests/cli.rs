@@ -1,13 +1,9 @@
 //! The binary end to end with the fake harness: params, init, run (through
 //! the real wiring: proxy, git, verify), status.
 
-use std::process::Command;
-
 mod common;
 
-fn tenaz() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_tenaz"))
-}
+use common::tenaz;
 
 #[test]
 fn params_lists_the_defaults() {
