@@ -98,7 +98,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(not(target_os = "macos"), ignore)]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "reads memory with macOS tools (vm_stat, sysctl)"
+    )]
     async fn reads_a_sample_on_macos() {
         let reading = MacMemoryProbe::new(None).read().await.unwrap();
         assert!(reading.page_bytes >= 4096);
