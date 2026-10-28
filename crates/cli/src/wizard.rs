@@ -10,7 +10,10 @@ use anyhow::bail;
 use tenaz_core::doctor;
 use tenaz_core::ledger::EngineApi;
 
-use crate::commands::init::{HarnessArg, InitArgs, InitPlan};
+use crate::commands::EngineKind;
+use crate::commands::init::{
+    HarnessArg, InitArgs, InitPlan, default_provider, engine_api, guess_api,
+};
 use crate::detect::{self, Engine};
 use crate::worktree;
 
@@ -176,54 +179,38 @@ pub async fn run<R: BufRead, W: Write>(
         Some(v) => v,
         None => p.confirm("Does the model read images?", false)?,
     };
-    let api = args.engine.map_or_else(
-        || {
-            choice.engine.as_ref().map_or_else(
-                || crate::commands::init::guess_api(choice.base_url.as_deref()),
-                |e| e.api,
-            )
-        },
-        crate::commands::EngineKind::api,
-    );
-    let llm_base_url = choice
-        .base_url
-        .clone()
-        .or_else(|| choice.engine.as_ref().map(|e| e.base_url.clone()));
-    let media = ask_media(args, api, llm_base_url.as_deref(), &client, p).await?;
-    let plan = InitPlan {
+    let mut answers = InitArgs {
+        project: Some(project),
         brief: match &goal {
             Goal::File(path) => Some(path.clone()),
             Goal::InProject | Goal::Text(_) => None,
         },
-        harness_bin: match harness {
-            HarnessArg::Fx => args.fx_bin.clone(),
-            HarnessArg::Pi => args.pi_bin.clone(),
-            HarnessArg::Fake => None,
-        },
-        provider: choice
-            .provider
-            .clone()
-            .or_else(|| choice.engine.as_ref().map(|e| e.provider.clone()))
-            .unwrap_or_else(|| "local".to_owned()),
-        project,
-        harness,
-        model,
+        harness: Some(harness),
+        model: Some(model),
+        provider: choice.provider.clone(),
         base_url: choice.base_url.clone(),
         context_window: Some(context_window),
         vision,
-        api,
-        engine_start: media.engine_start,
-        engine_stop: media.engine_stop,
-        comfyui: media.comfyui,
-        workflows: media.workflows,
-        images: media.images,
-        image_model: media.image_model,
-        brief_text: match &goal {
-            Goal::Text(text) => Some(text.clone()),
-            Goal::InProject | Goal::File(_) => None,
-        },
-        args: args.clone(),
+        ..args.clone()
     };
+    // The API the plan will have: the media question depends on it.
+    let api = engine_api(&answers, choice.engine.as_ref());
+    let llm_base_url = choice
+        .base_url
+        .clone()
+        .or_else(|| choice.engine.as_ref().map(|e| e.base_url.clone()));
+    let media = ask_media(&answers, api, llm_base_url.as_deref(), &client, p).await?;
+    answers.engine_start = media.engine_start;
+    answers.engine_stop = media.engine_stop;
+    answers.comfyui = media.comfyui;
+    answers.workflows = media.workflows;
+    answers.images = media.images;
+    answers.image_model = media.image_model;
+    let brief_text = match &goal {
+        Goal::Text(text) => Some(text.clone()),
+        Goal::InProject | Goal::File(_) => None,
+    };
+    let plan = InitPlan::from_args(answers, choice.engine.as_ref(), brief_text)?;
     show(&plan, &goal, choice.engine.as_ref(), p)?;
     if !p.confirm("Create the project?", true)? {
         bail!("Nothing was created.");
@@ -642,7 +629,7 @@ fn show<R: BufRead, W: Write>(
     p.say("")?;
     p.say(&format!("  Project   {}", plan.project.display()))?;
     p.say(&format!("  Goal      {goal_text}"))?;
-    p.say(&format!("  Agent     {}", plan.harness.kind()))?;
+    p.say(&format!("  Agent     {}", plan.harness))?;
     if let Some(engine) = engine {
         p.say(&format!(
             "  Engine    {} at {}",
@@ -663,24 +650,12 @@ fn show<R: BufRead, W: Write>(
         p.say(&format!("  Images    {model} at {url}"))?;
     }
     let flags = InitArgs {
-        project: Some(plan.project.clone()),
         brief: match goal {
             Goal::Text(_) | Goal::InProject => Some(plan.project.join(tenaz_core::project::BRIEF)),
             Goal::File(path) => Some(path.clone()),
         },
-        harness: Some(plan.harness),
-        model: Some(plan.model.clone()),
         provider: Some(plan.provider.clone()),
-        base_url: plan.base_url.clone(),
-        context_window: plan.context_window,
-        vision: plan.vision,
-        engine: Some(crate::commands::EngineKind::from_api(plan.api)),
-        engine_start: plan.engine_start.clone(),
-        engine_stop: plan.engine_stop.clone(),
-        comfyui: plan.comfyui.clone(),
-        workflows: plan.workflows.clone(),
-        images: plan.images.clone(),
-        image_model: plan.image_model.clone(),
+        engine: Some(EngineKind::from_api(plan.api)),
         interactive: false,
         ..plan.args.clone()
     };
@@ -734,14 +709,20 @@ async fn choose_engine<R: BufRead, W: Write>(
             return Ok(Some(engine));
         }
         if p.confirm(&format!("Nothing answers at {url}. Use it anyway?"), false)? {
-            return Ok(Some(Engine {
-                label: "An engine not answering yet".to_owned(),
-                provider: "local".to_owned(),
-                api: crate::commands::init::guess_api(Some(&url)),
-                base_url: url,
-                models: Vec::new(),
-            }));
+            return Ok(Some(unanswered_engine(url)));
         }
+    }
+}
+
+/// The engine at `url`, which does not answer yet: its API and provider
+/// are the ones usual for its address.
+fn unanswered_engine(url: String) -> Engine {
+    Engine {
+        label: "An engine not answering yet".to_owned(),
+        provider: default_provider(None, Some(&url)),
+        api: guess_api(Some(&url)),
+        base_url: url,
+        models: Vec::new(),
     }
 }
 
@@ -816,6 +797,19 @@ mod tests {
         assert!(prompter("\n").confirm("?", true).unwrap());
         assert!(!prompter("maybe\nn\n").confirm("?", true).unwrap());
         assert!(prompter("Y\n").confirm("?", false).unwrap());
+    }
+
+    #[test]
+    fn an_engine_not_answering_yet_is_named_after_its_port() {
+        let engine = unanswered_engine("http://127.0.0.1:8080/v1".to_owned());
+        assert_eq!(
+            (engine.provider.as_str(), engine.api),
+            ("llamacpp", EngineApi::Generic)
+        );
+        assert_eq!(
+            unanswered_engine("http://127.0.0.1:9999/v1".to_owned()).provider,
+            "local"
+        );
     }
 
     #[test]

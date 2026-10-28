@@ -14,7 +14,8 @@ use tenaz_pi::models::ModelEntry;
 use super::{
     EngineKind, absolute, pinned_path, pinned_workflows, runner_version, shell_quote, templates,
 };
-use crate::{detect, wizard, worktree};
+use crate::detect::{self, Engine};
+use crate::{wizard, worktree};
 
 /// Which harness runs the sessions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -135,6 +136,15 @@ pub(crate) struct InitArgs {
 }
 
 impl InitArgs {
+    /// The `--fx-bin` or `--pi-bin` given for `harness`.
+    pub(crate) fn harness_bin(&self, harness: HarnessKind) -> Option<PathBuf> {
+        match harness {
+            HarnessKind::Fx => self.fx_bin.clone(),
+            HarnessKind::Pi => self.pi_bin.clone(),
+            HarnessKind::Fake => None,
+        }
+    }
+
     /// The `tenaz init` command line that gives these answers without questions.
     pub(crate) fn command_line(&self) -> String {
         let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
@@ -209,7 +219,7 @@ fn flag_words<'a>(
 pub(crate) struct InitPlan {
     pub(crate) project: PathBuf,
     pub(crate) brief: Option<PathBuf>,
-    pub(crate) harness: HarnessArg,
+    pub(crate) harness: HarnessKind,
     pub(crate) harness_bin: Option<PathBuf>,
     pub(crate) model: String,
     pub(crate) provider: String,
@@ -230,64 +240,83 @@ pub(crate) struct InitPlan {
     pub(crate) args: InitArgs,
 }
 
-/// The plan from flags alone. The engine API is asked of the engine when
-/// `--engine` does not say.
+impl InitPlan {
+    /// The plan from `args`: the flags, or the wizard's answers written as
+    /// flags. `engine` is the engine that answered at `--base-url`, if one
+    /// did; with `brief_text`, the goal typed in the wizard. What neither
+    /// says has one default: fx, the engine's API and provider, else the
+    /// ones usual for its address.
+    pub(crate) fn from_args(
+        args: InitArgs,
+        engine: Option<&Engine>,
+        brief_text: Option<String>,
+    ) -> anyhow::Result<Self> {
+        let Some(model) = args.model.clone() else {
+            anyhow::bail!(
+                "--model is required when stdin is not a terminal; run tenaz init in a terminal for the setup wizard"
+            );
+        };
+        let Some(project) = args.project.clone() else {
+            anyhow::bail!("--project is required");
+        };
+        let harness = args.harness.map_or(HarnessKind::Fx, HarnessArg::kind);
+        let provider = args
+            .provider
+            .clone()
+            .unwrap_or_else(|| default_provider(engine, args.base_url.as_deref()));
+        Ok(Self {
+            project,
+            brief: args.brief.clone(),
+            harness,
+            harness_bin: args.harness_bin(harness),
+            model,
+            provider,
+            base_url: args.base_url.clone(),
+            context_window: args.context_window,
+            vision: args.vision,
+            api: engine_api(&args, engine),
+            engine_start: args.engine_start.clone(),
+            engine_stop: args.engine_stop.clone(),
+            comfyui: args.comfyui.clone(),
+            workflows: args.workflows.clone(),
+            images: args.images.clone(),
+            image_model: args.image_model.clone(),
+            brief_text,
+            args,
+        })
+    }
+}
+
+/// The engine API: `--engine`, else the API of the `engine` that answered,
+/// else a guess from `--base-url`.
+pub(crate) fn engine_api(args: &InitArgs, engine: Option<&Engine>) -> EngineApi {
+    args.engine.map_or_else(
+        || engine.map_or_else(|| guess_api(args.base_url.as_deref()), |e| e.api),
+        EngineKind::api,
+    )
+}
+
+/// The provider name when `--provider` does not say: the `engine`'s that
+/// answered, else the one usually on `base_url`'s port, else `local`;
+/// `sushi` without an address (Sushi's port is the default one).
+pub(crate) fn default_provider(engine: Option<&Engine>, base_url: Option<&str>) -> String {
+    match (engine, base_url) {
+        (Some(engine), _) => engine.provider.clone(),
+        (None, Some(url)) => detect::provider_by_port(url).unwrap_or("local").to_owned(),
+        (None, None) => "sushi".to_owned(),
+    }
+}
+
+/// The plan from flags alone. The engine at `--base-url` is asked for its
+/// API and provider when the flags do not say them.
 pub(super) async fn plan_from_flags(args: InitArgs) -> anyhow::Result<InitPlan> {
-    let Some(model) = args.model.clone() else {
-        anyhow::bail!(
-            "--model is required when stdin is not a terminal; run tenaz init in a terminal for the setup wizard"
-        );
-    };
-    let Some(project) = args.project.clone() else {
-        anyhow::bail!("--project is required");
-    };
-    let harness = args.harness.unwrap_or(HarnessArg::Fx);
     let detected = match &args.base_url {
         Some(url) if args.engine.is_none() || args.provider.is_none() => {
             detect::engine_at(&detect::client(), url).await
         }
         _ => None,
     };
-    let api = args.engine.map_or_else(
-        || {
-            detected
-                .as_ref()
-                .map_or_else(|| guess_api(args.base_url.as_deref()), |e| e.api)
-        },
-        EngineKind::api,
-    );
-    let provider =
-        args.provider
-            .clone()
-            .unwrap_or_else(|| match (&detected, args.base_url.as_deref()) {
-                (Some(engine), _) => engine.provider.clone(),
-                (None, Some(url)) => detect::provider_by_port(url).unwrap_or("local").to_owned(),
-                (None, None) => "sushi".to_owned(),
-            });
-    Ok(InitPlan {
-        project,
-        brief: args.brief.clone(),
-        harness,
-        harness_bin: match harness {
-            HarnessArg::Fx => args.fx_bin.clone(),
-            HarnessArg::Pi => args.pi_bin.clone(),
-            HarnessArg::Fake => None,
-        },
-        model,
-        provider,
-        base_url: args.base_url.clone(),
-        context_window: args.context_window,
-        vision: args.vision,
-        api,
-        engine_start: args.engine_start.clone(),
-        engine_stop: args.engine_stop.clone(),
-        comfyui: args.comfyui.clone(),
-        workflows: args.workflows.clone(),
-        images: args.images.clone(),
-        image_model: args.image_model.clone(),
-        brief_text: None,
-        args,
-    })
+    InitPlan::from_args(args, detected.as_ref(), None)
 }
 
 /// `tenaz init`: asks for what is missing (without `--model`, in a
@@ -407,7 +436,7 @@ fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
         plan.context_window,
     );
     Ok(ModelConfig {
-        harness: plan.harness.kind(),
+        harness: plan.harness,
         harness_version,
         model: format!("{}/{}", plan.provider, plan.model),
         provider: Some(plan.provider.clone()),
@@ -470,19 +499,19 @@ fn placement_origin(placement: &worktree::Placement) -> Option<tenaz_core::ledge
 /// The harness version to pin and, with Pi, the model's entry in
 /// `~/.pi/agent/models.json` when that file lists it.
 fn pin_harness(
-    harness: HarnessArg,
+    harness: HarnessKind,
     bin: Option<&Path>,
     provider: &str,
     model: &str,
 ) -> anyhow::Result<(String, Option<ModelEntry>)> {
-    let bin = bin.unwrap_or_else(|| Path::new(harness.kind().as_str()));
+    let bin = bin.unwrap_or_else(|| Path::new(harness.as_str()));
     Ok(match harness {
-        HarnessArg::Fx => (
+        HarnessKind::Fx => (
             tenaz_acp::fx::fx_version(bin)
                 .with_context(|| format!("cannot run {} --version", bin.display()))?,
             None,
         ),
-        HarnessArg::Pi => {
+        HarnessKind::Pi => {
             let entry = match tenaz_pi::models::default_models_path() {
                 Some(path) => tenaz_pi::models::model_entry(&path, provider, model)?,
                 None => None,
@@ -493,7 +522,7 @@ fn pin_harness(
                 entry,
             )
         }
-        HarnessArg::Fake => (
+        HarnessKind::Fake => (
             tenaz_core::testing::ScriptedHarness::default().version(),
             None,
         ),
@@ -621,5 +650,98 @@ mod tests {
             "--in-place",
         ]);
         assert_eq!(args.command_line(), "tenaz init --model m --in-place");
+    }
+
+    fn plan(line: &[&str], engine: Option<&Engine>) -> InitPlan {
+        InitPlan::from_args(init_args(line), engine, None).unwrap()
+    }
+
+    const BASE: [&str; 6] = ["tenaz", "init", "--project", "p", "--model", "m"];
+
+    fn with(extra: &[&'static str]) -> Vec<&'static str> {
+        BASE.iter().chain(extra).copied().collect()
+    }
+
+    /// LM Studio, answering on a port no engine usually uses, with the
+    /// load API (the guess for that port would be generic).
+    fn lm_studio() -> Engine {
+        Engine {
+            label: "LM Studio".to_owned(),
+            provider: "lmstudio".to_owned(),
+            base_url: "http://127.0.0.1:9999/v1".to_owned(),
+            api: EngineApi::LoadApi,
+            models: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_provider_and_api_are_the_ones_of_the_engine_that_answered() {
+        let line = with(&["--base-url", "http://127.0.0.1:9999/v1"]);
+        let got = plan(&line, Some(&lm_studio()));
+        assert_eq!(
+            (got.provider.as_str(), got.api),
+            ("lmstudio", EngineApi::LoadApi)
+        );
+    }
+
+    #[test]
+    fn without_an_engine_the_provider_is_the_one_usual_on_the_port() {
+        let line = with(&["--base-url", "http://127.0.0.1:8080/v1"]);
+        assert_eq!(plan(&line, None).provider, "llamacpp");
+        let line = with(&["--base-url", "http://127.0.0.1:9999/v1"]);
+        assert_eq!(plan(&line, None).provider, "local");
+        assert_eq!(plan(&BASE, None).provider, "sushi");
+    }
+
+    #[test]
+    fn a_given_provider_and_engine_api_win_over_the_engine() {
+        let line = with(&["--provider", "mine", "--engine", "generic"]);
+        let got = plan(&line, Some(&lm_studio()));
+        assert_eq!(
+            (got.provider.as_str(), got.api),
+            ("mine", EngineApi::Generic)
+        );
+    }
+
+    #[test]
+    fn the_harness_is_fx_unless_given_and_keeps_only_its_own_binary() {
+        let line = with(&["--fx-bin", "/opt/fx", "--pi-bin", "/opt/pi"]);
+        let fx = plan(&line, None);
+        assert_eq!(
+            (fx.harness, fx.harness_bin),
+            (HarnessKind::Fx, Some(PathBuf::from("/opt/fx")))
+        );
+        let line = with(&[
+            "--harness",
+            "pi",
+            "--fx-bin",
+            "/opt/fx",
+            "--pi-bin",
+            "/opt/pi",
+        ]);
+        let pi = plan(&line, None);
+        assert_eq!(
+            (pi.harness, pi.harness_bin),
+            (HarnessKind::Pi, Some(PathBuf::from("/opt/pi")))
+        );
+    }
+
+    #[test]
+    fn the_fake_harness_has_no_binary() {
+        let line = with(&["--harness", "fake", "--fx-bin", "/opt/fx"]);
+        let fake = plan(&line, None);
+        assert_eq!((fake.harness, fake.harness_bin), (HarnessKind::Fake, None));
+    }
+
+    #[test]
+    fn a_plan_needs_a_model_and_a_project() {
+        let error = |line: &[&str]| {
+            InitPlan::from_args(init_args(line), None, None)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default()
+        };
+        assert!(error(&["tenaz", "init", "--project", "p"]).contains("--model"));
+        assert!(error(&["tenaz", "init", "--model", "m"]).contains("--project"));
     }
 }

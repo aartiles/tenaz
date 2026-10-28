@@ -56,6 +56,14 @@ uses [Semantic Versioning](https://semver.org/).
   which `watch` dropped (or showed raw, marked `?`, at `debug`); it now
   translates them as the Pi adapter does.
 
+- The setup wizard names the provider as `tenaz init` with flags does. For
+  an engine address that does not answer yet, it pinned `local`; the flags
+  pinned the provider usual on that port (`llamacpp` on 8080, `ollama` on
+  11434, ...). Both now take that one, and `local` only for another port.
+  The provider is part of `model` in `run.json` (`provider/id`), and the
+  wizard's advice on the context window now names that engine (Ollama's
+  context setting for an address on 11434).
+
 ## [0.1.1] - 2026-10-27
 
 ### Changed
