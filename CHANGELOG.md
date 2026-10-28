@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-28
+
 ### Added
 
 - `capacityRetryWaitSec` (10 by default): the pause before a session is
@@ -42,8 +44,9 @@ uses [Semantic Versioning](https://semver.org/).
   stopped there because the engine gave out) runs `verify` on that
   attempt again when it resumes and, if it still passes, reviews it
   again. It counted the attempt and built the task again, and a pause in
-  the review of the last allowed attempt split the task. The Digger 3D run of 2026-10-27 was paused this
-  way during the review of T012ba's attempt 2.
+  the review of the last allowed attempt split the task. The Digger 3D run
+  of 2026-10-27 was paused this way during the review of T012ba's attempt
+  2.
 
 - A session stopped at its second context compaction is continued by a
   fresh session, like one stopped at its context budget, and no longer
