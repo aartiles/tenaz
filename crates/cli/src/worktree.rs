@@ -246,7 +246,7 @@ fn existing_repo(dir: &Path) -> anyhow::Result<Option<GitRepo>> {
              to make this directory a repository of its own as before.",
             dir.display(),
             top.display(),
-            crate::shell_quote(&top.display().to_string())
+            crate::commands::shell_quote(&top.display().to_string())
         );
     }
     Ok(repo)
@@ -271,7 +271,7 @@ pub fn place(
         bail!(
             "{} already has a Tenaz run (.tenaz/run.json); tenaz run --project {} continues it",
             dir.display(),
-            crate::shell_quote(&dir.display().to_string())
+            crate::commands::shell_quote(&dir.display().to_string())
         );
     }
     let repo = if request.in_place {
@@ -439,7 +439,7 @@ pub fn runs_elsewhere(dir: &Path) -> Vec<String> {
                 "A Tenaz run works in the worktree {} (branch {}): --project {}",
                 w.path.display(),
                 w.branch.unwrap_or_default(),
-                crate::shell_quote(&w.path.display().to_string())
+                crate::commands::shell_quote(&w.path.display().to_string())
             )
         })
         .collect()

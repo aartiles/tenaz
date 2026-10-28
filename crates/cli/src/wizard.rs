@@ -10,8 +10,9 @@ use anyhow::bail;
 use tenaz_core::doctor;
 use tenaz_core::ledger::EngineApi;
 
+use crate::commands::init::{HarnessArg, InitArgs, InitPlan};
 use crate::detect::{self, Engine};
-use crate::{HarnessArg, InitArgs, InitPlan, worktree};
+use crate::worktree;
 
 /// Numbered choices, free text and yes/no over a line-based terminal.
 pub struct Prompter<R, W> {
@@ -177,12 +178,12 @@ pub async fn run<R: BufRead, W: Write>(
     };
     let api = args.engine.map_or_else(
         || {
-            choice
-                .engine
-                .as_ref()
-                .map_or_else(|| crate::guess_api(choice.base_url.as_deref()), |e| e.api)
+            choice.engine.as_ref().map_or_else(
+                || crate::commands::init::guess_api(choice.base_url.as_deref()),
+                |e| e.api,
+            )
         },
-        crate::EngineKind::api,
+        crate::commands::EngineKind::api,
     );
     let llm_base_url = choice
         .base_url
@@ -266,7 +267,7 @@ fn ask_placement<R: BufRead, W: Write>(
         name: args.name.clone(),
     };
     let placement = worktree::place(
-        &crate::absolute(project.to_path_buf()),
+        &crate::commands::absolute(project.to_path_buf()),
         &request,
         brief.as_deref(),
         match goal {
@@ -673,7 +674,7 @@ fn show<R: BufRead, W: Write>(
         base_url: plan.base_url.clone(),
         context_window: plan.context_window,
         vision: plan.vision,
-        engine: Some(crate::EngineKind::from_api(plan.api)),
+        engine: Some(crate::commands::EngineKind::from_api(plan.api)),
         engine_start: plan.engine_start.clone(),
         engine_stop: plan.engine_stop.clone(),
         comfyui: plan.comfyui.clone(),
@@ -736,7 +737,7 @@ async fn choose_engine<R: BufRead, W: Write>(
             return Ok(Some(Engine {
                 label: "An engine not answering yet".to_owned(),
                 provider: "local".to_owned(),
-                api: crate::guess_api(Some(&url)),
+                api: crate::commands::init::guess_api(Some(&url)),
                 base_url: url,
                 models: Vec::new(),
             }));
