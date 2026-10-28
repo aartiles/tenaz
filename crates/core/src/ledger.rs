@@ -521,6 +521,10 @@ pub struct SessionRecord {
     pub turns: u32,
     pub tool_calls: u32,
     pub writes: u32,
+    /// Files the write tools named outside the project, in a run without
+    /// the sandbox (ADR 0008).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outside_writes: Vec<String>,
     pub usage: Usage,
     pub reasoning_chars: usize,
     pub context_peak: u64,

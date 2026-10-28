@@ -99,6 +99,7 @@ fn deps(harness: ScriptedHarness, root: &Path, verify_path: &str) -> Deps {
         memory: None,
         effort: None,
         cache_report: None,
+        write_scope: None,
     }
 }
 

@@ -6,6 +6,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Without the sandbox, a write tool that names a file outside the project,
+  the temporary directories and `sandboxAllowWrite` is noted: a line in
+  `orchestrator.log`, `outside_writes` and an `outside-write` watchdog
+  event in the session's journal record, and one steer telling the session
+  its files belong in the project. A bootstrap step that is not accepted
+  says where the files went. The write is not stopped, and shell commands
+  are not checked. See ADR 0008.
+
 ### Fixed
 
 - The preflight no longer fails an engine that does not report cached

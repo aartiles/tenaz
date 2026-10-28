@@ -249,6 +249,10 @@ pub struct SessionMetrics {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_tool_error: Option<String>,
     pub writes: u32,
+    /// Files the write tools named outside the project, the temporary
+    /// directories and `sandboxAllowWrite`, resolved, each once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outside_writes: Vec<String>,
     pub capacity_limits: Vec<u64>,
     pub big_outputs: u32,
     pub image_refusal: Option<String>,

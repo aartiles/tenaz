@@ -25,3 +25,4 @@ pub mod testing;
 pub mod util;
 pub mod verify;
 pub mod watchdog;
+pub mod write_scope;

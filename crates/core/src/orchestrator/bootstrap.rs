@@ -43,6 +43,16 @@ pub(crate) fn diagnose(
     if !reverted.is_empty() {
         problems.push(reverted_note(Role::Bootstrap, reverted));
     }
+    // A file written outside the project is a file the validation finds
+    // missing: say where it went, so the next session (and whoever reads
+    // the block) knows the files were written, only in the wrong place.
+    if !metrics.outside_writes.is_empty() {
+        problems.push(format!(
+            "the session wrote files outside the project, where the orchestrator does not \
+             look: {}; write them in the project, at the paths named here",
+            metrics.outside_writes.join(", ")
+        ));
+    }
     problems.extend(errors);
     problems
 }
@@ -261,6 +271,26 @@ mod tests {
                 ERROR.to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn files_written_outside_the_project_are_named_after_reverts_and_before_errors() {
+        let metrics = SessionMetrics {
+            outside_writes: vec![
+                "/work/.tenaz/spec.md".to_owned(),
+                "/home/me/.tenaz/map.md".to_owned(),
+            ],
+            ..SessionMetrics::default()
+        };
+        let problems = diagnose(errors(), &metrics, &reverted());
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert_eq!(problems[0], reverted_note(Role::Bootstrap, &reverted()));
+        assert!(
+            problems[1].contains("outside the project")
+                && problems[1].contains("/work/.tenaz/spec.md, /home/me/.tenaz/map.md"),
+            "{problems:?}"
+        );
+        assert_eq!(problems[2], ERROR);
     }
 
     #[test]

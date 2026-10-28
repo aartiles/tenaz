@@ -18,6 +18,7 @@ use crate::params::RunParams;
 use crate::ports::{Clock, Harness};
 use crate::project::Project;
 use crate::testing::{ScriptedHarness, ScriptedVerify, SilentNotifier, SnapshotVcs, VirtualClock};
+use crate::write_scope::WriteScope;
 
 /// A project set up with `overrides`, and the repository it was set up in:
 /// the snapshots live in memory, so the run must use the same one.
@@ -77,6 +78,7 @@ fn deps(
         memory: None,
         effort: None,
         cache_report: None,
+        write_scope: Some(WriteScope::new(project.root(), None, Vec::new())),
     }
 }
 

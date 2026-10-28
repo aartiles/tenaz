@@ -7,7 +7,8 @@
 //! whose reply was cut at the output limit while the model reasoned (fx
 //! exits on `OutputTruncated`): the next session runs at a lower effort.
 //! The bootstrap runs in steps, and a step that fails is retried with the
-//! files the earlier session left.
+//! files the earlier session left, or told where it wrote them when that was
+//! outside the project.
 
 use std::sync::Arc;
 
@@ -15,10 +16,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project};
 use crate::effort::EffortDial;
-use crate::ledger::{BootstrapStep, JournalRecord, Phase};
+use crate::ledger::{BootstrapStep, JournalEntry, JournalRecord, Phase, SessionRecord};
 use crate::orchestrator::Deps;
 use crate::project::Project;
-use crate::testing::{ScriptedHarness, VirtualClock};
+use crate::testing::{OUTSIDE, ScriptedHarness, VirtualClock};
 
 /// Runs the fake goal to the end with `harness` and `maxAttempts`; the
 /// project and its log.
@@ -719,4 +720,64 @@ async fn the_write_in_the_reply_that_crosses_the_context_stop_lands() {
         log.contains("stopped at its context budget; a fresh session continues"),
         "{log}"
     );
+}
+
+/// The bootstrap sessions of `journal`, in order.
+fn bootstrap_sessions(journal: &[JournalEntry]) -> Vec<&SessionRecord> {
+    journal
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-bootstrap") => Some(s),
+            _ => None,
+        })
+        .collect()
+}
+
+/// LFM3-VL-2B on 2026-10-28 wrote the spec and map to the parent
+/// repository's `.tenaz/` and to `~/.tenaz/`, and nothing said so.
+#[tokio::test(start_paused = true)]
+async fn a_bootstrap_that_writes_outside_the_project_is_told_where_its_files_went() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            outside_bootstrap: true,
+            ..Default::default()
+        },
+        2,
+    )
+    .await;
+    let spec = format!("{OUTSIDE}/.tenaz/spec.md");
+    let map = format!("{OUTSIDE}/.tenaz/map.md");
+    let journal = project.journal();
+    let sessions = bootstrap_sessions(&journal);
+    let [first, retry, ..] = sessions.as_slice() else {
+        panic!("two bootstrap sessions at least: {log}");
+    };
+    assert_eq!(first.outside_writes, [spec.clone(), map.clone()]);
+    assert!(
+        first
+            .watchdog
+            .iter()
+            .any(|e| e.kind == "steer:outside-write"),
+        "{:?}",
+        first.watchdog
+    );
+    for path in [&spec, &map] {
+        let line = format!("{}: wrote outside the project: {path}", first.label);
+        assert!(log.contains(&line), "{log}");
+    }
+    let problems = journal
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::BootstrapValidation { errors, .. } if !errors.is_empty() => {
+                Some(errors.clone())
+            }
+            _ => None,
+        })
+        .expect("the first bootstrap step is not accepted");
+    let note = format!("{spec}, {map}");
+    assert!(problems[0].contains(&note), "{problems:?}");
+    let prompt = project
+        .read(&format!(".tenaz/private/{}.prompt.md", retry.label))
+        .expect("the retry's prompt is kept");
+    assert!(prompt.contains(&note), "{prompt}");
 }

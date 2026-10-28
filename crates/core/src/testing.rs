@@ -18,7 +18,7 @@ mod verify;
 pub use clock::VirtualClock;
 pub use harness::ScriptedHarness;
 pub use notifier::SilentNotifier;
-pub use player::VERIFY;
+pub use player::{OUTSIDE, VERIFY};
 pub use replay::Replay;
 pub use vcs::SnapshotVcs;
 pub use vcs_contract::MakeVcs;

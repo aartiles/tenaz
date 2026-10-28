@@ -50,6 +50,9 @@ pub struct Deps {
     pub effort: Option<crate::effort::EffortDial>,
     /// What the engine proxy saw of the engine's cached-token counts; `None` without a proxy.
     pub cache_report: Option<crate::cache_report::CacheReport>,
+    /// Where sessions may write, checked in a run without the sandbox
+    /// (ADR 0008); `None` checks nothing.
+    pub write_scope: Option<crate::write_scope::WriteScope>,
 }
 
 impl std::fmt::Debug for Deps {
