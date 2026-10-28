@@ -91,6 +91,16 @@ pub fn judge_attempt(
     })
 }
 
+/// An attempt's `failure` (see `judge_attempt`) after the orchestrator
+/// stopped its session: why it was `stopped` comes first, so the next
+/// attempt knows the session did not end on its own.
+pub fn with_stop_reason(failure: Option<String>, stopped: Option<&str>) -> Option<String> {
+    failure.map(|failure| match stopped {
+        Some(stopped) => format!("The session was stopped: {stopped}.\n{failure}"),
+        None => failure,
+    })
+}
+
 impl VerifyOutcome {
     /// The number of passed checks, 0 without a report.
     pub fn passed(&self) -> u64 {
@@ -280,6 +290,27 @@ mod tests {
                 "own {own:?}, floor {floor:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_stopped_session_s_failure_says_why_it_was_stopped_first() {
+        assert_eq!(
+            with_stop_reason(Some("verify fails".to_owned()), Some("loop")).as_deref(),
+            Some("The session was stopped: loop.\nverify fails")
+        );
+    }
+
+    #[test]
+    fn a_failure_of_a_session_that_was_not_stopped_is_kept() {
+        assert_eq!(
+            with_stop_reason(Some("verify fails".to_owned()), None).as_deref(),
+            Some("verify fails")
+        );
+    }
+
+    #[test]
+    fn a_stopped_session_whose_work_passes_has_no_failure() {
+        assert_eq!(with_stop_reason(None, Some("loop")), None);
     }
 
     #[test]

@@ -114,7 +114,7 @@ impl Sampler {
 mod tests {
     use super::*;
     use crate::memory::MemoryReading;
-    use crate::testing::{FastClock, Replay};
+    use crate::testing::{Replay, VirtualClock};
 
     fn reading(swapins: u64, server_mem_gib: f64) -> MemoryReading {
         MemoryReading {
@@ -125,13 +125,13 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_session_window_holds_what_happened_during_the_session() {
         let dir = tempfile::tempdir().unwrap();
         let project = Project::new(dir.path());
         let sampler = Sampler::new(
             Arc::new(Replay::new([reading(10, 20.0), reading(14, 30.0)])),
-            Arc::new(FastClock::new(100)),
+            Arc::new(VirtualClock::new()),
             project.clone(),
             Duration::from_secs(30),
         );

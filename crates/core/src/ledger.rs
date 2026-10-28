@@ -258,6 +258,11 @@ pub struct CurrentTask {
     pub failure: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stopped: Vec<StoppedAttempt>,
+    /// The attempt whose passed work is being reviewed. Set until the
+    /// review ends, so a run stopped during it (a pause, an engine that
+    /// gave out) reviews that attempt again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_review: Option<u32>,
 }
 
 /// The session running right now.

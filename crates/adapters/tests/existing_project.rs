@@ -6,13 +6,14 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
+use tenaz_adapters::clock::SystemClock;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::ledger::{HarnessKind, JournalRecord, Launch, ModelConfig, Phase, TaskOutcome};
 use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
-use tenaz_core::testing::{FastClock, ScriptedHarness, SilentNotifier};
+use tenaz_core::testing::{ScriptedHarness, SilentNotifier};
 use tokio_util::sync::CancellationToken;
 
 const OWN: [(&str, &str); 5] = [
@@ -68,6 +69,22 @@ fn assert_after_the_run(project: &Project) {
     assert_eq!(project.brief().unwrap(), "# Goal\n\nAdd a flag.\n");
 }
 
+/// Two attempts per task and a replan every two tasks, with no wait the
+/// run would spend in real time: it runs on the system clock.
+fn params() -> RunParams {
+    let mut params = RunParams::default();
+    for pair in [
+        "maxAttempts=2",
+        "replanEvery=2",
+        "engineRetryBaseSec=0",
+        "capacityRetryWaitSec=0",
+        "notify=false",
+    ] {
+        params.apply_override(pair).unwrap();
+    }
+    params
+}
+
 #[tokio::test]
 async fn a_run_in_an_existing_project_stays_under_tenaz() {
     let work = tempfile::tempdir().unwrap();
@@ -86,18 +103,10 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
     let project = Project::new(&root);
     let templates =
         Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();
-    let mut params = RunParams::default();
-    for pair in [
-        "maxAttempts=2",
-        "replanEvery=2",
-        "engineRetryBaseSec=0",
-        "notify=false",
-    ] {
-        params.apply_override(pair).unwrap();
-    }
+    let params = params();
     let harness = ScriptedHarness {
         verify_path: Some(".tenaz/verify".into()),
-        ..Default::default()
+        ..ScriptedHarness::every_recovery()
     };
     let options = InitOptions {
         brief: Some(brief),
@@ -120,7 +129,7 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
     let ledger = init(
         &project,
         &GitRepo::new(&root),
-        &FastClock::new(1),
+        &SystemClock::new(),
         &templates,
         options,
     )
@@ -144,7 +153,7 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
         harness: Arc::new(harness),
         vcs: Arc::new(GitRepo::new(&root)),
         verify: Arc::new(VerifyProcess::new(&root).at(ledger.params.verify_path())),
-        clock: Arc::new(FastClock::new(100)),
+        clock: Arc::new(SystemClock::new()),
         notifier: Arc::new(SilentNotifier),
         engine: None,
         lease: None,

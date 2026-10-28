@@ -11,7 +11,7 @@ use crate::session::SessionMetrics;
 /// Why a fresh session continues the same work.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Continuation {
-    /// The session stopped at its context budget.
+    /// The session ran out of context: its budget, or a second compaction.
     Context,
     /// The engine refused an image the session read.
     Image(String),

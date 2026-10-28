@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-28
+
 ### Added
 
 - `capacityRetryWaitSec` (10 by default): the pause before a session is
@@ -26,7 +28,32 @@ uses [Semantic Versioning](https://semver.org/).
   workflow. Check one with
   `gh attestation verify <archive> --repo aartiles/tenaz`.
 
+### Changed
+
+- The sessions that write task cards (the bootstrap's task-cards step,
+  split and replan) are told the builders' context budget in tokens, with
+  a rule: what a builder reads and writes for a card fits in about two
+  thirds of it, at roughly 4 characters per token, and a card over that is
+  split before it is written. The prompts only said "context-limited
+  sessions": in the Digger 3D run of 2026-10-27 a card that needed eight
+  modules read was split twice, and builders ended past the budget.
+
 ### Fixed
+
+- A run paused during the review of an attempt that passed `verify` (or
+  stopped there because the engine gave out) runs `verify` on that
+  attempt again when it resumes and, if it still passes, reviews it
+  again. It counted the attempt and built the task again, and a pause in
+  the review of the last allowed attempt split the task. The Digger 3D run
+  of 2026-10-27 was paused this way during the review of T012ba's attempt
+  2.
+
+- A session stopped at its second context compaction is continued by a
+  fresh session, like one stopped at its context budget, and no longer
+  counts as a failed attempt. Both mean the context ran out; in the Digger
+  3D run of 2026-10-27 the compaction stop charged T012ba an attempt.
+  An attempt that uses up its continuations this way is split, as one
+  stopped at its budget is (`contextSplit`).
 
 - A session stopped at its context budget keeps the work of the reply that
   crossed it. The stop came at the reply's end, before its tool calls ran,
@@ -60,6 +87,14 @@ uses [Semantic Versioning](https://semver.org/).
 - `tenaz watch` shows Pi sessions. Pi's stream keeps Pi's own records,
   which `watch` dropped (or showed raw, marked `?`, at `debug`); it now
   translates them as the Pi adapter does.
+
+- The setup wizard names the provider as `tenaz init` with flags does. For
+  an engine address that does not answer yet, it pinned `local`; the flags
+  pinned the provider usual on that port (`llamacpp` on 8080, `ollama` on
+  11434, ...). Both now take that one, and `local` only for another port.
+  The provider is part of `model` in `run.json` (`provider/id`), and the
+  wizard's advice on the context window now names that engine (Ollama's
+  context setting for an address on 11434).
 
 ## [0.1.1] - 2026-10-27
 

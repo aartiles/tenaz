@@ -45,11 +45,13 @@ Pure modules, each unit-tested without I/O:
 `Session`, `Vcs`, `VerifyRunner`, `Clock`, `Notifier`, `MemoryProbe`,
 `EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
-holds the scripted harness that plays a fixed session script, a fast
-clock, and `Replay`, which answers for the memory probe and the engine
-counters with readings a test gives it, `ScriptedVerify`, which judges
-the scripted harness's checks without a shell, and `SnapshotVcs`, a
-repository kept as snapshots in memory; `vcs_contract_tests!` holds it and
+holds the scripted harness, which plays the happy path of a small goal
+with each recovery opt-in (`every_recovery` is what `tenaz demo` plays),
+`VirtualClock`, which runs on tokio's paused time (ADR 0006), `Replay`,
+which answers for the memory probe and the engine counters with readings
+a test gives it, `ScriptedVerify`, which judges the scripted harness's
+checks without a shell, and `SnapshotVcs`, a repository kept as snapshots
+in memory; `vcs_contract_tests!` holds it and
 `GitRepo` to the same checks (ADR 0005). They serve the core's own tests
 and the crates above it.
 `orchestrator` is the application service: phases (bootstrap in three
@@ -59,6 +61,12 @@ the session wrapper with engine retries, capacity caps and continuations
 what a failed bootstrap attempt tells the next one and whether it counts
 (the pure `orchestrator::bootstrap`),
 the task attempt loop with review, split and block, and pause and resume.
+Each phase has a module under `orchestrator/phases/` (`bootstrap`, `task`,
+`review`, `planner` for split and replan, `task_loop`, `final_review`);
+`phases.rs` keeps what they share, the `verify` call and the briefing.
+`orchestrator/session.rs` is the wrapper; one session, start to journal
+record, is `session/record.rs`, the harness run `session/harness.rs`, and
+its requests `session/requests.rs`.
 
 State lives on disk under `.tenaz/` in the project, so a run survives the
 process and the user's existing tooling (`jq` over the journal, `git log`)
@@ -94,10 +102,15 @@ protocol without a model: the adapter's integration tests spawn it.
 - Adapter conformance tests against fakes or a temporary git repository.
 - Whole runs in `orchestrator/scenarios.rs` and `orchestrator/scenarios/`
   drive the loop with the scripted harness, `SnapshotVcs` and
-  `ScriptedVerify`: no git or shell, under a second each (ADR 0005).
+  `ScriptedVerify`: no git or shell (ADR 0005).
+  They run with tokio's time paused (`start_paused = true`) on
+  `VirtualClock`, so waits take no real time and timers fire in the order
+  of their deadlines (ADR 0006).
 - `crates/adapters/tests/existing_project.rs` is the one whole run kept on
   a real git repository and the real `verify` (ADR 0005), so the adapters
-  are exercised together.
+  are exercised together. It runs in real time on `SystemClock`, with no
+  engine or capacity wait; its other recoveries end on events, not
+  timers.
 - The `tenaz` binary runs the fake harness end to end through the real
   wiring (proxy, git, verify) in `crates/cli/tests/cli.rs`.
 - The Pi adapter runs against the scripted `fake-pi` binary: a tool turn,
