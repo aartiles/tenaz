@@ -146,6 +146,32 @@ pub const EXISTING_PROJECT: &str = "This project already has code, conventions a
 - `T000.` checks are the project's existing tests: they must pass now and keep passing.
 - Plan as many tasks as the change needs, even one; the 6 to 40 range does not apply.";
 
+/// The title of the section that sizes cards to the builders' context budget.
+pub const CARD_SIZING_TITLE: &str = "Builder context budget";
+
+/// The share of a builder's budget a card's reading and writing may take,
+/// as a fraction: the rest is the session's own turns and replies.
+const CARD_SHARE: (u64, u64) = (2, 3);
+
+/// Characters per token, roughly, for source code and prose.
+const CHARS_PER_TOKEN: u64 = 4;
+
+/// The body of that section, for the planner sessions that write cards. A
+/// builder that reads more than about two thirds of its budget is steered
+/// to wrap up, then stopped, before it has written the work.
+pub fn card_sizing(budget_tokens: u64) -> String {
+    let fits = budget_tokens * CARD_SHARE.0 / CARD_SHARE.1;
+    let chars = fits * CHARS_PER_TOKEN;
+    format!(
+        "Each builder session has a context budget of {budget_tokens} tokens; past it the session is told to wrap up, and soon after it is stopped. \
+         Size every card so that what its builder must read and write fits in about two thirds of that, \
+         {fits} tokens: the files in its `files`, the code those files call, and its check. \
+         At roughly {CHARS_PER_TOKEN} characters per token that is about {chars} characters. \
+         Estimate this for each card before you write it, and split a card that is over it into smaller cards \
+         before writing them."
+    )
+}
+
 /// The note a fresh session gets when it continues work stopped at the context budget.
 pub const CONTINUATION: &str = "## Continuation\n\nAn earlier session on this same work was stopped because its context grew past the budget. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Do not reread large files whole. The repository map is `.tenaz/map.md`, if you need it.";
 
@@ -184,6 +210,15 @@ pub fn dependency_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The budget of a 65,536-token window at the default 65%.
+    #[test]
+    fn card_sizing_gives_two_thirds_of_the_budget_in_tokens_and_characters() {
+        let text = card_sizing(42_598);
+        assert!(text.contains("budget of 42598 tokens"), "{text}");
+        assert!(text.contains("28398 tokens"), "{text}");
+        assert!(text.contains("113592 characters"), "{text}");
+    }
 
     #[test]
     fn changed_images_lists_added_and_modified_images_only() {

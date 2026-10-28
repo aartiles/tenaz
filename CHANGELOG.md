@@ -26,6 +26,16 @@ uses [Semantic Versioning](https://semver.org/).
   workflow. Check one with
   `gh attestation verify <archive> --repo aartiles/tenaz`.
 
+### Changed
+
+- The sessions that write task cards (the bootstrap's task-cards step,
+  split and replan) are told the builders' context budget in tokens, with
+  a rule: what a builder reads and writes for a card fits in about two
+  thirds of it, at roughly 4 characters per token, and a card over that is
+  split before it is written. The prompts only said "context-limited
+  sessions": in the Digger 3D run of 2026-10-27 a card that needed eight
+  modules read was split twice, and builders ended past the budget.
+
 ### Fixed
 
 - A session stopped at its context budget keeps the work of the reply that

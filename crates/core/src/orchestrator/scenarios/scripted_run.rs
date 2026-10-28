@@ -338,6 +338,34 @@ async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
     );
 }
 
+/// Every session that writes cards is told the builders' context budget:
+/// the bootstrap's task-cards step, the split and the replan.
+#[tokio::test(start_paused = true)]
+async fn the_sessions_that_write_cards_are_told_the_builder_budget() {
+    let run = Played::with(ScriptedHarness {
+        stepwise_bootstrap: true,
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    })
+    .await;
+    // 65% of the fake model's 131,072-token window.
+    let sizing = crate::briefing::card_sizing(85_196);
+    let bootstraps = run.prompts("bootstrap");
+    let (cards, others): (Vec<_>, Vec<_>) = bootstraps.iter().partition(|p| p.contains("Step: 3"));
+    assert!(!cards.is_empty() && !others.is_empty(), "{}", run.log);
+    let told = |p: &&String| p.contains(&sizing);
+    assert!(cards.iter().all(told), "a task-cards step lacks the budget");
+    assert!(!others.iter().any(told), "an earlier step has the budget");
+    for planner in ["split-T003", "replan"] {
+        let prompts = run.prompts(planner);
+        assert!(!prompts.is_empty(), "no {planner} session:\n{}", run.log);
+        assert!(
+            prompts.iter().all(|p| told(&p)),
+            "{planner} lacks the budget"
+        );
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn the_backlog_is_replanned_and_the_brief_kept() {
     let run = Played::with(ScriptedHarness {

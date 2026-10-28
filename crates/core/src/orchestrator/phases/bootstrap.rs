@@ -133,7 +133,7 @@ impl Runner {
     }
 
     /// The bootstrap session's prompt for `step`: the brief, what the
-    /// previous attempt got wrong and left, and the files of step 1.
+    /// previous attempt got wrong and left, and what its step builds on.
     fn bootstrap_prompt(&self, step: BootstrapStep) -> Result<String, RunError> {
         let mut extra = vec![(format!("Original brief ({BRIEF})"), self.project.brief()?)];
         if self.params.existing_project == Some(true) {
@@ -143,16 +143,7 @@ impl Runner {
             ));
         }
         extra.extend(self.bootstrap_retry_notes()?);
-        if step != BootstrapStep::Spec {
-            for (title, path) in [
-                ("Spec", ".tenaz/spec.md"),
-                ("Repository map", ".tenaz/map.md"),
-            ] {
-                if let Some(text) = self.project.read_if(path) {
-                    extra.push((format!("{title} ({path}), from step 1"), text));
-                }
-            }
-        }
+        extra.extend(self.bootstrap_step_sections(step));
         let fields = vec![
             ("Step".to_owned(), format!("{step}; do only this step")),
             (
@@ -171,6 +162,26 @@ impl Runner {
                 ..PromptParts::default()
             },
         )
+    }
+
+    /// What `step` builds on: the files of step 1 after it, and for the
+    /// task cards the builders' context budget they are sized to.
+    fn bootstrap_step_sections(&self, step: BootstrapStep) -> Vec<(String, String)> {
+        let mut sections = Vec::new();
+        if step != BootstrapStep::Spec {
+            for (title, path) in [
+                ("Spec", ".tenaz/spec.md"),
+                ("Repository map", ".tenaz/map.md"),
+            ] {
+                if let Some(text) = self.project.read_if(path) {
+                    sections.push((format!("{title} ({path}), from step 1"), text));
+                }
+            }
+        }
+        if step == BootstrapStep::Tasks {
+            sections.push(self.card_sizing());
+        }
+        sections
     }
 
     /// What a retried bootstrap session is told about the attempt before
