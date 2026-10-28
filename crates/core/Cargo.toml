@@ -25,8 +25,8 @@ tempfile.workspace = true
 workspace = true
 
 [features]
-# Fakes for tests of the crates above this one (a scripted harness, a fast clock,
-# replayed readings).
+# Fakes for tests of the crates above this one (a scripted harness, a virtual
+# clock, replayed readings).
 testing = []
 
 [dev-dependencies]

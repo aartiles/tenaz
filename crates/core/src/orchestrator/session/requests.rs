@@ -217,7 +217,7 @@ impl TurnTiming {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{FastClock, Replay};
+    use crate::testing::{Replay, VirtualClock};
 
     fn counters(requests: f64, tokens: f64) -> EngineCounters {
         EngineCounters::from([
@@ -231,13 +231,13 @@ mod tests {
     fn watch(source: Replay<EngineCounters>, before: EngineCounters) -> EngineWatch {
         EngineWatch {
             source: Arc::new(source),
-            clock: Arc::new(FastClock::new(100)),
+            clock: Arc::new(VirtualClock::new()),
             before: Some(before),
             matched: false,
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_engine_delta_waits_for_the_counters_to_move_and_no_longer() {
         let source = Replay::new([
             counters(3.0, 100.0),
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(engine.before, Some(counters(4.0, 160.0)));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn counters_that_never_move_give_a_zero_delta() {
         let source = Replay::new([counters(3.0, 100.0)]);
         let mut engine = watch(source, counters(3.0, 100.0));
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(engine.before, Some(counters(3.0, 100.0)));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_watch_with_no_first_reading_gives_no_delta() {
         let mut engine = watch(Replay::new([counters(4.0, 160.0)]), counters(0.0, 0.0));
         engine.before = None;

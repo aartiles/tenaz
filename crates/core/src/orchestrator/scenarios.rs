@@ -17,7 +17,7 @@ use crate::ledger::{HarnessKind, JournalRecord, Launch, ModelConfig};
 use crate::params::RunParams;
 use crate::ports::{Clock, Harness};
 use crate::project::Project;
-use crate::testing::{FastClock, ScriptedHarness, ScriptedVerify, SilentNotifier, SnapshotVcs};
+use crate::testing::{ScriptedHarness, ScriptedVerify, SilentNotifier, SnapshotVcs, VirtualClock};
 
 /// A project set up with `overrides`, and the repository it was set up in:
 /// the snapshots live in memory, so the run must use the same one.
@@ -54,7 +54,7 @@ fn fake_project(work: &Path, overrides: &[&str]) -> (Project, Arc<SnapshotVcs>) 
         runner_version: "test".into(),
     };
     let vcs = Arc::new(SnapshotVcs::new(project.root()));
-    init(&project, &*vcs, &FastClock::new(100), &templates, options).unwrap();
+    init(&project, &*vcs, &VirtualClock::new(), &templates, options).unwrap();
     (project, vcs)
 }
 
@@ -94,9 +94,9 @@ async fn run(project: &Project, deps: Deps, stop: CancellationToken) {
 /// The capacity wait the run is given; no other wait of the run is as long.
 const WAIT: Duration = Duration::from_secs(4321);
 
-/// The fast clock, except that being asked to wait [`WAIT`] stops the run.
+/// The virtual clock, except that being asked to wait [`WAIT`] stops the run.
 struct StopOnWait {
-    clock: FastClock,
+    clock: VirtualClock,
     stop: CancellationToken,
 }
 
@@ -122,14 +122,14 @@ impl Clock for StopOnWait {
 /// `capacityRetryWaitSec`, and a stop during it pauses the run before
 /// another session starts. The scripted bootstrap's second session
 /// overflows the engine.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_stop_during_the_capacity_wait_pauses_before_the_rerun() {
     let work = tempfile::tempdir().unwrap();
     let wait = format!("capacityRetryWaitSec={}", WAIT.as_secs());
     let (project, vcs) = fake_project(work.path(), &[&wait]);
     let stop = CancellationToken::new();
     let clock = Arc::new(StopOnWait {
-        clock: FastClock::new(100),
+        clock: VirtualClock::new(),
         stop: stop.clone(),
     });
     let harness = Arc::new(ScriptedHarness {

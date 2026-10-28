@@ -18,7 +18,7 @@ use crate::ports::{
     SessionSpec,
 };
 use crate::session::{SessionEvent, StopReason, Usage};
-use crate::testing::{FastClock, ScriptedHarness};
+use crate::testing::{ScriptedHarness, VirtualClock};
 
 /// How long the bootstrap thinks before the test stops the run.
 const THINKING: Duration = Duration::from_secs(20);
@@ -30,7 +30,7 @@ const ANSWER: Duration = Duration::from_secs(1);
 /// Both are on the run's clock.
 struct SilentBootstrap {
     scripted: ScriptedHarness,
-    clock: Arc<FastClock>,
+    clock: Arc<VirtualClock>,
     stop: CancellationToken,
 }
 
@@ -57,7 +57,7 @@ impl Harness for SilentBootstrap {
 struct Thinking {
     tx: mpsc::UnboundedSender<SessionEvent>,
     rx: mpsc::UnboundedReceiver<SessionEvent>,
-    clock: Arc<FastClock>,
+    clock: Arc<VirtualClock>,
     stop: CancellationToken,
 }
 
@@ -125,7 +125,7 @@ async fn a_pause_after_a_long_wait_keeps_the_aborted_turn() {
     let work = tempfile::tempdir().unwrap();
     let (project, vcs) = fake_project(work.path(), &[]);
     let stop = CancellationToken::new();
-    let clock = Arc::new(FastClock::new(100));
+    let clock = Arc::new(VirtualClock::new());
     let harness = Arc::new(SilentBootstrap {
         scripted: ScriptedHarness::default(),
         clock: clock.clone(),
