@@ -431,14 +431,7 @@ impl Runner {
             "settled".to_owned()
         } else {
             let why = metrics
-                .abort_reason
-                .clone()
-                .or_else(|| {
-                    metrics
-                        .last_stop_reason
-                        .as_ref()
-                        .map(|r| r.as_str().to_owned())
-                })
+                .stop_cause()
                 .or_else(|| metrics.exit_code.map(|c| c.to_string()))
                 .unwrap_or_default();
             format!("failed ({why})")

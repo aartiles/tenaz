@@ -14,7 +14,7 @@ use crate::session::SessionMetrics;
 use crate::spec::{self, coverage};
 use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
-use crate::verify::{VerifyOutcome, interpret, retarget};
+use crate::verify::{VerifyOutcome, interpret, judge_attempt, retarget};
 
 use super::bootstrap;
 use super::session::SessionCtx;
@@ -741,42 +741,14 @@ impl Runner {
         };
         let all = self.run_verify(&["--all"]).await;
         let own = self.run_verify(&["--task", task.id.as_str()]).await;
-        let own_checks = own.passed();
-        let mut failure = if !all.ok {
-            Some(format!(
-                "./verify --all fails after the attempt:\n{}",
-                all.summary
-            ))
-        } else if let Some(why) = crate::verify::fewer_checks(
-            task.id.as_str(),
-            all.passed(),
-            own_checks,
-            self.ledger.passed_checks,
-        ) {
-            Some(why)
-        } else if !own.ok || own_checks < 1 {
-            Some(format!(
-                "./verify --task {} must run at least one passing check with ID prefix \"{}.\" (got {own_checks}).\n{}",
-                task.id, task.id, own.summary
-            ))
-        } else {
-            None
-        };
-        let stopped = (!s.ok()).then(|| {
-            s.record
-                .abort_reason
-                .clone()
-                .or_else(|| {
-                    s.record
-                        .last_stop_reason
-                        .as_ref()
-                        .map(|r| r.as_str().to_owned())
-                })
-                .unwrap_or_default()
-        });
-        if let (Some(stopped), Some(f)) = (&stopped, &failure) {
-            failure = Some(format!("The session was stopped: {stopped}.\n{f}"));
-        }
+        let stopped = s.metrics.stopped();
+        let failure =
+            judge_attempt(task.id.as_str(), &all, &own, self.ledger.passed_checks).map(|f| {
+                match &stopped {
+                    Some(stopped) => format!("The session was stopped: {stopped}.\n{f}"),
+                    None => f,
+                }
+            });
         if let (Some(stopped), None) = (&stopped, &failure)
             && let Some(current) = &mut self.ledger.current
         {
@@ -791,7 +763,7 @@ impl Runner {
             attempt,
             all_ok: all.ok,
             task_ok: own.ok,
-            task_checks: own_checks,
+            task_checks: own.passed(),
             all: all.json.clone(),
             task_json: own.json.clone(),
         });

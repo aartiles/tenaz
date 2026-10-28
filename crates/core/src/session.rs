@@ -284,6 +284,23 @@ impl SessionMetrics {
         !self.settled && !self.aborted && self.abort_reason.is_none()
     }
 
+    /// What ended the session as far as it says: its abort reason, else
+    /// the last reply's stop reason.
+    pub fn stop_cause(&self) -> Option<String> {
+        self.abort_reason.clone().or_else(|| {
+            self.last_stop_reason
+                .as_ref()
+                .map(|r| r.as_str().to_owned())
+        })
+    }
+
+    /// Why a session that did not settle cleanly stopped; empty when it
+    /// says nothing (a harness that died before its first reply). `None`
+    /// for a clean session.
+    pub fn stopped(&self) -> Option<String> {
+        (!self.ok()).then(|| self.stop_cause().unwrap_or_default())
+    }
+
     /// The last reply stopped at the output limit (`length`), usually while
     /// the model was still reasoning.
     pub fn output_truncated(&self) -> bool {
@@ -553,5 +570,75 @@ mod tests {
             .context(),
             35
         );
+    }
+
+    fn clean() -> SessionMetrics {
+        SessionMetrics {
+            settled: true,
+            exit_code: Some(0),
+            last_stop_reason: Some(StopReason::Stop),
+            ..SessionMetrics::default()
+        }
+    }
+
+    #[test]
+    fn a_clean_session_was_not_stopped() {
+        assert_eq!(clean().stopped(), None);
+    }
+
+    /// As the watchdog leaves a session it aborted.
+    #[test]
+    fn an_aborted_session_gives_its_abort_reason() {
+        let metrics = SessionMetrics {
+            aborted: true,
+            abort_reason: Some("second context compaction".to_owned()),
+            last_stop_reason: Some(StopReason::Aborted),
+            exit_code: Some(0),
+            ..SessionMetrics::default()
+        };
+        assert_eq!(
+            metrics.stopped().as_deref(),
+            Some("second context compaction")
+        );
+    }
+
+    #[test]
+    fn a_provider_error_gives_the_error_stop_reason() {
+        let metrics = SessionMetrics {
+            last_stop_reason: Some(StopReason::Error),
+            ..clean()
+        };
+        assert_eq!(metrics.stopped().as_deref(), Some("error"));
+    }
+
+    /// As the runner leaves a session whose harness process exited.
+    fn crashed() -> SessionMetrics {
+        SessionMetrics {
+            exit_code: Some(1),
+            harness_exit: Some(
+                "the harness ended before the turn settled (exit code 1); its stderr was empty"
+                    .to_owned(),
+            ),
+            ..SessionMetrics::default()
+        }
+    }
+
+    #[test]
+    fn a_session_that_says_nothing_has_no_stop_cause() {
+        assert_eq!(crashed().stop_cause(), None);
+    }
+
+    #[test]
+    fn a_harness_that_ended_early_gives_the_last_replys_stop_reason() {
+        let metrics = SessionMetrics {
+            last_stop_reason: Some(StopReason::ToolUse),
+            ..crashed()
+        };
+        assert_eq!(metrics.stopped().as_deref(), Some("toolUse"));
+    }
+
+    #[test]
+    fn a_harness_that_died_before_replying_stopped_with_an_empty_reason() {
+        assert_eq!(crashed().stopped().as_deref(), Some(""));
     }
 }
