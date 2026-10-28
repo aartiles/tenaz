@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tenaz_core::doctor;
-use tenaz_core::ledger::EngineApi;
+use tenaz_core::ledger::{EngineApi, HarnessKind};
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 
@@ -26,8 +26,7 @@ pub fn probing() -> bool {
 /// A coding agent Tenaz can drive.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Agent {
-    /// `fx` or `pi`.
-    pub name: &'static str,
+    pub harness: HarnessKind,
     pub version: String,
 }
 
@@ -36,13 +35,13 @@ pub fn agents() -> Vec<Agent> {
     let mut found = Vec::new();
     if let Ok(version) = tenaz_acp::fx::fx_version(Path::new("fx")) {
         found.push(Agent {
-            name: "fx",
+            harness: HarnessKind::Fx,
             version,
         });
     }
     if let Ok(version) = tenaz_pi::pi_version(Path::new("pi")) {
         found.push(Agent {
-            name: "pi",
+            harness: HarnessKind::Pi,
             version,
         });
     }
@@ -87,7 +86,7 @@ pub async fn machine(base_url: Option<&str>) -> doctor::Machine {
         agents: agents()
             .into_iter()
             .map(|a| doctor::Tool {
-                name: a.name.to_owned(),
+                name: a.harness.as_str().to_owned(),
                 version: a.version,
             })
             .collect(),

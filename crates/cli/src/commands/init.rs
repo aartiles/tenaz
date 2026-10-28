@@ -38,6 +38,18 @@ impl HarnessArg {
     }
 }
 
+/// The flag that names `kind`: a detected agent as the wizard writes it
+/// back as flags.
+impl From<HarnessKind> for HarnessArg {
+    fn from(kind: HarnessKind) -> Self {
+        match kind {
+            HarnessKind::Fx => Self::Fx,
+            HarnessKind::Pi => Self::Pi,
+            HarnessKind::Fake => Self::Fake,
+        }
+    }
+}
+
 /// The engine API when nothing answered to say which: Sushi on its port
 /// (the default before engines were detected), generic elsewhere.
 pub(crate) fn guess_api(base_url: Option<&str>) -> EngineApi {
