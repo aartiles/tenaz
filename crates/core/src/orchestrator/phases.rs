@@ -710,8 +710,7 @@ impl Runner {
         task: &TaskCard,
         attempt: u32,
     ) -> Result<Attempt, RunError> {
-        self.project
-            .set_card_fields(&task.id, &[("attempts", attempt.to_string())])?;
+        self.project.set_attempts(&task.id, attempt)?;
         let card = self
             .project
             .load_backlog()
@@ -733,8 +732,7 @@ impl Runner {
             Ok(s) => s,
             Err(error) => {
                 if matches!(error, RunError::Paused(_) | RunError::EngineUnavailable(_)) {
-                    self.project
-                        .set_card_fields(&task.id, &[("attempts", (attempt - 1).to_string())])?;
+                    self.project.set_attempts(&task.id, attempt - 1)?;
                 }
                 return Err(error);
             }

@@ -336,19 +336,24 @@ impl Project {
         self.read(&id.card_path())
     }
 
-    pub fn set_card_fields(&self, id: &TaskId, fields: &[(&str, String)]) -> io::Result<()> {
+    fn write_card_fields(&self, id: &TaskId, fields: &[(&str, String)]) -> io::Result<()> {
         let text = self.card_text(id)?;
         self.write(&id.card_path(), &set_card_fields(&text, fields))
     }
 
     /// Writes `status` on the card, leaving its other fields alone.
     pub fn set_status(&self, id: &TaskId, status: TaskStatus) -> io::Result<()> {
-        self.set_card_fields(id, &[("status", status.as_str().to_owned())])
+        self.write_card_fields(id, &[("status", status.as_str().to_owned())])
+    }
+
+    /// Writes how many builder attempts the task has had.
+    pub fn set_attempts(&self, id: &TaskId, attempts: u32) -> io::Result<()> {
+        self.write_card_fields(id, &[("attempts", attempts.to_string())])
     }
 
     /// Puts a task back to `todo` with no attempts, as a new card starts.
     pub fn reset_card(&self, id: &TaskId) -> io::Result<()> {
-        self.set_card_fields(
+        self.write_card_fields(
             id,
             &[
                 ("status", TaskStatus::Todo.as_str().to_owned()),
@@ -433,6 +438,7 @@ pub fn verdict_in(text: &str) -> Option<Verdict> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task::TaskCard;
 
     fn project() -> (tempfile::TempDir, Project) {
         let dir = tempfile::tempdir().unwrap();
@@ -490,18 +496,36 @@ mod tests {
         assert_eq!(p.note("T001").as_deref(), Some("did it"));
     }
 
-    #[test]
-    fn reset_card_puts_a_card_back_to_todo_with_no_attempts() {
+    /// The card of T001 after `change`, starting from `front` (its
+    /// frontmatter fields) and a body.
+    fn card_after(front: &str, change: impl FnOnce(&Project, &TaskId)) -> TaskCard {
         let (_dir, p) = project();
         let id = TaskId::parse("T001").unwrap();
         p.write(
             ".tenaz/tasks/T001.md",
-            "---\nid: T001\nstatus: blocked\nattempts: 2\n---\n",
+            &format!("---\nid: T001\n{front}---\n## Goal\nOne line.\n"),
         )
         .unwrap();
-        p.reset_card(&id).unwrap();
-        let card = p.card_text(&id).unwrap();
-        assert!(card.contains("status: todo\nattempts: 0\n"), "{card}");
+        change(&p, &id);
+        TaskCard::parse("T001.md", &p.card_text(&id).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn reset_card_puts_a_card_back_to_todo_with_no_attempts() {
+        let card = card_after("status: blocked\nattempts: 2\n", |p, id| {
+            p.reset_card(id).unwrap();
+        });
+        assert_eq!((card.status, card.attempts), (TaskStatus::Todo, 0));
+        assert_eq!(card.body, "## Goal\nOne line.\n");
+    }
+
+    #[test]
+    fn set_attempts_changes_only_the_attempts() {
+        let card = card_after("status: active\nattempts: 1\n", |p, id| {
+            p.set_attempts(id, 2).unwrap();
+        });
+        assert_eq!((card.status, card.attempts), (TaskStatus::Active, 2));
+        assert_eq!(card.body, "## Goal\nOne line.\n");
     }
 
     #[test]
