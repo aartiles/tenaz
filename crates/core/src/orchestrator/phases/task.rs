@@ -29,6 +29,15 @@ struct Built {
     stopped: Option<String>,
 }
 
+/// The work of an attempt, to be judged by `verify`.
+struct Work {
+    loaded: LoadedCard,
+    /// Why the orchestrator stopped the builder, if it did.
+    stopped: Option<String>,
+    /// The builder ran out of context with no continuation left.
+    outgrown: bool,
+}
+
 /// How a builder attempt ended.
 enum Attempt {
     Passed(Box<Built>),
@@ -57,18 +66,11 @@ impl Runner {
     ) -> Result<(), RunError> {
         self.start_task(task)?;
         loop {
-            let attempts = self
-                .project
-                .load_backlog()
-                .backlog
-                .get(&task.id)
-                .map_or(0, |t| t.attempts);
-            if attempts >= self.params.max_attempts {
+            let Some((attempt, outcome)) = self.next_attempt(backlog, task).await? else {
                 let why = format!("{} failed {} attempts.", task.id, self.params.max_attempts);
                 return self.escalate_current(task, &why).await;
-            }
-            let attempt = attempts + 1;
-            match self.build_attempt(backlog, task, attempt).await? {
+            };
+            match outcome {
                 Attempt::Failed { failure, outgrown } => {
                     self.record_failure(attempt, failure)?;
                     // Another attempt would meet the same budget: the task is too big for it.
@@ -99,6 +101,32 @@ impl Runner {
         }
     }
 
+    /// The next attempt and how it ended: the one whose review was cut
+    /// off, judged again, or a new build. `None` when none is left.
+    async fn next_attempt(
+        &mut self,
+        backlog: &Backlog,
+        task: &TaskCard,
+    ) -> Result<Option<(u32, Attempt)>, RunError> {
+        let attempts = self
+            .project
+            .load_backlog()
+            .backlog
+            .get(&task.id)
+            .map_or(0, |t| t.attempts);
+        if self.take_in_review()? == Some(attempts) {
+            return Ok(Some((attempts, self.judge_again(task, attempts).await?)));
+        }
+        if attempts >= self.params.max_attempts {
+            return Ok(None);
+        }
+        let attempt = attempts + 1;
+        Ok(Some((
+            attempt,
+            self.build_attempt(backlog, task, attempt).await?,
+        )))
+    }
+
     /// Marks `task` active and records where it starts from, unless the
     /// run is already on it (a resume).
     fn start_task(&mut self, task: &TaskCard) -> Result<(), RunError> {
@@ -121,6 +149,7 @@ impl Runner {
             history: Vec::new(),
             failure: None,
             stopped: Vec::new(),
+            in_review: None,
         });
         self.save()
     }
@@ -180,7 +209,10 @@ impl Runner {
             own: &built.own,
             stopped: built.stopped.as_deref(),
         };
-        Ok(match self.review_task(&review).await? {
+        self.set_in_review(Some(attempt))?;
+        let outcome = self.review_task(&review).await?;
+        self.set_in_review(None)?;
+        Ok(match outcome {
             Review::Changes(text) => {
                 self.request_changes(task, attempt, &text)?;
                 Reviewed::Changes
@@ -194,6 +226,14 @@ impl Runner {
             }
             Review::Accept => Reviewed::Done { reviewed: true },
         })
+    }
+
+    /// Records the attempt under review; a review cut off leaves it set.
+    fn set_in_review(&mut self, attempt: Option<u32>) -> Result<(), RunError> {
+        if let Some(current) = &mut self.ledger.current {
+            current.in_review = attempt;
+        }
+        self.save()
     }
 
     /// Records the changes the reviewer asked for as the failure the next
@@ -231,9 +271,65 @@ impl Runner {
         let card = self.load_card(&task.id)?;
         let prompt = self.builder_prompt(backlog, &card, attempt).await?;
         let s = self.builder_session(&card.card, attempt, &prompt).await?;
+        let work = Work {
+            loaded: card,
+            stopped: s.metrics.stopped(),
+            outgrown: s.metrics.context_stopped(),
+        };
+        self.judge(task, attempt, work).await
+    }
+
+    /// Takes the attempt whose review was cut off, if any. The session cut
+    /// off was a reviewer, which nothing continues: a pause's continuation
+    /// note goes with it.
+    fn take_in_review(&mut self) -> Result<Option<u32>, RunError> {
+        let taken = self
+            .ledger
+            .current
+            .as_mut()
+            .and_then(|c| c.in_review.take());
+        if taken.is_some() {
+            self.ledger.pending_continuation = false;
+            self.save()?;
+        }
+        Ok(taken)
+    }
+
+    /// The attempt whose review was cut off: its work is judged again and,
+    /// if it still passes, reviewed from the start, without another attempt.
+    async fn judge_again(&mut self, task: &TaskCard, attempt: u32) -> Result<Attempt, RunError> {
+        self.log(&format!(
+            "  {} attempt {attempt} was cut off in review; reviewing it again",
+            task.id
+        ));
+        let stopped = self.ledger.current.as_ref().and_then(|c| {
+            c.stopped
+                .iter()
+                .find(|s| s.attempt == attempt)
+                .map(|s| s.reason.clone())
+        });
+        let work = Work {
+            loaded: self.load_card(&task.id)?,
+            stopped,
+            outgrown: false,
+        };
+        self.judge(task, attempt, work).await
+    }
+
+    /// `verify` on the work of `attempt`, journaled: passed, or failed and why.
+    async fn judge(
+        &mut self,
+        task: &TaskCard,
+        attempt: u32,
+        work: Work,
+    ) -> Result<Attempt, RunError> {
+        let Work {
+            loaded,
+            stopped,
+            outgrown,
+        } = work;
         let all = self.run_verify(&["--all"]).await;
         let own = self.run_verify(&["--task", task.id.as_str()]).await;
-        let stopped = s.metrics.stopped();
         let failure = with_stop_reason(
             judge_attempt(task.id.as_str(), &all, &own, self.ledger.passed_checks),
             stopped.as_deref(),
@@ -251,12 +347,9 @@ impl Runner {
             task_json: own.json.clone(),
         });
         Ok(match failure {
-            Some(failure) => Attempt::Failed {
-                failure,
-                outgrown: s.metrics.context_stopped(),
-            },
+            Some(failure) => Attempt::Failed { failure, outgrown },
             None => Attempt::Passed(Box::new(Built {
-                loaded: card,
+                loaded,
                 all,
                 own,
                 stopped,
@@ -301,7 +394,9 @@ impl Runner {
     /// A stopped session whose work still passes goes on to review, but is
     /// recorded as such.
     fn record_stopped(&mut self, attempt: u32, reason: &str) {
-        if let Some(current) = &mut self.ledger.current {
+        if let Some(current) = &mut self.ledger.current
+            && !current.stopped.iter().any(|s| s.attempt == attempt)
+        {
             current.stopped.push(StoppedAttempt {
                 attempt,
                 reason: reason.to_owned(),

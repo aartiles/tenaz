@@ -273,6 +273,12 @@ impl Player {
         let file = field(prompt, "Review file")
             .unwrap_or(".tenaz/reviews/unknown.md")
             .to_owned();
+        if let Some((at, stop)) = &self.script.stop_at_review
+            && at == task
+        {
+            stop.cancel();
+            return self.hang().await;
+        }
         let first_review = self.bump(&format!("review-{task}")) == 1;
         let first_of =
             |script_field: &Option<String>| first_review && names(script_field.as_deref(), task);

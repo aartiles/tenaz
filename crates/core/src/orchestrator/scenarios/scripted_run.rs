@@ -503,6 +503,80 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
     assert!(run.has(completed), "{}", run.log);
 }
 
+/// Ctrl-C during the review of an attempt that passed `verify` pauses the
+/// run; the next run reviews that same attempt again instead of charging
+/// it and building another, as in the Digger 3D run of 2026-10-27. With
+/// one attempt allowed, a charged pause would split the task.
+#[tokio::test(start_paused = true)]
+async fn a_pause_during_a_review_is_resumed_by_reviewing_the_same_attempt() {
+    let run = resumed_after_a_review_pause(|_| {}).await;
+    assert!(run.has(
+        |r| matches!(r, JournalRecord::Paused { label: Some(l), .. } if l.ends_with("-reviewer-T002"))
+    ));
+    assert!(run.has(|r| matches!(r, JournalRecord::Resumed { .. })));
+    assert!(run.has(completed), "{}", run.log);
+    assert_eq!(run.card_field("T002", "attempts").as_deref(), Some("1"));
+    let builders = run
+        .sessions()
+        .filter(|s| s.label.ends_with("-builder-T002"))
+        .count();
+    assert_eq!(builders, 1, "the paused review was charged:\n{}", run.log);
+    assert_eq!(run.card_field("T002", "status").as_deref(), Some("done"));
+    let reviews = run.prompts("reviewer-T002");
+    assert_eq!(reviews.len(), 2, "{}", run.log);
+    assert!(
+        reviews.iter().all(|p| !p.contains("## Continuation")),
+        "a review is redone, not continued:\n{}",
+        run.log
+    );
+    assert!(run.has(|r| matches!(
+        r,
+        JournalRecord::Review { task, attempt: 1, verdict: Some(Verdict::Accept), .. }
+            if task.as_str() == "T002"
+    )));
+}
+
+/// After a pause in its review, the attempt's work no longer passes
+/// `verify`: it fails once, and with no attempt left the task is split.
+#[tokio::test(start_paused = true)]
+async fn a_paused_review_whose_work_now_fails_is_not_judged_again_and_again() {
+    let run = resumed_after_a_review_pause(|project| {
+        std::fs::write(project.root().join("checks/T002.exists.sh"), "exit 1\n").unwrap();
+    })
+    .await;
+    assert_eq!(run.verifies("T002"), vec![1, 1], "{}", run.log);
+    assert_eq!(run.card_field("T002", "status").as_deref(), Some("split"));
+}
+
+/// Plays T002 with one attempt until Ctrl-C during its review, applies
+/// `between` to the paused project, and plays the run again to its end.
+async fn resumed_after_a_review_pause(between: impl FnOnce(&Project)) -> Played {
+    let work = tempfile::tempdir().unwrap();
+    let (project, vcs) = fake_project(work.path(), &["maxAttempts=1", "replanEvery=2"]);
+    let stop = CancellationToken::new();
+    let stopping = ScriptedHarness {
+        stop_at_review: Some(("T002".into(), stop.clone())),
+        ..Default::default()
+    };
+    let clock = Arc::new(VirtualClock::new());
+    let paused = deps(&project, vcs.clone(), Arc::new(stopping), clock.clone());
+    run(&project, paused, stop).await;
+    assert!(project.load_ledger().unwrap().paused_at.is_some());
+    assert_eq!(
+        card_field(&project, "T002", "attempts").as_deref(),
+        Some("1")
+    );
+    between(&project);
+    let harness = Arc::new(ScriptedHarness::default());
+    run(
+        &project,
+        deps(&project, vcs, harness, clock),
+        CancellationToken::new(),
+    )
+    .await;
+    Played::read(work, project)
+}
+
 /// Ctrl-C during the preflight pauses the run instead of failing it, and
 /// the next run measures the engine again.
 #[tokio::test(start_paused = true)]
