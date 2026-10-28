@@ -5,9 +5,10 @@
 use std::path::Path;
 
 use crate::ledger::{HarnessKind, Preflight};
-use crate::metrics::engine_summary;
-use crate::session::StopReason;
+use crate::metrics::{RequestRecord, engine_summary};
+use crate::session::{AssistantTurn, SessionMetrics, StopReason};
 
+use super::session::HarnessRun;
 use super::{RunError, Runner};
 
 /// The file the tool probe reads, and the word in it. The word appears
@@ -17,8 +18,6 @@ const TOOL_PROBE_WORD: &str = "marmalade-4817";
 
 impl Runner {
     pub(crate) async fn preflight(&mut self) -> Result<Preflight, RunError> {
-        let filler = "The orchestrator measures whether the engine reuses a cached prompt prefix. "
-            .repeat(40);
         let vision = self.ledger.config.supports_images();
         let dir = tempfile::Builder::new()
             .prefix("tenaz-preflight-")
@@ -31,57 +30,92 @@ impl Runner {
             write_test_image(&dir.path().join("probe.png"))?;
         }
         let cwd = dir.path().to_path_buf();
-        // Absolute paths: a harness may run its tools in another folder than
-        // the session's (fx uses the folder it was started in).
-        let probe = cwd.join(TOOL_PROBE_FILE);
-        let image = cwd.join("probe.png");
-        let mut prompts = vec![
-            format!("{filler}\nThink briefly, then answer with only the number: what is 17 * 23?"),
-            "Now answer with only the number: what is 19 * 21?".to_owned(),
-            format!(
-                "Use your shell tool to run `cat {}`, then answer with only the word it printed.",
-                probe.display()
-            ),
-        ];
-        if vision {
-            prompts.push(format!("Use the read tool to open {} and look at it. Answer with two words only: the colour of the square, then the colour of the background.", image.display()));
-        }
+        let prompts = preflight_prompts(&cwd, vision);
         let (m, requests) = self
-            .run_harness("preflight", &prompts, cwd, None, false, None)
+            .run_harness(HarnessRun {
+                label: "preflight",
+                prompts: &prompts,
+                cwd,
+                watch: None,
+                persist: false,
+                own_checks: None,
+            })
             .await?;
-        // The first message after a message that ended with `stop` is the second prompt's answer.
-        let second = m
-            .assistant
-            .iter()
-            .enumerate()
-            .find(|(i, _)| *i > 0 && m.assistant[i - 1].stop_reason == StopReason::Stop)
-            .map(|(_, a)| a)
-            .or_else(|| m.assistant.last());
-        let last_text = m.texts.last().cloned().unwrap_or_default();
-        let vision_ok = vision.then(|| {
-            let lower = last_text.to_lowercase();
-            matches!((lower.find("red"), lower.find("blue")), (Some(r), Some(b)) if r < b)
-        });
-        let reasoning = m.reasoning_chars > 0 || m.usage.reasoning > 0;
-        let cache = second.is_some_and(|a| a.usage.cache_read > 0);
-        let tools = m.texts.iter().any(|t| t.contains(TOOL_PROBE_WORD));
-        Ok(Preflight {
-            at: self.now(),
-            ok: m.settled && reasoning && cache && tools && vision_ok != Some(false),
-            settled: m.settled,
-            reasoning,
-            cache,
-            tools: Some(tools),
-            vision: vision_ok,
-            vision_answer: vision.then(|| last_text.trim().chars().take(80).collect()),
-            reasoning_chars: m.reasoning_chars,
-            second_turn_cache_read: second.map_or(0, |a| a.usage.cache_read),
-            duration_ms: m.duration_ms,
-            engine_metrics: requests.iter().any(|r| r.engine_matched),
-            engine: engine_summary(&requests),
-            accepted_weak: false,
-        })
+        Ok(read_preflight(self.now(), &m, &requests, vision))
     }
+}
+
+/// What a preflight session at `at` (`m`, its `requests`) shows.
+fn read_preflight(
+    at: String,
+    m: &SessionMetrics,
+    requests: &[RequestRecord],
+    vision: bool,
+) -> Preflight {
+    let second = second_answer(m);
+    let last_text = m.texts.last().cloned().unwrap_or_default();
+    let vision_ok = vision.then(|| red_before_blue(&last_text));
+    let reasoning = m.reasoning_chars > 0 || m.usage.reasoning > 0;
+    let cache = second.is_some_and(|a| a.usage.cache_read > 0);
+    let tools = m.texts.iter().any(|t| t.contains(TOOL_PROBE_WORD));
+    Preflight {
+        at,
+        ok: m.settled && reasoning && cache && tools && vision_ok != Some(false),
+        settled: m.settled,
+        reasoning,
+        cache,
+        tools: Some(tools),
+        vision: vision_ok,
+        vision_answer: vision.then(|| last_text.trim().chars().take(80).collect()),
+        reasoning_chars: m.reasoning_chars,
+        second_turn_cache_read: second.map_or(0, |a| a.usage.cache_read),
+        duration_ms: m.duration_ms,
+        engine_metrics: requests.iter().any(|r| r.engine_matched),
+        engine: engine_summary(requests),
+        accepted_weak: false,
+    }
+}
+
+/// The second prompt's answer: the first message after one that ended
+/// with `stop`, else the last.
+fn second_answer(m: &SessionMetrics) -> Option<&AssistantTurn> {
+    m.assistant
+        .iter()
+        .enumerate()
+        .find(|(i, _)| *i > 0 && m.assistant[i - 1].stop_reason == StopReason::Stop)
+        .map(|(_, a)| a)
+        .or_else(|| m.assistant.last())
+}
+
+/// The image answer names the square's colour (red), then the
+/// background's (blue).
+fn red_before_blue(answer: &str) -> bool {
+    let lower = answer.to_lowercase();
+    matches!((lower.find("red"), lower.find("blue")), (Some(r), Some(b)) if r < b)
+}
+
+/// The preflight's prompts, for a session in `cwd`: two questions sharing
+/// a long prefix (reasoning, then the cache), the tool probe, and with
+/// `vision` the image.
+fn preflight_prompts(cwd: &Path, vision: bool) -> Vec<String> {
+    let filler =
+        "The orchestrator measures whether the engine reuses a cached prompt prefix. ".repeat(40);
+    // Absolute paths: a harness may run its tools in another folder than
+    // the session's (fx uses the folder it was started in).
+    let probe = cwd.join(TOOL_PROBE_FILE);
+    let image = cwd.join("probe.png");
+    let mut prompts = vec![
+        format!("{filler}\nThink briefly, then answer with only the number: what is 17 * 23?"),
+        "Now answer with only the number: what is 19 * 21?".to_owned(),
+        format!(
+            "Use your shell tool to run `cat {}`, then answer with only the word it printed.",
+            probe.display()
+        ),
+    ];
+    if vision {
+        prompts.push(format!("Use the read tool to open {} and look at it. Answer with two words only: the colour of the square, then the colour of the background.", image.display()));
+    }
+    prompts
 }
 
 /// What failed in `preflight`, in words, for the error that stops the run.
@@ -217,6 +251,78 @@ mod tests {
         assert!(!text.contains("cache"), "{text}");
         let old = Preflight { tools: None, ..p };
         assert_eq!(failures(HarnessKind::Fx, Some(&old)), "no check failed");
+    }
+
+    fn turn(stop_reason: StopReason, cache_read: u64) -> AssistantTurn {
+        AssistantTurn {
+            stop_reason,
+            usage: crate::session::Usage {
+                cache_read,
+                ..Default::default()
+            },
+            thinking: 0,
+        }
+    }
+
+    #[test]
+    fn the_second_answer_follows_the_first_that_stopped() {
+        // As in a preflight: the first answer, the second, then the tool probe.
+        let m = SessionMetrics {
+            assistant: vec![
+                turn(StopReason::Stop, 0),
+                turn(StopReason::Stop, 512),
+                turn(StopReason::ToolUse, 9),
+                turn(StopReason::Stop, 10),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(second_answer(&m).map(|a| a.usage.cache_read), Some(512));
+    }
+
+    #[test]
+    fn without_a_stopped_answer_the_last_one_is_taken() {
+        let m = SessionMetrics {
+            assistant: vec![turn(StopReason::ToolUse, 1), turn(StopReason::ToolUse, 2)],
+            ..Default::default()
+        };
+        assert_eq!(second_answer(&m).map(|a| a.usage.cache_read), Some(2));
+    }
+
+    #[test]
+    fn the_image_answer_names_red_then_blue() {
+        assert!(red_before_blue("Red, Blue"));
+        assert!(!red_before_blue("blue, red"));
+        assert!(!red_before_blue("red"));
+    }
+
+    /// A preflight session whose last answer to the image is `answer`;
+    /// everything else passes.
+    fn with_image_answer(answer: &str) -> SessionMetrics {
+        SessionMetrics {
+            settled: true,
+            reasoning_chars: 10,
+            texts: vec![TOOL_PROBE_WORD.to_owned(), answer.to_owned()],
+            assistant: vec![
+                turn(StopReason::Stop, 0),
+                turn(StopReason::Stop, 512),
+                turn(StopReason::Stop, 0),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_wrong_image_answer_fails_the_preflight() {
+        let p = read_preflight(String::new(), &with_image_answer("blue, red"), &[], true);
+        assert_eq!(p.vision, Some(false));
+        assert!(!p.ok);
+    }
+
+    #[test]
+    fn without_vision_the_image_answer_is_not_checked() {
+        let p = read_preflight(String::new(), &with_image_answer("blue, red"), &[], false);
+        assert_eq!(p.vision, None);
+        assert!(p.ok);
     }
 
     #[test]

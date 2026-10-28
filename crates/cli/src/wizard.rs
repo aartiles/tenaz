@@ -10,8 +10,12 @@ use anyhow::bail;
 use tenaz_core::doctor;
 use tenaz_core::ledger::EngineApi;
 
+use crate::commands::EngineKind;
+use crate::commands::init::{
+    HarnessArg, InitArgs, InitPlan, default_provider, engine_api, guess_api,
+};
 use crate::detect::{self, Engine};
-use crate::{HarnessArg, InitArgs, InitPlan, worktree};
+use crate::worktree;
 
 /// Numbered choices, free text and yes/no over a line-based terminal.
 pub struct Prompter<R, W> {
@@ -115,6 +119,16 @@ struct ModelChoice {
     engine: Option<Engine>,
 }
 
+impl ModelChoice {
+    /// The address the model is served at: the one chosen, else the
+    /// engine's.
+    fn model_url(&self) -> Option<&str> {
+        self.base_url
+            .as_deref()
+            .or_else(|| self.engine.as_ref().map(|e| e.base_url.as_str()))
+    }
+}
+
 /// The image tool and the commands that free memory for it.
 struct Media {
     comfyui: Option<String>,
@@ -123,6 +137,33 @@ struct Media {
     image_model: Option<String>,
     engine_start: Option<String>,
     engine_stop: Option<String>,
+}
+
+impl Media {
+    /// Writes these answers into `args`, as their flags would.
+    fn answer(self, args: &mut InitArgs) {
+        args.engine_start = self.engine_start;
+        args.engine_stop = self.engine_stop;
+        args.comfyui = self.comfyui;
+        args.workflows = self.workflows;
+        args.images = self.images;
+        args.image_model = self.image_model;
+    }
+}
+
+/// The engine that serves the model: its API and address.
+#[derive(Clone, Copy)]
+struct ModelEngine<'a> {
+    api: EngineApi,
+    base_url: Option<&'a str>,
+}
+
+impl ModelEngine<'_> {
+    /// Whether `url` is this engine's address.
+    fn serves(&self, url: &str) -> bool {
+        self.base_url
+            .is_some_and(|own| detect::normalize_base_url(own) == detect::normalize_base_url(url))
+    }
 }
 
 /// Asks for whatever `args` leaves open and returns the plan to init with.
@@ -175,54 +216,33 @@ pub async fn run<R: BufRead, W: Write>(
         Some(v) => v,
         None => p.confirm("Does the model read images?", false)?,
     };
-    let api = args.engine.map_or_else(
-        || {
-            choice
-                .engine
-                .as_ref()
-                .map_or_else(|| crate::guess_api(choice.base_url.as_deref()), |e| e.api)
-        },
-        crate::EngineKind::api,
-    );
-    let llm_base_url = choice
-        .base_url
-        .clone()
-        .or_else(|| choice.engine.as_ref().map(|e| e.base_url.clone()));
-    let media = ask_media(args, api, llm_base_url.as_deref(), &client, p).await?;
-    let plan = InitPlan {
+    let mut answers = InitArgs {
+        project: Some(project),
         brief: match &goal {
             Goal::File(path) => Some(path.clone()),
             Goal::InProject | Goal::Text(_) => None,
         },
-        harness_bin: match harness {
-            HarnessArg::Fx => args.fx_bin.clone(),
-            HarnessArg::Pi => args.pi_bin.clone(),
-            HarnessArg::Fake => None,
-        },
-        provider: choice
-            .provider
-            .clone()
-            .or_else(|| choice.engine.as_ref().map(|e| e.provider.clone()))
-            .unwrap_or_else(|| "local".to_owned()),
-        project,
-        harness,
-        model,
+        harness: Some(harness),
+        model: Some(model),
+        provider: choice.provider.clone(),
         base_url: choice.base_url.clone(),
         context_window: Some(context_window),
         vision,
-        api,
-        engine_start: media.engine_start,
-        engine_stop: media.engine_stop,
-        comfyui: media.comfyui,
-        workflows: media.workflows,
-        images: media.images,
-        image_model: media.image_model,
-        brief_text: match &goal {
-            Goal::Text(text) => Some(text.clone()),
-            Goal::InProject | Goal::File(_) => None,
-        },
-        args: args.clone(),
+        ..args.clone()
     };
+    // The API the plan will have: the media question depends on it.
+    let llm = ModelEngine {
+        api: engine_api(&answers, choice.engine.as_ref()),
+        base_url: choice.model_url(),
+    };
+    ask_media(&answers, llm, &client, p)
+        .await?
+        .answer(&mut answers);
+    let brief_text = match &goal {
+        Goal::Text(text) => Some(text.clone()),
+        Goal::InProject | Goal::File(_) => None,
+    };
+    let plan = InitPlan::from_args(answers, choice.engine.as_ref(), brief_text)?;
     show(&plan, &goal, choice.engine.as_ref(), p)?;
     if !p.confirm("Create the project?", true)? {
         bail!("Nothing was created.");
@@ -266,7 +286,7 @@ fn ask_placement<R: BufRead, W: Write>(
         name: args.name.clone(),
     };
     let placement = worktree::place(
-        &crate::absolute(project.to_path_buf()),
+        &crate::commands::absolute(project.to_path_buf()),
         &request,
         brief.as_deref(),
         match goal {
@@ -363,16 +383,16 @@ fn ask_agent<R: BufRead, W: Write>(
             doctor::agent_fix().join("\n")
         ),
         [only] => {
-            p.say(&format!("Agent: {} ({})", only.name, only.version))?;
-            Ok(harness_kind(only.name))
+            p.say(&format!("Agent: {} ({})", only.harness, only.version))?;
+            Ok(HarnessArg::from(only.harness))
         }
         several => {
             let options: Vec<String> = several
                 .iter()
-                .map(|a| format!("{} ({})", a.name, a.version))
+                .map(|a| format!("{} ({})", a.harness, a.version))
                 .collect();
             let i = p.choose("Which coding agent should run the sessions?", &options, 0)?;
-            Ok(harness_kind(several[i].name))
+            Ok(HarnessArg::from(several[i].harness))
         }
     }
 }
@@ -522,23 +542,39 @@ fn ask_context<R: BufRead, W: Write>(
 /// commands that free the memory while images render on another server.
 async fn ask_media<R: BufRead, W: Write>(
     args: &InitArgs,
-    api: EngineApi,
-    llm_base_url: Option<&str>,
+    llm: ModelEngine<'_>,
     client: &reqwest::Client,
     p: &mut Prompter<R, W>,
 ) -> anyhow::Result<Media> {
+    let (images, image_model) = ask_image_server(args, llm.base_url, client, p).await?;
+    let (comfyui, workflows) = ask_comfyui(args, images.is_some(), client, p)
+        .await?
+        .unzip();
+    let workflows = workflows.unwrap_or_default();
+    let mut media = Media {
+        comfyui,
+        workflows,
+        images,
+        image_model,
+        engine_start: args.engine_start.clone(),
+        engine_stop: args.engine_stop.clone(),
+    };
+    ask_engine_commands(&mut media, llm, p)?;
+    Ok(media)
+}
+
+/// A server with the `OpenAI` Images API and its image model: the flags',
+/// else one found and accepted, the LLM's own engine first.
+async fn ask_image_server<R: BufRead, W: Write>(
+    args: &InitArgs,
+    llm_base_url: Option<&str>,
+    client: &reqwest::Client,
+    p: &mut Prompter<R, W>,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
     let mut images = args.images.clone();
     let mut image_model = args.image_model.clone();
     if images.is_none() && args.comfyui.is_none() {
-        let mut engines = detect::local_engines(client).await;
-        if let Some(url) = llm_base_url
-            && !engines
-                .iter()
-                .any(|e| e.base_url == detect::normalize_base_url(url))
-            && let Some(engine) = detect::engine_at(client, url).await
-        {
-            engines.push(engine);
-        }
+        let engines = engines_with(llm_base_url, client).await;
         let servers = detect::image_servers(client, &engines).await;
         for server in detect::image_offers(servers, llm_base_url) {
             let model = server.models[0].clone();
@@ -558,68 +594,124 @@ async fn ask_media<R: BufRead, W: Write>(
     if images.is_some() && image_model.is_none() {
         image_model = Some(p.ask("Image model to ask it for", None)?);
     }
-    let mut comfyui = args.comfyui.clone();
-    if comfyui.is_none() && images.is_none() {
-        let local = detect::COMFYUI_URL;
-        if detect::probing()
-            && detect::comfyui_at(client, local).await
-            && p.confirm(
-                &format!("ComfyUI is running at {local}. Give the agent an image tool?"),
-                true,
-            )?
-        {
-            comfyui = Some(local.to_owned());
-        }
-    }
-    let mut workflows = args.workflows.clone();
-    if comfyui.is_some() && workflows.is_empty() {
-        loop {
-            let answer = p.ask(
-                "API-format ComfyUI workflow for images (empty: no image tool)",
-                Some(""),
-            )?;
-            if answer.is_empty() {
-                comfyui = None;
-                break;
-            }
-            match tenaz_mcp::workflow::WorkflowTemplate::from_file(Path::new(&answer)) {
-                Ok(_) => {
-                    workflows.push(format!("default={answer}"));
-                    break;
-                }
-                Err(e) => p.say(&format!("  Cannot use it: {e}"))?,
-            }
-        }
-    }
-    if comfyui.is_none() {
-        workflows.clear();
-    }
-    let mut engine_start = args.engine_start.clone();
-    let mut engine_stop = args.engine_stop.clone();
-    let own_engine = |url: &str| {
-        llm_base_url
-            .is_some_and(|llm| detect::normalize_base_url(llm) == detect::normalize_base_url(url))
+    Ok((images, image_model))
+}
+
+/// The engines on the usual ports, and the LLM's own at `llm_base_url`
+/// when it is elsewhere and answers.
+async fn engines_with(llm_base_url: Option<&str>, client: &reqwest::Client) -> Vec<Engine> {
+    let mut engines = detect::local_engines(client).await;
+    let Some(url) = llm_base_url else {
+        return engines;
     };
-    let elsewhere = comfyui.is_some() || images.as_deref().is_some_and(|url| !own_engine(url));
-    if elsewhere && api == EngineApi::Generic && engine_start.is_none() && engine_stop.is_none() {
-        p.say(
-            "To free the memory for images, Tenaz stops the engine and starts it again after. \
-             Leave both empty to keep the model loaded next to the image model, \
-             if the memory holds both.",
-        )?;
-        engine_stop =
-            Some(p.ask("Command that stops the engine", Some(""))?).filter(|s| !s.is_empty());
-        engine_start =
-            Some(p.ask("Command that starts the engine", Some(""))?).filter(|s| !s.is_empty());
+    if engines
+        .iter()
+        .any(|e| e.base_url == detect::normalize_base_url(url))
+    {
+        return engines;
     }
-    Ok(Media {
-        comfyui,
-        workflows,
-        images,
-        image_model,
-        engine_start,
-        engine_stop,
-    })
+    if let Some(engine) = detect::engine_at(client, url).await {
+        engines.push(engine);
+    }
+    engines
+}
+
+/// `ComfyUI` and its workflows: the flags', else the local one when it
+/// runs, the user wants it and gives a workflow; `None` without one, and
+/// when `has_images`.
+async fn ask_comfyui<R: BufRead, W: Write>(
+    args: &InitArgs,
+    has_images: bool,
+    client: &reqwest::Client,
+    p: &mut Prompter<R, W>,
+) -> anyhow::Result<Option<(String, Vec<String>)>> {
+    let comfyui = match &args.comfyui {
+        Some(url) => Some(url.clone()),
+        None if has_images => None,
+        None => offer_local_comfyui(client, p).await?,
+    };
+    let Some(comfyui) = comfyui else {
+        return Ok(None);
+    };
+    let mut workflows = args.workflows.clone();
+    if workflows.is_empty() {
+        let Some(workflow) = ask_workflow(p)? else {
+            return Ok(None);
+        };
+        workflows.push(workflow);
+    }
+    Ok(Some((comfyui, workflows)))
+}
+
+/// The local `ComfyUI` when it runs and the user wants it.
+async fn offer_local_comfyui<R: BufRead, W: Write>(
+    client: &reqwest::Client,
+    p: &mut Prompter<R, W>,
+) -> anyhow::Result<Option<String>> {
+    let local = detect::COMFYUI_URL;
+    if !detect::probing() || !detect::comfyui_at(client, local).await {
+        return Ok(None);
+    }
+    let wanted = p.confirm(
+        &format!("ComfyUI is running at {local}. Give the agent an image tool?"),
+        true,
+    )?;
+    Ok(wanted.then(|| local.to_owned()))
+}
+
+/// An API-format `ComfyUI` workflow that loads, as `default=<path>`; `None`
+/// when the answer is empty (no image tool).
+fn ask_workflow<R: BufRead, W: Write>(p: &mut Prompter<R, W>) -> anyhow::Result<Option<String>> {
+    loop {
+        let answer = p.ask(
+            "API-format ComfyUI workflow for images (empty: no image tool)",
+            Some(""),
+        )?;
+        if answer.is_empty() {
+            return Ok(None);
+        }
+        match tenaz_mcp::workflow::WorkflowTemplate::from_file(Path::new(&answer)) {
+            Ok(_) => return Ok(Some(format!("default={answer}"))),
+            Err(e) => p.say(&format!("  Cannot use it: {e}"))?,
+        }
+    }
+}
+
+/// Whether the engine has to be stopped while images render: a generic
+/// engine with images on another server, and no commands given for it.
+fn needs_engine_commands(media: &Media, llm: ModelEngine<'_>) -> bool {
+    if llm.api != EngineApi::Generic {
+        return false;
+    }
+    let given = media.engine_start.is_some() || media.engine_stop.is_some();
+    !given && renders_elsewhere(media, llm)
+}
+
+/// Images render on `ComfyUI`, or on an images server other than `llm`.
+fn renders_elsewhere(media: &Media, llm: ModelEngine<'_>) -> bool {
+    media.comfyui.is_some() || media.images.as_deref().is_some_and(|url| !llm.serves(url))
+}
+
+/// For a generic engine whose images render on another server, the
+/// commands that stop and start it to free the memory, unless given.
+fn ask_engine_commands<R: BufRead, W: Write>(
+    media: &mut Media,
+    llm: ModelEngine<'_>,
+    p: &mut Prompter<R, W>,
+) -> anyhow::Result<()> {
+    if !needs_engine_commands(media, llm) {
+        return Ok(());
+    }
+    p.say(
+        "To free the memory for images, Tenaz stops the engine and starts it again after. \
+         Leave both empty to keep the model loaded next to the image model, \
+         if the memory holds both.",
+    )?;
+    media.engine_stop =
+        Some(p.ask("Command that stops the engine", Some(""))?).filter(|s| !s.is_empty());
+    media.engine_start =
+        Some(p.ask("Command that starts the engine", Some(""))?).filter(|s| !s.is_empty());
+    Ok(())
 }
 
 /// The answers, and the `tenaz init` line that gives them without questions.
@@ -641,7 +733,7 @@ fn show<R: BufRead, W: Write>(
     p.say("")?;
     p.say(&format!("  Project   {}", plan.project.display()))?;
     p.say(&format!("  Goal      {goal_text}"))?;
-    p.say(&format!("  Agent     {}", plan.harness.kind()))?;
+    p.say(&format!("  Agent     {}", plan.harness))?;
     if let Some(engine) = engine {
         p.say(&format!(
             "  Engine    {} at {}",
@@ -652,34 +744,26 @@ fn show<R: BufRead, W: Write>(
         "  Model     {}/{}, {} tokens{}",
         plan.provider,
         plan.model,
-        plan.context_window.unwrap_or_default(),
-        if plan.vision { ", reads images" } else { "" }
+        plan.args.context_window.unwrap_or_default(),
+        if plan.args.vision {
+            ", reads images"
+        } else {
+            ""
+        }
     ))?;
-    if let Some(url) = &plan.comfyui {
+    if let Some(url) = &plan.args.comfyui {
         p.say(&format!("  Images    ComfyUI at {url}"))?;
     }
-    if let (Some(url), Some(model)) = (&plan.images, &plan.image_model) {
+    if let (Some(url), Some(model)) = (&plan.args.images, &plan.args.image_model) {
         p.say(&format!("  Images    {model} at {url}"))?;
     }
     let flags = InitArgs {
-        project: Some(plan.project.clone()),
         brief: match goal {
             Goal::Text(_) | Goal::InProject => Some(plan.project.join(tenaz_core::project::BRIEF)),
             Goal::File(path) => Some(path.clone()),
         },
-        harness: Some(plan.harness),
-        model: Some(plan.model.clone()),
         provider: Some(plan.provider.clone()),
-        base_url: plan.base_url.clone(),
-        context_window: plan.context_window,
-        vision: plan.vision,
-        engine: Some(crate::EngineKind::from_api(plan.api)),
-        engine_start: plan.engine_start.clone(),
-        engine_stop: plan.engine_stop.clone(),
-        comfyui: plan.comfyui.clone(),
-        workflows: plan.workflows.clone(),
-        images: plan.images.clone(),
-        image_model: plan.image_model.clone(),
+        engine: Some(EngineKind::from_api(plan.api)),
         interactive: false,
         ..plan.args.clone()
     };
@@ -733,22 +817,20 @@ async fn choose_engine<R: BufRead, W: Write>(
             return Ok(Some(engine));
         }
         if p.confirm(&format!("Nothing answers at {url}. Use it anyway?"), false)? {
-            return Ok(Some(Engine {
-                label: "An engine not answering yet".to_owned(),
-                provider: "local".to_owned(),
-                api: crate::guess_api(Some(&url)),
-                base_url: url,
-                models: Vec::new(),
-            }));
+            return Ok(Some(unanswered_engine(url)));
         }
     }
 }
 
-fn harness_kind(name: &str) -> HarnessArg {
-    if name == "pi" {
-        HarnessArg::Pi
-    } else {
-        HarnessArg::Fx
+/// The engine at `url`, which does not answer yet: its API and provider
+/// are the ones usual for its address.
+fn unanswered_engine(url: String) -> Engine {
+    Engine {
+        label: "An engine not answering yet".to_owned(),
+        provider: default_provider(None, Some(&url)),
+        api: guess_api(Some(&url)),
+        base_url: url,
+        models: Vec::new(),
     }
 }
 
@@ -815,6 +897,19 @@ mod tests {
         assert!(prompter("\n").confirm("?", true).unwrap());
         assert!(!prompter("maybe\nn\n").confirm("?", true).unwrap());
         assert!(prompter("Y\n").confirm("?", false).unwrap());
+    }
+
+    #[test]
+    fn an_engine_not_answering_yet_is_named_after_its_port() {
+        let engine = unanswered_engine("http://127.0.0.1:8080/v1".to_owned());
+        assert_eq!(
+            (engine.provider.as_str(), engine.api),
+            ("llamacpp", EngineApi::Generic)
+        );
+        assert_eq!(
+            unanswered_engine("http://127.0.0.1:9999/v1".to_owned()).provider,
+            "local"
+        );
     }
 
     #[test]

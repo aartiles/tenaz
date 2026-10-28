@@ -106,7 +106,7 @@ async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
 
 #[tokio::test]
 async fn a_harness_exit_during_a_tool_call_charges_the_attempt_and_names_the_call() {
-    // The crash takes one of T001's attempts; the fake run needs two more.
+    // The crash takes one of T001's attempts; the fake run needs one more.
     let (_work, project, log) = run(
         ScriptedHarness {
             crash_in_tool_task: Some("T001".into()),
@@ -264,8 +264,7 @@ async fn the_next_bootstrap_is_told_which_files_the_previous_one_left() {
             _ => None,
         })
         .collect();
-    // The fake's first bootstrap sessions hit engine errors; the partial
-    // one and the full one are the last two.
+    // The partial session, then the full one.
     let (last, earlier) = labels.split_last().unwrap();
     let prompt = |label: &str| {
         project
@@ -321,8 +320,7 @@ async fn the_bootstrap_runs_one_session_per_step() {
             _ => None,
         })
         .collect();
-    // The fake's first bootstrap sessions hit engine errors.
-    let [.., first, second, last] = labels.as_slice() else {
+    let [first, second, last] = labels.as_slice() else {
         panic!("three step sessions: {labels:?}");
     };
     let prompt = |label: &str| {
@@ -412,7 +410,6 @@ async fn a_review_with_minor_findings_only_accepts_the_task() {
         log.contains("T002: the review asks for changes with MINOR findings only; accepted"),
         "{log}"
     );
-    // The fake's first T002 attempt fails on its own; the reviewed one is the second.
     let reviews = project
         .journal()
         .iter()
@@ -606,17 +603,10 @@ async fn a_tool_call_over_its_time_is_stopped_and_the_session_goes_on() {
             _ => None,
         })
         .collect();
-    // The fake's first T001 session that does the work then outgrows its
-    // context on purpose; that, not the tool call, is what ends it.
+    // The stopped call does not end the session: it settles on its own.
     let first = &sessions[0];
     assert_eq!(first.attempt, Some(1));
-    assert!(
-        first
-            .abort_reason
-            .as_deref()
-            .is_some_and(|r| r.starts_with("context budget exceeded")),
-        "{first:?}"
-    );
+    assert!(first.ok && first.abort_reason.is_none(), "{first:?}");
     let stopped = first
         .watchdog
         .iter()
@@ -663,9 +653,17 @@ async fn a_second_tool_call_over_its_time_ends_the_session() {
         sessions[0].abort_reason.as_deref(),
         Some("a tool call ran over 1 minutes twice")
     );
+    let second = sessions
+        .iter()
+        .find(|s| s.attempt == Some(2) && s.ok)
+        .unwrap_or_else(|| panic!("the next attempt does the task: {sessions:?}"));
+    // It is told why the first attempt's session was stopped.
+    let prompt = project
+        .read(&format!(".tenaz/private/{}.prompt.md", second.label))
+        .unwrap();
     assert!(
-        sessions.iter().any(|s| s.attempt == Some(2) && s.ok),
-        "the next attempt does the task: {sessions:?}"
+        prompt.contains("The session was stopped: a tool call ran over 1 minutes twice.\n"),
+        "{prompt}"
     );
 }
 

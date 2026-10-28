@@ -45,7 +45,8 @@ Pure modules, each unit-tested without I/O:
 `Session`, `Vcs`, `VerifyRunner`, `Clock`, `Notifier`, `MemoryProbe`,
 `EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
-holds the scripted harness that plays a fixed session script, a fast
+holds the scripted harness, which plays the happy path of a small goal
+with each recovery opt-in (`every_recovery` is what `tenaz demo` plays), a fast
 clock, and `Replay`, which answers for the memory probe and the engine
 counters with readings a test gives it, `ScriptedVerify`, which judges
 the scripted harness's checks without a shell, and `SnapshotVcs`, a
@@ -59,6 +60,12 @@ the session wrapper with engine retries, capacity caps and continuations
 what a failed bootstrap attempt tells the next one and whether it counts
 (the pure `orchestrator::bootstrap`),
 the task attempt loop with review, split and block, and pause and resume.
+Each phase has a module under `orchestrator/phases/` (`bootstrap`, `task`,
+`review`, `planner` for split and replan, `task_loop`, `final_review`);
+`phases.rs` keeps what they share, the `verify` call and the briefing.
+`orchestrator/session.rs` is the wrapper; one session, start to journal
+record, is `session/record.rs`, the harness run `session/harness.rs`, and
+its requests `session/requests.rs`.
 
 State lives on disk under `.tenaz/` in the project, so a run survives the
 process and the user's existing tooling (`jq` over the journal, `git log`)
