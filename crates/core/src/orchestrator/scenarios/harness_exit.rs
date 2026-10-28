@@ -663,9 +663,17 @@ async fn a_second_tool_call_over_its_time_ends_the_session() {
         sessions[0].abort_reason.as_deref(),
         Some("a tool call ran over 1 minutes twice")
     );
+    let second = sessions
+        .iter()
+        .find(|s| s.attempt == Some(2) && s.ok)
+        .unwrap_or_else(|| panic!("the next attempt does the task: {sessions:?}"));
+    // It is told why the first attempt's session was stopped.
+    let prompt = project
+        .read(&format!(".tenaz/private/{}.prompt.md", second.label))
+        .unwrap();
     assert!(
-        sessions.iter().any(|s| s.attempt == Some(2) && s.ok),
-        "the next attempt does the task: {sessions:?}"
+        prompt.contains("The session was stopped: a tool call ran over 1 minutes twice.\n"),
+        "{prompt}"
     );
 }
 
