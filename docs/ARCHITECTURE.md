@@ -56,6 +56,8 @@ and the crates above it.
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations
 (which one comes next is decided by the pure `orchestrator::recovery`),
+what a failed bootstrap attempt tells the next one and whether it counts
+(the pure `orchestrator::bootstrap`),
 the task attempt loop with review, split and block, and pause and resume.
 
 State lives on disk under `.tenaz/` in the project, so a run survives the

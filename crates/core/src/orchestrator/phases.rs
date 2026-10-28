@@ -10,11 +10,13 @@ use crate::ledger::{
 };
 use crate::project::BRIEF;
 use crate::role::Role;
+use crate::session::SessionMetrics;
 use crate::spec::{self, coverage};
 use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
 use crate::verify::{VerifyOutcome, interpret, retarget};
 
+use super::bootstrap;
 use super::session::SessionCtx;
 use super::{RunError, Runner};
 
@@ -196,27 +198,39 @@ impl Runner {
             }
         }
         if self.ledger.bootstrap_attempts >= self.params.max_bootstrap_attempts {
-            let errors = self
-                .ledger
-                .last_errors
-                .clone()
-                .unwrap_or_default()
-                .join("; ");
-            let hint = if self.ledger.bootstrap_tool_failures >= self.ledger.bootstrap_attempts {
-                format!(
-                    " (in every attempt all of the model's tool calls failed: the model does not \
-                     work with {}'s tools; try another model or the other harness)",
-                    self.ledger.config.harness
-                )
-            } else {
-                String::new()
+            let attempts = bootstrap::Attempts {
+                counted: self.ledger.bootstrap_attempts,
+                tool_failures: self.ledger.bootstrap_tool_failures,
             };
-            return self.block(&format!(
-                "bootstrap failed {} times at step {step}{hint}: {errors}",
-                self.ledger.bootstrap_attempts
+            return self.block(&bootstrap::exhausted(
+                step,
+                attempts,
+                self.ledger.config.harness,
+                self.ledger.last_errors.as_deref(),
             ));
         }
         self.ledger.bootstrap_attempts += 1;
+        let prompt = self.bootstrap_prompt(step)?;
+        let s = self
+            .session(Role::Bootstrap, &prompt, &SessionCtx::default())
+            .await?;
+        let (errors, backlog) = self.validate_bootstrap(step).await;
+        let errors = bootstrap::diagnose(errors, &s.metrics, &s.record.reverted);
+        self.journal(JournalRecord::BootstrapValidation {
+            step,
+            attempt: self.ledger.bootstrap_attempts,
+            errors: errors.clone(),
+            session_ok: s.ok(),
+        });
+        if errors.is_empty() {
+            return self.bootstrap_step_done(step, &backlog);
+        }
+        self.bootstrap_failed(step, errors, &s.metrics)
+    }
+
+    /// The bootstrap session's prompt for `step`: the brief, what the
+    /// previous attempt got wrong and left, and the files of step 1.
+    fn bootstrap_prompt(&self, step: BootstrapStep) -> Result<String, RunError> {
         let mut extra = vec![(format!("Original brief ({BRIEF})"), self.project.brief()?)];
         if self.params.existing_project == Some(true) {
             extra.push((
@@ -224,24 +238,7 @@ impl Runner {
                 briefing::EXISTING_PROJECT.to_owned(),
             ));
         }
-        if let Some(errors) = &self.ledger.last_errors
-            && !errors.is_empty()
-        {
-            extra.push((
-                "Problems the orchestrator found in the previous bootstrap session".to_owned(),
-                errors
-                    .iter()
-                    .map(|e| format!("- {e}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ));
-            if let Some(left) = self.bootstrap_left()? {
-                extra.push((
-                    "Files the previous bootstrap sessions left (kept)".to_owned(),
-                    left,
-                ));
-            }
-        }
+        extra.extend(self.bootstrap_retry_notes()?);
         if step != BootstrapStep::Spec {
             for (title, path) in [
                 ("Spec", ".tenaz/spec.md"),
@@ -262,84 +259,63 @@ impl Runner {
                 ),
             ),
         ];
-        let prompt = self.briefing(Role::Bootstrap, fields, None, extra, &[])?;
-        let s = self
-            .session(Role::Bootstrap, &prompt, &SessionCtx::default())
-            .await?;
-        let (mut errors, backlog) = self.validate_bootstrap(step).await;
-        // A file the session wrote where it may not was reverted after it. When the
-        // bootstrap fails, say so: the next session otherwise sees only the failure
-        // the revert caused (verify calling a file that is gone) and repeats it.
-        if !errors.is_empty() && !s.record.reverted.is_empty() {
-            errors.insert(
-                0,
-                crate::ownership::reverted_note(Role::Bootstrap, &s.record.reverted),
-            );
-        }
-        // A reply cut at the output limit left no work: say why, so the next
-        // session does not reason the same way again.
-        if !errors.is_empty()
-            && s.metrics.output_truncated()
-            && let Some(reason) = &s.record.abort_reason
-        {
-            errors.insert(0, format!("the session was stopped: {reason}"));
-        }
-        // A session whose every tool call failed did not get to the task: say
-        // so first, for the next session and for whoever reads the block.
-        if !errors.is_empty() && s.metrics.every_tool_call_failed() {
-            errors.insert(
-                0,
-                format!(
-                    "every tool call in the session failed ({} of {}), so it could not read or \
-                     write the project; the first: {}",
-                    s.metrics.tool_errors,
-                    s.metrics.tool_calls,
-                    s.metrics.first_tool_error.as_deref().unwrap_or("unknown")
-                ),
-            );
-        }
-        self.journal(JournalRecord::BootstrapValidation {
-            step,
-            attempt: self.ledger.bootstrap_attempts,
-            errors: errors.clone(),
-            session_ok: s.ok(),
-        });
-        if !errors.is_empty() {
-            if s.metrics.every_tool_call_failed() {
-                self.ledger.bootstrap_tool_failures += 1;
-            }
-            // An attempt that left fewer problems than the one before is
-            // progress: it is not counted, up to as many again as allowed.
-            if let Some(before) = self.ledger.last_errors.as_ref().map(Vec::len)
-                && errors.len() < before
-                && self.ledger.bootstrap_uncounted < self.params.max_bootstrap_attempts
-            {
-                self.ledger.bootstrap_attempts -= 1;
-                self.ledger.bootstrap_uncounted += 1;
-                self.log(&format!(
-                    "Bootstrap made progress ({before} -> {} problems); this attempt is not counted ({} of {} such)",
-                    errors.len(),
-                    self.ledger.bootstrap_uncounted,
-                    self.params.max_bootstrap_attempts
-                ));
-            }
-            self.log(&format!(
-                "Bootstrap step {step} not accepted: {} problem(s){}",
-                errors.len(),
-                if s.metrics.every_tool_call_failed() {
-                    format!(
-                        "; all {} tool calls failed, the first: {}",
-                        s.metrics.tool_calls,
-                        s.metrics.first_tool_error.as_deref().unwrap_or("unknown")
-                    )
-                } else {
-                    String::new()
-                }
+        self.briefing(Role::Bootstrap, fields, None, extra, &[])
+    }
+
+    /// What a retried bootstrap session is told about the attempt before
+    /// it: the problems found, and the files it left.
+    fn bootstrap_retry_notes(&self) -> Result<Vec<(String, String)>, RunError> {
+        let Some(errors) = self.ledger.last_errors.as_ref().filter(|e| !e.is_empty()) else {
+            return Ok(Vec::new());
+        };
+        let mut notes = vec![(
+            "Problems the orchestrator found in the previous bootstrap session".to_owned(),
+            errors
+                .iter()
+                .map(|e| format!("- {e}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )];
+        if let Some(left) = self.bootstrap_left()? {
+            notes.push((
+                "Files the previous bootstrap sessions left (kept)".to_owned(),
+                left,
             ));
-            self.ledger.last_errors = Some(errors);
-            return self.save();
         }
-        self.bootstrap_step_done(step, &backlog)
+        Ok(notes)
+    }
+
+    /// Records an attempt at `step` that left `errors`. An attempt that left
+    /// fewer problems than the one before is progress and is not counted.
+    fn bootstrap_failed(
+        &mut self,
+        step: BootstrapStep,
+        errors: Vec<String>,
+        metrics: &SessionMetrics,
+    ) -> Result<(), RunError> {
+        if metrics.every_tool_call_failed() {
+            self.ledger.bootstrap_tool_failures += 1;
+        }
+        let max = self.params.max_bootstrap_attempts;
+        let before = self.ledger.last_errors.as_ref().map(Vec::len);
+        if let Some(before) =
+            bootstrap::progress(before, errors.len(), self.ledger.bootstrap_uncounted, max)
+        {
+            self.ledger.bootstrap_attempts -= 1;
+            self.ledger.bootstrap_uncounted += 1;
+            self.log(&format!(
+                "Bootstrap made progress ({before} -> {} problems); this attempt is not counted ({} of {max} such)",
+                errors.len(),
+                self.ledger.bootstrap_uncounted,
+            ));
+        }
+        self.log(&format!(
+            "Bootstrap step {step} not accepted: {} problem(s){}",
+            errors.len(),
+            bootstrap::tool_failure_note(metrics)
+        ));
+        self.ledger.last_errors = Some(errors);
+        self.save()
     }
 
     /// Moves the bootstrap to the step after `step`, whose attempts count
