@@ -189,6 +189,11 @@ mod tests {
     }
 
     #[test]
+    fn a_rejecting_review_that_adds_nothing_runs_again_while_cycles_are_left() {
+        assert_eq!(final_outcome(false, true, 0, true), FinalOutcome::Retry);
+    }
+
+    #[test]
     fn added_tasks_go_back_to_the_loop_while_cycles_are_left() {
         assert_eq!(final_outcome(false, true, 2, true), FinalOutcome::Loop);
     }

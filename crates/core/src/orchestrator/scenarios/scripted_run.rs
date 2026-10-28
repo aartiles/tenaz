@@ -356,6 +356,26 @@ async fn the_backlog_is_replanned_and_the_brief_kept() {
     );
 }
 
+/// A replan and T001's builder both write T001's card, which is not theirs
+/// to change: each edit is reverted and the card stays done.
+#[tokio::test]
+async fn out_of_role_card_edits_are_reverted() {
+    let run = Played::with(ScriptedHarness {
+        tampered_card: Some("T001".into()),
+        ..Default::default()
+    })
+    .await;
+    let reverted_by = |role: &str| {
+        run.sessions().any(|s| {
+            s.label.contains(role) && s.reverted.iter().any(|p| p == ".tenaz/tasks/T001.md")
+        })
+    };
+    assert!(reverted_by("-builder-T001"), "{}", run.log);
+    assert!(reverted_by("-replan"), "{}", run.log);
+    assert_eq!(run.card_field("T001", "status").as_deref(), Some("done"));
+    assert!(run.has(completed), "{}", run.log);
+}
+
 #[tokio::test]
 async fn a_builder_without_its_check_is_asked_for_one() {
     let run = Played::with(ScriptedHarness {

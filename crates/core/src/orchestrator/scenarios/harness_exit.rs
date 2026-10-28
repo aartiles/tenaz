@@ -585,7 +585,6 @@ async fn a_tool_call_over_its_time_is_stopped_and_the_session_goes_on() {
         ScriptedHarness {
             hang_task: Some("T001".into()),
             hang_times: 1,
-            context_stop_task: Some("T001".into()),
             ..Default::default()
         },
         3,
@@ -604,17 +603,10 @@ async fn a_tool_call_over_its_time_is_stopped_and_the_session_goes_on() {
             _ => None,
         })
         .collect();
-    // The fake's first T001 session that does the work then outgrows its
-    // context on purpose; that, not the tool call, is what ends it.
+    // The stopped call does not end the session: it settles on its own.
     let first = &sessions[0];
     assert_eq!(first.attempt, Some(1));
-    assert!(
-        first
-            .abort_reason
-            .as_deref()
-            .is_some_and(|r| r.starts_with("context budget exceeded")),
-        "{first:?}"
-    );
+    assert!(first.ok && first.abort_reason.is_none(), "{first:?}");
     let stopped = first
         .watchdog
         .iter()
