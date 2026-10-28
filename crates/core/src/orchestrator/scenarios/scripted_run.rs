@@ -5,7 +5,6 @@
 //! one of them.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
@@ -309,44 +308,20 @@ async fn a_builder_without_its_check_is_asked_for_one() {
     );
 }
 
-/// Stops the run when the T002 builder starts.
-fn stop_at_the_t002_builder(
-    project: &Project,
-    stop: CancellationToken,
-) -> tokio::task::JoinHandle<bool> {
-    let log = project.path(".tenaz/private/orchestrator.log");
-    tokio::spawn(async move {
-        for _ in 0..3000 {
-            if std::fs::read_to_string(&log).is_ok_and(|t| t.contains("builder-T002 started")) {
-                stop.cancel();
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        false
-    })
-}
-
 /// Ctrl-C during a builder session pauses the run without counting the
 /// attempt, and the next run resumes it to the end.
 #[tokio::test]
 async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
     let work = tempfile::tempdir().unwrap();
     let (project, vcs) = fake_project(work.path(), &["maxAttempts=2", "replanEvery=2"]);
-    let slow = ScriptedHarness {
-        slow_task: Some("T002".into()),
-        slow_for: Duration::from_secs(3),
+    let stop = CancellationToken::new();
+    let stopping = ScriptedHarness {
+        stop_at: Some(("T002".into(), stop.clone())),
         ..Default::default()
     };
-    let stop = CancellationToken::new();
-    let watcher = stop_at_the_t002_builder(&project, stop.clone());
     let clock = Arc::new(FastClock::new(100));
-    let paused = deps(&project, vcs.clone(), Arc::new(slow), clock.clone());
+    let paused = deps(&project, vcs.clone(), Arc::new(stopping), clock.clone());
     run(&project, paused, stop).await;
-    assert!(
-        watcher.await.unwrap(),
-        "the run never reached the T002 builder"
-    );
     let log = project.read(".tenaz/private/orchestrator.log").unwrap();
     assert!(
         log.contains("PAUSED during") && log.contains("builder-T002"),

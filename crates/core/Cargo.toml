@@ -31,3 +31,5 @@ testing = []
 
 [dev-dependencies]
 tempfile.workspace = true
+# Paused time, so a scenario's timers fire in the order of their deadlines.
+tokio = { workspace = true, features = ["test-util"] }

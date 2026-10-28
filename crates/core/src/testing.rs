@@ -31,17 +31,18 @@ use crate::ports::{
 use crate::session::{SessionEvent, StopReason, Usage};
 
 /// A clock that runs `speed` times faster than real time, so backoffs and
-/// grace periods in tests take milliseconds.
+/// grace periods in tests take milliseconds. It reads and sleeps on tokio's
+/// clock, so under paused time (`start_paused`) both stand still together.
 #[derive(Debug)]
 pub struct FastClock {
-    started: std::time::Instant,
+    started: tokio::time::Instant,
     speed: u32,
 }
 
 impl FastClock {
     pub fn new(speed: u32) -> Self {
         Self {
-            started: std::time::Instant::now(),
+            started: tokio::time::Instant::now(),
             speed: speed.max(1),
         }
     }
@@ -72,9 +73,9 @@ impl Clock for FastClock {
 /// edits that must be reverted, and the final review.
 #[derive(Clone, Debug, Default)]
 pub struct ScriptedHarness {
-    /// A builder session for this task waits before acting, so a test can pause the run.
-    pub slow_task: Option<String>,
-    pub slow_for: Duration,
+    /// When a builder session for this task starts, it cancels this token
+    /// (a test's Ctrl-C) and waits until its turn is aborted.
+    pub stop_at: Option<(String, tokio_util::sync::CancellationToken)>,
     /// The first builder session for this task dies mid-turn between tool
     /// calls: it writes to stderr and exits with code 1.
     pub crash_task: Option<String>,
@@ -725,9 +726,20 @@ impl Player {
         self.finish("Done.");
     }
 
+    /// Whether the run is stopped at this task's builder; stops it if so.
+    fn stops_at(&self, task: &str) -> bool {
+        match &self.script.stop_at {
+            Some((at, stop)) if at == task => {
+                stop.cancel();
+                true
+            }
+            _ => false,
+        }
+    }
+
     async fn builder(&mut self, task: &str, attempt: u32) {
-        if self.script.slow_task.as_deref() == Some(task) {
-            tokio::time::sleep(self.script.slow_for).await; // gives the test time to pause the run
+        if self.stops_at(task) {
+            return self.hang().await;
         }
         if self.script.crash_task.as_deref() == Some(task)
             && self.bump(&format!("crash-{task}")) == 1

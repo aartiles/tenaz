@@ -14,40 +14,62 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, run};
 use crate::ports::{
-    Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit, SessionSpec,
+    Clock, Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit,
+    SessionSpec,
 };
-use crate::project::Project;
 use crate::session::{SessionEvent, StopReason, Usage};
 use crate::testing::{FastClock, ScriptedHarness};
 
-/// The scripted harness, except that bootstrap sessions think silently
-/// until aborted and then end the turn shortly after.
-struct SilentBootstrap(ScriptedHarness);
+/// How long the bootstrap thinks before the test stops the run.
+const THINKING: Duration = Duration::from_secs(20);
+/// How long the harness takes to answer the abort, inside the 5 s grace.
+const ANSWER: Duration = Duration::from_secs(1);
+
+/// The scripted harness, except that bootstrap sessions think silently,
+/// stop the run after [`THINKING`], and answer the abort after [`ANSWER`].
+/// Both are on the run's clock.
+struct SilentBootstrap {
+    scripted: ScriptedHarness,
+    clock: Arc<FastClock>,
+    stop: CancellationToken,
+}
 
 #[async_trait]
 impl Harness for SilentBootstrap {
     fn info(&self) -> HarnessInfo {
-        self.0.info()
+        self.scripted.info()
     }
 
     async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
         if !spec.label.ends_with("bootstrap") {
-            return self.0.open(spec).await;
+            return self.scripted.open(spec).await;
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        Ok(Box::new(Thinking { tx, rx }))
+        Ok(Box::new(Thinking {
+            tx,
+            rx,
+            clock: self.clock.clone(),
+            stop: self.stop.clone(),
+        }))
     }
 }
 
 struct Thinking {
     tx: mpsc::UnboundedSender<SessionEvent>,
     rx: mpsc::UnboundedReceiver<SessionEvent>,
+    clock: Arc<FastClock>,
+    stop: CancellationToken,
 }
 
 #[async_trait]
 impl Session for Thinking {
     async fn prompt(&mut self, _text: &str) -> Result<(), HarnessError> {
         let _ = self.tx.send(SessionEvent::TurnStart);
+        let (clock, stop) = (self.clock.clone(), self.stop.clone());
+        tokio::spawn(async move {
+            clock.sleep(THINKING).await;
+            stop.cancel();
+        });
         Ok(())
     }
 
@@ -59,11 +81,10 @@ impl Session for Thinking {
         Ok(())
     }
 
-    /// 10 ms real is 1 s on the test clock, well inside the 5 s grace.
     async fn abort(&mut self) -> Result<(), HarnessError> {
-        let tx = self.tx.clone();
+        let (tx, clock) = (self.tx.clone(), self.clock.clone());
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            clock.sleep(ANSWER).await;
             for event in [
                 SessionEvent::MessageEnd {
                     server: None,
@@ -96,39 +117,21 @@ impl Session for Thinking {
     }
 }
 
-/// Stops the run 200 ms (20 s on the test clock) after its bootstrap
-/// session starts; the handle says whether it started at all.
-fn stop_into_the_bootstrap(
-    project: &Project,
-    stop: CancellationToken,
-) -> tokio::task::JoinHandle<bool> {
-    let log = project.path(".tenaz/private/orchestrator.log");
-    tokio::spawn(async move {
-        for _ in 0..3000 {
-            if std::fs::read_to_string(&log).is_ok_and(|t| t.contains("bootstrap started")) {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                stop.cancel();
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        false
-    })
-}
-
-#[tokio::test]
+/// Tokio's clock is paused, so the timers fire in the order of their
+/// deadlines however busy the machine is: the answer to the abort always
+/// comes before the grace runs out.
+#[tokio::test(start_paused = true)]
 async fn a_pause_after_a_long_wait_keeps_the_aborted_turn() {
     let work = tempfile::tempdir().unwrap();
     let (project, vcs) = fake_project(work.path(), &[]);
     let stop = CancellationToken::new();
-    let watcher = stop_into_the_bootstrap(&project, stop.clone());
-    let harness = Arc::new(SilentBootstrap(ScriptedHarness::default()));
     let clock = Arc::new(FastClock::new(100));
+    let harness = Arc::new(SilentBootstrap {
+        scripted: ScriptedHarness::default(),
+        clock: clock.clone(),
+        stop: stop.clone(),
+    });
     run(&project, deps(&project, vcs, harness, clock), stop).await;
-    assert!(
-        watcher.await.unwrap(),
-        "the bootstrap session never started"
-    );
 
     let journal = project.read(".tenaz/journal.jsonl").unwrap();
     let session = journal
