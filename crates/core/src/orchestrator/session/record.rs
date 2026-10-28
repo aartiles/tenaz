@@ -192,6 +192,7 @@ fn session_record(started: &Started<'_>, metrics: &SessionMetrics, left: Left) -
         turns: metrics.turns,
         tool_calls: metrics.tool_calls,
         writes: metrics.writes,
+        outside_writes: metrics.outside_writes.clone(),
         usage: metrics.usage,
         reasoning_chars: metrics.reasoning_chars,
         context_peak: metrics.context_peak,

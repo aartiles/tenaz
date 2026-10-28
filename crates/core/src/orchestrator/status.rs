@@ -3,9 +3,9 @@
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 
-use crate::ledger::{JournalRecord, Ledger, Phase, SessionRecord};
+use crate::ledger::{CacheCheck, JournalRecord, Ledger, Phase, SessionRecord};
 use crate::memory::{MemorySample, memory_line};
-use crate::metrics::{RequestRecord, engine_line};
+use crate::metrics::{RequestRecord, engine_line, prompt_cache_percent};
 use crate::project::Project;
 
 /// The status text, or a note when the project is not initialized.
@@ -19,12 +19,7 @@ pub fn status_text(project: &Project) -> String {
     let counts = task_counts(project);
     let active = project.active_run();
     let sessions = sessions(project);
-    let requests: Vec<RequestRecord> = project
-        .read_if(".tenaz/private/requests.jsonl")
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
+    let requests = requests(project);
     let samples: Vec<MemorySample> = project
         .read_if(".tenaz/private/memory.jsonl")
         .unwrap_or_default()
@@ -37,7 +32,7 @@ pub fn status_text(project: &Project) -> String {
             format!(
                 "reasoning={} cache={}{}{}",
                 p.reasoning,
-                p.cache,
+                p.cache_check(),
                 p.tools.map(|t| format!(" tools={t}")).unwrap_or_default(),
                 if p.accepted_weak {
                     " (accepted weak)"
@@ -123,7 +118,7 @@ pub fn status_text(project: &Project) -> String {
             sessions.iter().filter(|s| !s.ok).count(),
             sessions.iter().map(|s| s.compactions).sum::<u32>()
         ),
-        engine_line(&requests),
+        engine_line(&requests, cache_percent(&ledger, &requests)),
         memory_line(&samples),
     ];
     let mut text = lines.join("\n");
@@ -159,6 +154,30 @@ fn task_counts(project: &Project) -> Vec<(String, usize)> {
         }
     }
     counts
+}
+
+fn requests(project: &Project) -> Vec<RequestRecord> {
+    project
+        .read_if(".tenaz/private/requests.jsonl")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+/// Whether the engine reports cached tokens, as the preflight saw it.
+fn cache_reported(ledger: &Ledger) -> Option<bool> {
+    ledger.preflight.as_ref().and_then(|p| p.cache_reported)
+}
+
+/// The share of prompt tokens read from the cache; `None` without
+/// requests, or when the engine does not report cached tokens.
+fn cache_percent(ledger: &Ledger, requests: &[RequestRecord]) -> Option<f64> {
+    let unreported = ledger
+        .preflight
+        .as_ref()
+        .is_some_and(|p| p.cache_check() == CacheCheck::NotReported);
+    prompt_cache_percent(requests).filter(|_| !unreported)
 }
 
 fn sessions(project: &Project) -> Vec<SessionRecord> {
@@ -220,6 +239,8 @@ pub fn status_json(project: &Project) -> Value {
         "sessions": sessions.len(),
         "sessions_failed": sessions.iter().filter(|s| !s.ok).count(),
         "tool_repairs": tool_repairs(project),
+        "prompt_cache_reported": cache_reported(&ledger),
+        "prompt_cache_percent": cache_percent(&ledger, &requests(project)),
         "model": ledger.config.model,
         "harness": ledger.config.harness,
         "origin": ledger.origin,

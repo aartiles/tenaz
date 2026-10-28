@@ -30,10 +30,12 @@ Pure modules, each unit-tested without I/O:
 | `spec` | Requirement lines (`- R1: ...`, `manual:`) and coverage. |
 | `backlog` | Card validation, dependency DAG, resolved and ready tasks. |
 | `verify` | The `verify` contract: last-line JSON, exit code, clipping; whether a builder attempt passed. |
-| `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time and provider-error rules; emits steer, abort or interrupt (stop the turn, prompt again). |
+| `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time, provider-error and outside-write rules; emits steer, abort or interrupt (stop the turn, prompt again). |
+| `write_scope` | Where a session may write without the sandbox, and whether a write tool's target is outside it (ADR 0008). |
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal). |
 | `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |
 | `role` | The session roles, their prompt paths and what a steered session is asked to write before it stops. |
+| `cache_report` | Whether the engine's usage names its cached tokens, noted by the engine proxy for the preflight. |
 | `effort` | The dial that lowers the reasoning effort for one session after a reply cut at the output limit. |
 | `ownership` | Which paths each role may write; the rest is reverted. |
 | `ledger` | `run.json` and the `journal.jsonl` record types. |

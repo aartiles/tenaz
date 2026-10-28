@@ -30,6 +30,7 @@ use tenaz_core::ports::{
 use tenaz_core::project::{LEDGER, Project};
 use tenaz_core::session::SessionEvent;
 use tenaz_core::verify::RawVerifyOutput;
+use tenaz_core::write_scope::WriteScope;
 
 /// The hidden subcommand that applies a policy and execs a program.
 pub const SUBCOMMAND: &str = "sandbox-exec";
@@ -279,6 +280,18 @@ fn read_rules(top: &Path, deny: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
 
 /// `(git dir, common dir)` of the repository at `root`, canonical; they
 /// differ in a linked worktree.
+/// Where a run of `root` without the sandbox may write, for the check of
+/// its write tools (ADR 0008): what the sandbox would allow, resolved, and
+/// the project and the temporary directories as written too, since a
+/// session names them as it is told them (`/tmp`, not `/private/tmp`).
+pub fn write_scope(root: &Path, allow_write: &str) -> io::Result<WriteScope> {
+    let policy = Policy::for_project(root, allow_write, "")?;
+    let mut others = policy.write;
+    others.extend([std::env::temp_dir(), PathBuf::from("/tmp")]);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    Ok(WriteScope::new(&std::path::absolute(root)?, home, others))
+}
+
 fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
     let output = std::process::Command::new("git")
         .current_dir(root)
@@ -600,6 +613,22 @@ mod tests {
         assert!(policy.write.iter().any(|w| w.ends_with("dev")));
         // The git dir is inside the project: it adds no write root.
         assert!(!policy.write.contains(&root.join(".git")));
+    }
+
+    #[test]
+    fn the_scope_without_the_sandbox_allows_what_the_sandbox_would() {
+        let (dir, root) = repo();
+        let scope = write_scope(dir.path(), "").unwrap();
+        let outside = |path: &Path| scope.outside(&serde_json::json!({ "path": path }));
+        for inside in [
+            dir.path().join(".tenaz/spec.md"),
+            root.join(".tenaz/spec.md"),
+            PathBuf::from("/tmp/x"),
+            std::env::temp_dir().join("x"),
+        ] {
+            assert_eq!(outside(&inside), None, "{}", inside.display());
+        }
+        assert!(outside(Path::new("/elsewhere/.tenaz/spec.md")).is_some());
     }
 
     #[test]

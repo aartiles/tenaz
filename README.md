@@ -78,7 +78,8 @@ project's own tests.
   the task. A reply cut at the output limit is the session's: it counts as
   an attempt, and the next session reasons at a lower effort.
 - **Watchdogs.** Loops, repeated calls, idle turns and huge outputs get a
-  steering message first, then the session is stopped.
+  steering message first, then the session is stopped. A file written
+  outside the project is logged and the session told so.
 - **One resident model.** When the agent asks for an image, Tenaz unloads the
   LLM, runs the image model, frees it and reloads the LLM. The agent's
   requests wait meanwhile instead of failing. See [Images](#images) for
@@ -277,7 +278,8 @@ interface the skill relies on:
   gaps, 4 when it is blocked and 5 when it pauses; 1 is an error.
 - `tenaz status --json` prints the phase, the state (`running`, `paused`,
   `blocked`, `interrupted`, `complete`, `complete_with_gaps`), the block
-  reason and the tasks as one JSON object.
+  reason, the tasks and the prompt cache share (`null` when the engine does
+  not report it) as one JSON object.
 
 ## Reference
 
@@ -440,6 +442,13 @@ by starting a program in it before the first session and stops with the
 reason when it cannot, for example when Tenaz itself already runs in a
 sandbox on macOS. The sandbox reduces what a mistaken model can damage; it
 is not a boundary against a hostile brief or repository.
+
+Without the sandbox (the default), Tenaz still looks at the file each
+write tool names. When it is outside the places above, the write goes
+ahead, and Tenaz names the file in `orchestrator.log` and in the session's
+journal record (`outside_writes`), and tells the session once that its
+files belong in the project. A bootstrap step whose files are then missing
+says where they went. Writes from shell commands are not seen (ADR 0008).
 
 ### In an existing project
 

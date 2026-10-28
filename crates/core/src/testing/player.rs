@@ -56,6 +56,10 @@ pub(super) fn field<'a>(prompt: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
+/// Where `outside_bootstrap` writes: outside the project and outside the
+/// temporary directories the tests run in.
+pub const OUTSIDE: &str = "/elsewhere";
+
 /// The `verify` the scripted harness writes at bootstrap.
 pub const VERIFY: &str = r#"#!/bin/sh
 # Runs checks/<ID>.<name>.sh; --task T007 selects the T007. prefix.
@@ -193,7 +197,11 @@ impl Player {
             usage: Usage {
                 input: 1200,
                 output: 10,
-                cache_read: if self.prompts > 1 { 900 } else { 0 },
+                cache_read: if self.prompts > 1 && !self.script.uncached {
+                    900
+                } else {
+                    0
+                },
                 ..Default::default()
             },
             stop_reason: if aborted {
@@ -504,13 +512,32 @@ impl Player {
     }
 
     /// The scripted bootstrap sessions that do not do the step: engine
-    /// failures, a reply cut at the output limit, or a partial session.
-    /// True when one played.
+    /// failures, a reply cut at the output limit, or one that ends without
+    /// its files. True when one played.
     async fn failed_bootstrap(&mut self) -> bool {
         if self.script.engine_failures && self.bump("bootstrap") <= 2 {
             self.engine_failure(self.bump("engine-failure")).await;
         } else if self.script.truncate_bootstrap && self.bump("truncate-bootstrap") == 1 {
             self.truncate().await;
+        } else {
+            return self.unfinished_bootstrap().await;
+        }
+        true
+    }
+
+    /// A bootstrap session that ends without its files in the project:
+    /// written outside it, or only in part. True when one played.
+    async fn unfinished_bootstrap(&mut self) -> bool {
+        if self.script.outside_bootstrap && self.bump("outside-bootstrap") == 1 {
+            for file in ["spec.md", "map.md"] {
+                let path = format!("{OUTSIDE}/.tenaz/{file}");
+                self.turn(
+                    ToolCall::new("write", serde_json::json!({ "path": path })),
+                    |_| {},
+                )
+                .await;
+            }
+            self.finish("Done.");
         } else if self.script.partial_bootstrap && self.bump("partial-bootstrap") == 1 {
             self.write_tool(".tenaz/spec.md", "# Spec\n\n- R1: one\n", false)
                 .await;

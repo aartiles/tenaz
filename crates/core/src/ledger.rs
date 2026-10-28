@@ -216,6 +216,13 @@ pub struct Preflight {
     pub settled: bool,
     pub reasoning: bool,
     pub cache: bool,
+    /// Whether the engine's usage named its cached tokens at all; `None`
+    /// without the engine proxy, when it saw no usage, and in preflights
+    /// from before this check.
+    /// An engine that does not report them passes with `cache` false: it
+    /// may cache all the same (ADR 0007).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_reported: Option<bool>,
     /// The model ran a shell command through the harness's tool and
     /// reported its output; `None` in preflights from before this check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,6 +237,45 @@ pub struct Preflight {
     pub engine: Option<EngineSummary>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub accepted_weak: bool,
+}
+
+/// What the preflight's cache check found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheCheck {
+    /// The second answer read cached tokens.
+    Reused,
+    /// It read none, and the engine reports them (or nobody saw whether
+    /// it does).
+    NotReused,
+    /// It read none, and the engine does not report them: unknown.
+    NotReported,
+}
+
+impl CacheCheck {
+    /// Only a cache that is reported and not reused fails (ADR 0007).
+    pub fn passes(self) -> bool {
+        self != CacheCheck::NotReused
+    }
+}
+
+impl std::fmt::Display for CacheCheck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            CacheCheck::Reused => "true",
+            CacheCheck::NotReused => "false",
+            CacheCheck::NotReported => "not reported",
+        })
+    }
+}
+
+impl Preflight {
+    pub fn cache_check(&self) -> CacheCheck {
+        match (self.cache, self.cache_reported) {
+            (true, _) => CacheCheck::Reused,
+            (false, Some(false)) => CacheCheck::NotReported,
+            (false, _) => CacheCheck::NotReused,
+        }
+    }
 }
 
 /// A skill copied read-only into `.tenaz/skills/` and hashed.
@@ -475,6 +521,10 @@ pub struct SessionRecord {
     pub turns: u32,
     pub tool_calls: u32,
     pub writes: u32,
+    /// Files the write tools named outside the project, in a run without
+    /// the sandbox (ADR 0008).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outside_writes: Vec<String>,
     pub usage: Usage,
     pub reasoning_chars: usize,
     pub context_peak: u64,

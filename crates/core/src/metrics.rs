@@ -214,20 +214,32 @@ pub fn engine_summary(requests: &[RequestRecord]) -> Option<EngineSummary> {
     })
 }
 
-/// The `Engine:` line of `status`.
-pub fn engine_line(requests: &[RequestRecord]) -> String {
-    let Some(e) = engine_summary(requests) else {
-        return "Engine: no requests recorded".to_owned();
-    };
+/// The percentage of prompt tokens read from the cache; `None` without
+/// requests.
+pub fn prompt_cache_percent(requests: &[RequestRecord]) -> Option<f64> {
+    if requests.is_empty() {
+        return None;
+    }
     let prompt: u64 = requests.iter().map(|r| r.prompt_tokens).sum();
     let cached: u64 = requests.iter().map(|r| r.cached_tokens).sum();
     #[expect(
         clippy::cast_precision_loss,
-        reason = "token counts stay far below 2^53; the share is printed to one place"
+        reason = "token counts stay far below 2^53; the share is rounded to one place"
     )]
     let share = cached as f64 / prompt.max(1) as f64 * 100.0;
+    Some((share * 10.0).round() / 10.0)
+}
+
+/// The `Engine:` line of `status`, with the share of prompt tokens read
+/// from the cache; `None` when the engine does not report it, which is
+/// not 0 %.
+pub fn engine_line(requests: &[RequestRecord], cache_percent: Option<f64>) -> String {
+    let Some(e) = engine_summary(requests) else {
+        return "Engine: no requests recorded".to_owned();
+    };
+    let cache = cache_percent.map_or_else(|| "not reported".to_owned(), |c| format!("{c:.1}%"));
     let mut line = format!(
-        "Engine: {} requests ({} with engine timings), prompt cache {share:.1}%",
+        "Engine: {} requests ({} with engine timings), prompt cache {cache}",
         e.requests, e.engine_matched
     );
     if e.engine_matched > 0 {
@@ -349,13 +361,14 @@ mod tests {
             (100, 66, Some(0.66))
         );
         assert!(
-            engine_line(&requests).ends_with(", drafts 66.0% accepted (66 of 100)"),
+            engine_line(&requests, prompt_cache_percent(&requests))
+                .ends_with(", drafts 66.0% accepted (66 of 100)"),
             "{}",
-            engine_line(&requests)
+            engine_line(&requests, prompt_cache_percent(&requests))
         );
         let none = engine_summary(&[mk(None)]).unwrap();
         assert_eq!((none.drafted, none.draft_acceptance), (0, None));
-        assert!(!engine_line(&[mk(None)]).contains("drafts"));
+        assert!(!engine_line(&[mk(None)], None).contains("drafts"));
         let old: EngineSummary = serde_json::from_value(serde_json::json!({"requests": 1, "engine_matched": 0, "ttft_median_s": null, "decode_tps_median": null, "decode_tps_weighted": null, "ttft_s_total": 0.0, "decode_s_total": 0.0})).unwrap();
         assert_eq!(
             old.drafted, 0,
@@ -397,9 +410,33 @@ mod tests {
         assert_eq!(s.decode_tps_weighted, Some(21.67));
         assert_eq!(s.ttft_s_total, 3.0);
         assert_eq!(engine_summary(&[]), None);
-        assert_eq!(engine_line(&[]), "Engine: no requests recorded");
-        assert!(engine_line(&requests).starts_with("Engine: 4 requests (3 with engine timings), prompt cache 100.0%, TTFT median 1 s, decode 21.67 tok/s"));
+        assert_eq!(engine_line(&[], None), "Engine: no requests recorded");
+        assert!(engine_line(&requests, prompt_cache_percent(&requests)).starts_with("Engine: 4 requests (3 with engine timings), prompt cache 100.0%, TTFT median 1 s, decode 21.67 tok/s"));
         let unmatched = vec![mk(1.0, 1.0, 1.0, false)];
         assert_eq!(engine_summary(&unmatched).unwrap().ttft_median_s, None);
+    }
+
+    #[test]
+    fn a_cache_that_is_not_reported_is_not_printed_as_zero() {
+        let mk = |prompt_tokens: u64, cached_tokens: u64| RequestRecord {
+            session: "s".into(),
+            sequence: 1,
+            stop_reason: None,
+            prompt_tokens,
+            cached_tokens,
+            output_tokens: 1,
+            reasoning_tokens: 0,
+            client_first_token_s: None,
+            client_total_s: None,
+            engine: None,
+            engine_matched: false,
+            server: None,
+            sent: None,
+        };
+        assert_eq!(prompt_cache_percent(&[]), None);
+        let requests = vec![mk(1, 0), mk(2, 2)];
+        assert_eq!(prompt_cache_percent(&requests), Some(66.7));
+        assert!(engine_line(&requests, Some(0.0)).contains("prompt cache 0.0%"));
+        assert!(engine_line(&requests, None).contains("prompt cache not reported"));
     }
 }

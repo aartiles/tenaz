@@ -109,6 +109,9 @@ impl Runner {
         if run.watch.is_some_and(|w| w.idle) {
             watchdog.set_fingerprint(self.deps.vcs.worktree_fingerprint().ok());
         }
+        // Only watched sessions run in the project; the preflight runs in a
+        // directory of its own.
+        watchdog.set_write_scope(run.watch.and(self.deps.write_scope.clone()));
         let clock = self.deps.clock.clone();
         let started = clock.monotonic_ms();
         let recorder = RequestRecorder::start(
@@ -274,9 +277,16 @@ impl SessionLoop<'_> {
             _ => self.timing.observe(&event, now, &self.recorder),
         }
         let vcs = self.runner.deps.vcs.clone();
+        let noted = self.watchdog.metrics().outside_writes.len();
         let actions = self.watchdog.handle(&event, elapsed, move || {
             vcs.worktree_fingerprint().unwrap_or_default()
         });
+        for path in &self.watchdog.metrics().outside_writes[noted..] {
+            self.runner.log(&format!(
+                "  {}: wrote outside the project: {path}",
+                self.label
+            ));
+        }
         for action in &actions {
             self.runner
                 .log(&format!("  {}: {}", self.label, describe(action)));
