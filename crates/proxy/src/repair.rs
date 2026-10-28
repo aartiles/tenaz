@@ -173,16 +173,44 @@ fn only_objects(schema: &Value) -> bool {
     })
 }
 
-/// The arguments with each watched field that holds a JSON object as text
-/// parsed back into that object, the tool's `command_action` added to a
-/// `command` sent without an `action` (at the top level or in a watched
-/// field), properties sent beside a watched field moved into it when its
-/// variant takes them all, and integers outside their variant's range
-/// clamped to it; the repaired fields, `None` when nothing needed repair (or
-/// the arguments are not a JSON object).
+impl ToolArgs {
+    /// Whether `object` holds one of the watched fields.
+    fn holds_a_field(&self, object: &Map<String, Value>) -> bool {
+        self.fields.keys().any(|f| object.contains_key(f))
+    }
+}
+
+/// One repair of a call's arguments. It records each property it changed
+/// in `repaired`, prefixed with the watched field it is in, if any.
+type Pass = fn(&mut Map<String, Value>, &ToolArgs, &mut Vec<String>);
+
+/// The repairs, in order: an object sent as text must be parsed before its
+/// `action` can be added, the `action` selects the variant that decides
+/// what is moved in, and a property moved in is clamped there.
+const PASSES: [Pass; 4] = [
+    parse_stringified,
+    add_command_action,
+    move_stray_properties,
+    clamp_integers,
+];
+
+/// The arguments with every pass applied, and the repaired fields; `None`
+/// when nothing needed repair (or the arguments are not a JSON object).
 fn repair_arguments(arguments: &str, tool: &ToolArgs) -> Option<(String, Vec<String>)> {
     let mut object: Map<String, Value> = serde_json::from_str(arguments).ok()?;
     let mut repaired = Vec::new();
+    for pass in PASSES {
+        pass(&mut object, tool, &mut repaired);
+    }
+    if repaired.is_empty() {
+        return None;
+    }
+    Some((serde_json::to_string(&object).ok()?, repaired))
+}
+
+/// Parses each watched field that holds a JSON object as text back into
+/// that object.
+fn parse_stringified(object: &mut Map<String, Value>, tool: &ToolArgs, repaired: &mut Vec<String>) {
     for field in tool.fields.keys() {
         let Some(Value::String(text)) = object.get(field) else {
             continue;
@@ -192,46 +220,49 @@ fn repair_arguments(arguments: &str, tool: &ToolArgs) -> Option<(String, Vec<Str
             repaired.push(field.clone());
         }
     }
-    if let Some(action) = &tool.command_action {
-        let missing = |o: &Map<String, Value>| {
-            !o.contains_key("action") && o.get("command").is_some_and(Value::is_string)
-        };
-        if !tool.fields.keys().any(|f| object.contains_key(f)) && missing(&object) {
-            object.insert("action".to_owned(), Value::String(action.clone()));
-            repaired.push("action".to_owned());
-        }
-        for field in tool.fields.keys() {
-            if let Some(Value::Object(inner)) = object.get_mut(field)
-                && missing(inner)
-            {
-                inner.insert("action".to_owned(), Value::String(action.clone()));
-                repaired.push(format!("{field}.action"));
-            }
+}
+
+/// Adds the tool's `command_action` to a `command` sent without an
+/// `action`, at the top level (when no watched field is there) or in a
+/// watched field.
+fn add_command_action(
+    object: &mut Map<String, Value>,
+    tool: &ToolArgs,
+    repaired: &mut Vec<String>,
+) {
+    let Some(action) = &tool.command_action else {
+        return;
+    };
+    if !tool.holds_a_field(object) && lacks_action(object) {
+        object.insert("action".to_owned(), Value::String(action.clone()));
+        repaired.push("action".to_owned());
+    }
+    for field in tool.fields.keys() {
+        if let Some(Value::Object(inner)) = object.get_mut(field)
+            && lacks_action(inner)
+        {
+            inner.insert("action".to_owned(), Value::String(action.clone()));
+            repaired.push(format!("{field}.action"));
         }
     }
+}
+
+/// A `command` text without an `action`.
+fn lacks_action(object: &Map<String, Value>) -> bool {
+    !object.contains_key("action") && object.get("command").is_some_and(Value::is_string)
+}
+
+/// Moves the properties sent beside a watched field into it, when the
+/// variant its `action` selects takes them all.
+fn move_stray_properties(
+    object: &mut Map<String, Value>,
+    tool: &ToolArgs,
+    repaired: &mut Vec<String>,
+) {
     for (field, actions) in &tool.fields {
-        let Some(Value::Object(inner)) = object.get(field) else {
+        let Some(stray) = strays(object, tool, field, actions) else {
             continue;
         };
-        let Some(properties) = inner
-            .get("action")
-            .and_then(Value::as_str)
-            .and_then(|action| actions.get(action))
-        else {
-            continue;
-        };
-        let stray: Vec<String> = object
-            .keys()
-            .filter(|key| !tool.fields.contains_key(*key))
-            .cloned()
-            .collect();
-        if stray.is_empty()
-            || !stray
-                .iter()
-                .all(|key| properties.contains_key(key) && !inner.contains_key(key))
-        {
-            continue;
-        }
         let moved: Vec<(String, Value)> = stray
             .into_iter()
             .filter_map(|key| object.remove_entry(&key))
@@ -243,21 +274,55 @@ fn repair_arguments(arguments: &str, tool: &ToolArgs) -> Option<(String, Vec<Str
             }
         }
     }
-    if tool.fields.keys().any(|f| object.contains_key(f)) {
-        for (field, actions) in &tool.fields {
-            if let Some(Value::Object(inner)) = object.get_mut(field) {
-                clamp(inner, actions, &format!("{field}."), &mut repaired);
-            }
-        }
-    } else {
-        for actions in tool.fields.values() {
-            clamp(&mut object, actions, "", &mut repaired);
-        }
-    }
-    if repaired.is_empty() {
+}
+
+/// The properties beside `field`, when there are some, the variant its
+/// `action` selects takes them all, and `field` holds none of them yet.
+fn strays(
+    object: &Map<String, Value>,
+    tool: &ToolArgs,
+    field: &str,
+    actions: &Actions,
+) -> Option<Vec<String>> {
+    let Some(Value::Object(inner)) = object.get(field) else {
         return None;
+    };
+    let properties = variant(inner, actions)?;
+    let stray: Vec<String> = object
+        .keys()
+        .filter(|key| !tool.fields.contains_key(*key))
+        .cloned()
+        .collect();
+    let fits = |key: &String| properties.contains_key(key) && !inner.contains_key(key);
+    (!stray.is_empty() && stray.iter().all(fits)).then_some(stray)
+}
+
+/// The properties of the variant that `object`'s `action` selects.
+fn variant<'a>(
+    object: &Map<String, Value>,
+    actions: &'a Actions,
+) -> Option<&'a BTreeMap<String, Bounds>> {
+    object
+        .get("action")
+        .and_then(Value::as_str)
+        .and_then(|action| actions.get(action))
+}
+
+/// Clamps integers outside their variant's range: in the watched fields,
+/// or at the top level when the call holds none.
+fn clamp_integers(object: &mut Map<String, Value>, tool: &ToolArgs, repaired: &mut Vec<String>) {
+    if !tool.holds_a_field(object) {
+        tool.fields
+            .values()
+            .for_each(|actions| clamp(object, actions, "", repaired));
+        return;
     }
-    Some((serde_json::to_string(&object).ok()?, repaired))
+    for (field, actions) in &tool.fields {
+        let Some(Value::Object(inner)) = object.get_mut(field) else {
+            continue;
+        };
+        clamp(inner, actions, &format!("{field}."), repaired);
+    }
 }
 
 /// Clamps each integer in `object` to the range that the variant its
@@ -268,11 +333,7 @@ fn clamp(
     prefix: &str,
     repaired: &mut Vec<String>,
 ) {
-    let Some(properties) = object
-        .get("action")
-        .and_then(Value::as_str)
-        .and_then(|action| actions.get(action))
-    else {
+    let Some(properties) = variant(object, actions) else {
         return;
     };
     for (key, value) in object.iter_mut() {
@@ -390,29 +451,23 @@ impl StreamRepair {
         out.into_bytes()
     }
 
+    /// Passes `event` on, with the argument deltas of watched calls held
+    /// back, and sends a choice's held arguments before it finishes.
     fn event(&mut self, event: &str, out: &mut String) {
         let data = event
             .lines()
             .find_map(|l| l.strip_prefix("data:"))
             .map(str::trim);
-        let Some(data) = data else {
-            push_event(out, event);
-            return;
-        };
-        if data == "[DONE]" {
+        if data == Some("[DONE]") {
             self.release(None, out);
             push_event(out, event);
             return;
         }
-        let Ok(mut json) = serde_json::from_str::<Value>(data) else {
+        let Some(mut json) = data.and_then(|d| serde_json::from_str::<Value>(d).ok()) else {
             push_event(out, event);
             return;
         };
-        for key in ["id", "model", "created", "object"] {
-            if let Some(v) = json.get(key) {
-                self.envelope.insert(key.to_owned(), v.clone());
-            }
-        }
+        self.remember_envelope(&json);
         let mut changed = false;
         let mut finishing = Vec::new();
         for choice in json
@@ -422,38 +477,8 @@ impl StreamRepair {
             .flatten()
         {
             let index = choice.get("index").and_then(Value::as_u64).unwrap_or(0);
-            for call in choice
-                .pointer_mut("/delta/tool_calls")
-                .and_then(Value::as_array_mut)
-                .into_iter()
-                .flatten()
-            {
-                let call_index = call.get("index").and_then(Value::as_u64).unwrap_or(0);
-                let key = (index, call_index);
-                if let Some(name) = call.pointer("/function/name").and_then(Value::as_str)
-                    && !self.held.contains_key(&key)
-                    && self.watched.fields(name).is_some()
-                {
-                    self.held.insert(
-                        key,
-                        Held {
-                            tool: name.to_owned(),
-                            arguments: String::new(),
-                        },
-                    );
-                }
-                let Some(held) = self.held.get_mut(&key) else {
-                    continue;
-                };
-                if let Some(Value::String(part)) = call.pointer_mut("/function/arguments")
-                    && !part.is_empty()
-                {
-                    held.arguments.push_str(part);
-                    part.clear();
-                    changed = true;
-                }
-            }
-            if choice.get("finish_reason").is_some_and(|r| !r.is_null()) {
+            changed |= self.hold_arguments(index, choice);
+            if finishes(choice) {
                 finishing.push(index);
             }
         }
@@ -465,6 +490,66 @@ impl StreamRepair {
         } else {
             push_event(out, event);
         }
+    }
+
+    /// Keeps the chunk's `id`, `model`, `created` and `object` for the
+    /// deltas the repair adds.
+    fn remember_envelope(&mut self, json: &Value) {
+        for key in ["id", "model", "created", "object"] {
+            if let Some(v) = json.get(key) {
+                self.envelope.insert(key.to_owned(), v.clone());
+            }
+        }
+    }
+
+    /// Holds back the argument deltas of the watched calls in `choice`;
+    /// whether any was taken out.
+    fn hold_arguments(&mut self, index: u64, choice: &mut Value) -> bool {
+        let mut changed = false;
+        for call in choice
+            .pointer_mut("/delta/tool_calls")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            let key = (
+                index,
+                call.get("index").and_then(Value::as_u64).unwrap_or(0),
+            );
+            self.watch_call(key, call);
+            changed |= self.hold(key, call);
+        }
+        changed
+    }
+
+    /// Starts holding the call at `key` when it names a watched tool.
+    fn watch_call(&mut self, key: (u64, u64), call: &Value) {
+        let Some(name) = call.pointer("/function/name").and_then(Value::as_str) else {
+            return;
+        };
+        if self.watched.fields(name).is_some() {
+            self.held.entry(key).or_insert_with(|| Held {
+                tool: name.to_owned(),
+                arguments: String::new(),
+            });
+        }
+    }
+
+    /// Moves the call's argument delta into what is held for `key`;
+    /// whether there was one to move.
+    fn hold(&mut self, key: (u64, u64), call: &mut Value) -> bool {
+        let Some(held) = self.held.get_mut(&key) else {
+            return false;
+        };
+        let Some(Value::String(part)) = call.pointer_mut("/function/arguments") else {
+            return false;
+        };
+        if part.is_empty() {
+            return false;
+        }
+        held.arguments.push_str(part);
+        part.clear();
+        true
     }
 
     /// Sends the held arguments of `choice` (all choices with `None`).
@@ -501,6 +586,11 @@ impl StreamRepair {
             push_event(out, &format!("data: {}", Value::Object(chunk)));
         }
     }
+}
+
+/// Whether the chunk's `choice` finishes it.
+fn finishes(choice: &Value) -> bool {
+    choice.get("finish_reason").is_some_and(|r| !r.is_null())
 }
 
 fn push_event(out: &mut String, event: &str) {
@@ -544,10 +634,14 @@ mod tests {
         let fixed: Value = serde_json::from_str(&fixed).unwrap();
         assert_eq!(fixed["request"]["command"], "ls");
         // Already an object, a string that is not a JSON object, not JSON at all.
-        assert!(repair(r#"{"request":{"action":"run"}}"#).is_none());
-        assert!(repair(r#"{"request":"ls -la"}"#).is_none());
-        assert!(repair(r#"{"request":"[1, 2]"}"#).is_none());
-        assert!(repair("not json").is_none());
+        for untouched in [
+            r#"{"request":{"action":"run"}}"#,
+            r#"{"request":"ls -la"}"#,
+            r#"{"request":"[1, 2]"}"#,
+            "not json",
+        ] {
+            assert_eq!(repair(untouched), None, "{untouched}");
+        }
     }
 
     #[test]
@@ -569,9 +663,13 @@ mod tests {
         let (both, fields) = fixed(r#"{"request":"{\"command\":\"ls\"}"}"#).unwrap();
         assert_eq!(both["request"]["action"], "run");
         assert_eq!(fields, ["request", "request.action"]);
-        assert!(fixed(r#"{"action":"run","command":"ls"}"#).is_none());
-        assert!(fixed(r#"{"action":"poll"}"#).is_none());
-        assert!(fixed(r#"{"command":["ls"]}"#).is_none());
+        for untouched in [
+            r#"{"action":"run","command":"ls"}"#,
+            r#"{"action":"poll"}"#,
+            r#"{"command":["ls"]}"#,
+        ] {
+            assert_eq!(fixed(untouched), None, "{untouched}");
+        }
         // Two actions that take a command: no way to tell which was meant.
         let two = serde_json::json!({"tools": [{"type": "function", "function": {"name": "shell", "parameters": {"type": "object", "properties": {"request": {"oneOf": [
             {"type": "object", "properties": {"action": {"const": "run"}, "command": {"type": "string"}}},
@@ -620,15 +718,15 @@ mod tests {
         assert_eq!(moved["request"]["action"], "run");
         assert_eq!(moved["request"]["timeout_ms"], 5000);
         assert_eq!(fields, ["request.action", "request.timeout_ms"]);
-        // A property the variant does not take, or one the request already holds.
-        assert!(
-            fixed(r#"{"request":{"action":"run","command":"ls"},"timeout_ms":1,"x":1}"#).is_none()
-        );
-        assert!(
-            fixed(r#"{"request":{"action":"run","command":"ls","cwd":"a"},"cwd":"b"}"#).is_none()
-        );
-        // `chars` belongs to `interact`, not `run`.
-        assert!(fixed(r#"{"request":{"action":"run","command":"ls"},"chars":"y"}"#).is_none());
+        // A property the variant does not take, or one the request already
+        // holds; `chars` belongs to `interact`, not `run`.
+        for untouched in [
+            r#"{"request":{"action":"run","command":"ls"},"timeout_ms":1,"x":1}"#,
+            r#"{"request":{"action":"run","command":"ls","cwd":"a"},"cwd":"b"}"#,
+            r#"{"request":{"action":"run","command":"ls"},"chars":"y"}"#,
+        ] {
+            assert_eq!(fixed(untouched), None, "{untouched}");
+        }
     }
 
     #[test]
@@ -658,16 +756,13 @@ mod tests {
         assert_eq!(moved["request"]["yield_time_ms"], 30000);
         assert_eq!(fields, ["request.yield_time_ms", "request.yield_time_ms"]);
         // In range, not an integer, or no range declared: untouched.
-        assert!(
-            fixed(r#"{"request":{"action":"run","command":"ls","yield_time_ms":30000}}"#).is_none()
-        );
-        assert!(
-            fixed(r#"{"request":{"action":"run","command":"ls","yield_time_ms":"90000"}}"#)
-                .is_none()
-        );
-        assert!(
-            fixed(r#"{"request":{"action":"run","command":"ls","timeout_ms":999999}}"#).is_none()
-        );
+        for untouched in [
+            r#"{"request":{"action":"run","command":"ls","yield_time_ms":30000}}"#,
+            r#"{"request":{"action":"run","command":"ls","yield_time_ms":"90000"}}"#,
+            r#"{"request":{"action":"run","command":"ls","timeout_ms":999999}}"#,
+        ] {
+            assert_eq!(fixed(untouched), None, "{untouched}");
+        }
     }
 
     #[test]
@@ -699,6 +794,14 @@ mod tests {
             "a string where strings are allowed stays"
         );
         assert!(repair_body(br#"{"choices":[{"message":{"content":"hi"}}]}"#, &watched).is_none());
+    }
+
+    /// What `stream`, sent in one chunk, comes out as, and the repairs made.
+    fn streamed(watched: ObjectArgs, stream: &str) -> (String, Vec<Repair>) {
+        let mut repair = StreamRepair::new(watched);
+        let mut out = repair.push(stream.as_bytes());
+        out.extend(repair.finish());
+        (String::from_utf8(out).unwrap(), repair.repairs)
     }
 
     /// The arguments a client would assemble from a stream.
@@ -787,11 +890,9 @@ mod tests {
             "\n\n",
             "data: [DONE]\n\n"
         );
-        let mut repair = StreamRepair::new(watched);
-        let mut out = repair.push(stream.as_bytes());
-        out.extend(repair.finish());
-        assert_eq!(String::from_utf8(out).unwrap(), stream);
-        assert!(repair.repairs.is_empty());
+        let (out, repairs) = streamed(watched, stream);
+        assert_eq!(out, stream);
+        assert!(repairs.is_empty());
     }
 
     #[test]
@@ -803,11 +904,9 @@ mod tests {
             r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"command\":\"ls\"}}"}}]},"finish_reason":null}]}"#,
             "\n\n",
         );
-        let mut repair = StreamRepair::new(watched);
-        let mut out = repair.push(stream.as_bytes());
-        out.extend(repair.finish());
-        let (args, _) = assembled(&String::from_utf8(out).unwrap());
+        let (out, repairs) = streamed(watched, stream);
+        let (args, _) = assembled(&out);
         assert_eq!(args, r#"{"request":{"action":"run","command":"ls"}}"#);
-        assert!(repair.repairs.is_empty());
+        assert!(repairs.is_empty());
     }
 }
