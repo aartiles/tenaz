@@ -132,7 +132,10 @@ async fn a_stop_during_the_capacity_wait_pauses_before_the_rerun() {
         clock: FastClock::new(100),
         stop: stop.clone(),
     });
-    let harness = Arc::new(ScriptedHarness::every_recovery());
+    let harness = Arc::new(ScriptedHarness {
+        engine_failures: true,
+        ..Default::default()
+    });
     run(&project, deps(&project, vcs, harness, clock), stop).await;
 
     let journal = project.journal();

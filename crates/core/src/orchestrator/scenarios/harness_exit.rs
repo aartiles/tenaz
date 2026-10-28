@@ -57,7 +57,7 @@ async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
     let (_work, project, log) = run(
         ScriptedHarness {
             crash_task: Some("T001".into()),
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         2,
     )
@@ -106,11 +106,11 @@ async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
 
 #[tokio::test]
 async fn a_harness_exit_during_a_tool_call_charges_the_attempt_and_names_the_call() {
-    // The crash takes one of T001's attempts; the fake run needs two more.
+    // The crash takes one of T001's attempts; the fake run needs one more.
     let (_work, project, log) = run(
         ScriptedHarness {
             crash_in_tool_task: Some("T001".into()),
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         3,
     )
@@ -165,7 +165,7 @@ async fn a_reply_cut_at_the_output_limit_charges_the_attempt_and_lowers_the_effo
     let (_work, project, log) = run(
         ScriptedHarness {
             truncate_task: Some("T001".into()),
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         3,
     )
@@ -221,7 +221,7 @@ async fn a_bootstrap_cut_at_the_output_limit_is_told_why_and_tried_again() {
     let (_work, project, log) = run(
         ScriptedHarness {
             truncate_bootstrap: true,
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         2,
     )
@@ -251,7 +251,7 @@ async fn the_next_bootstrap_is_told_which_files_the_previous_one_left() {
     let (_work, project, _log) = run(
         ScriptedHarness {
             partial_bootstrap: true,
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         2,
     )
@@ -264,8 +264,7 @@ async fn the_next_bootstrap_is_told_which_files_the_previous_one_left() {
             _ => None,
         })
         .collect();
-    // The fake's first bootstrap sessions hit engine errors; the partial
-    // one and the full one are the last two.
+    // The partial session, then the full one.
     let (last, earlier) = labels.split_last().unwrap();
     let prompt = |label: &str| {
         project
@@ -290,7 +289,7 @@ async fn the_bootstrap_runs_one_session_per_step() {
     let (_work, project, log) = run(
         ScriptedHarness {
             stepwise_bootstrap: true,
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         2,
     )
@@ -321,8 +320,7 @@ async fn the_bootstrap_runs_one_session_per_step() {
             _ => None,
         })
         .collect();
-    // The fake's first bootstrap sessions hit engine errors.
-    let [.., first, second, last] = labels.as_slice() else {
+    let [first, second, last] = labels.as_slice() else {
         panic!("three step sessions: {labels:?}");
     };
     let prompt = |label: &str| {
@@ -354,7 +352,7 @@ async fn the_bootstrap_runs_one_session_per_step() {
 
 #[tokio::test]
 async fn bootstrap_steps_already_done_need_no_session() {
-    let (_work, project, log) = run(ScriptedHarness::every_recovery(), 2).await;
+    let (_work, project, log) = run(ScriptedHarness::default(), 2).await;
     let steps: Vec<BootstrapStep> = project
         .journal()
         .iter()
@@ -379,7 +377,7 @@ async fn a_reviewer_over_its_context_is_asked_for_its_verdict_not_notes() {
     let (_work, project, log) = run(
         ScriptedHarness {
             outgrow_review: Some("T002".into()),
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         3,
     )
@@ -403,7 +401,7 @@ async fn a_review_with_minor_findings_only_accepts_the_task() {
     let (_work, project, log) = run(
         ScriptedHarness {
             minor_review: Some("T002".into()),
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         3,
     )
@@ -412,7 +410,6 @@ async fn a_review_with_minor_findings_only_accepts_the_task() {
         log.contains("T002: the review asks for changes with MINOR findings only; accepted"),
         "{log}"
     );
-    // The fake's first T002 attempt fails on its own; the reviewed one is the second.
     let reviews = project
         .journal()
         .iter()
@@ -428,7 +425,7 @@ async fn the_reviewer_is_given_the_images_the_change_adds() {
     let (_work, project, log) = run(
         ScriptedHarness {
             image_task: Some("T004".into()),
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         3,
     )
@@ -467,7 +464,7 @@ async fn the_reviewer_is_given_the_images_the_change_adds() {
 
 #[tokio::test]
 async fn each_request_line_records_what_the_request_asked_for() {
-    let (_work, project, _log) = run(ScriptedHarness::every_recovery(), 3).await;
+    let (_work, project, _log) = run(ScriptedHarness::default(), 3).await;
     let lines = project.read(".tenaz/private/requests.jsonl").unwrap();
     let recorded: Vec<serde_json::Value> = lines
         .lines()
@@ -486,7 +483,7 @@ async fn an_attempt_that_leaves_fewer_passing_checks_fails() {
     let (_work, project, log) = run(
         ScriptedHarness {
             drop_check_task: Some("T004".into()),
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         3,
     )
@@ -521,7 +518,7 @@ async fn a_builder_stopped_at_its_turn_budget_is_continued_not_charged() {
     let (_work, project, log) = run(
         ScriptedHarness {
             long_task: Some("T001".into()),
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         3,
     )
@@ -560,7 +557,7 @@ async fn a_builder_stopped_at_its_turn_budget_is_continued_not_charged() {
 
 #[tokio::test]
 async fn the_final_reviewer_judges_the_product_against_the_brief_as_a_whole() {
-    let (_work, project, _log) = run(ScriptedHarness::every_recovery(), 3).await;
+    let (_work, project, _log) = run(ScriptedHarness::default(), 3).await;
     let label = project
         .journal()
         .iter()
@@ -588,7 +585,8 @@ async fn a_tool_call_over_its_time_is_stopped_and_the_session_goes_on() {
         ScriptedHarness {
             hang_task: Some("T001".into()),
             hang_times: 1,
-            ..ScriptedHarness::every_recovery()
+            context_stop_task: Some("T001".into()),
+            ..Default::default()
         },
         3,
         &["toolMinutes=1"],
@@ -640,7 +638,7 @@ async fn a_second_tool_call_over_its_time_ends_the_session() {
         ScriptedHarness {
             hang_task: Some("T001".into()),
             hang_times: 2,
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         3,
         &["toolMinutes=1"],
@@ -685,7 +683,7 @@ async fn the_write_in_the_reply_that_crosses_the_context_stop_lands() {
     let (_work, project, log) = run(
         ScriptedHarness {
             big_write_task: Some("T001".into()),
-            ..ScriptedHarness::every_recovery()
+            ..Default::default()
         },
         3,
     )

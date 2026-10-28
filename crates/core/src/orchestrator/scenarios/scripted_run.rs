@@ -1,8 +1,9 @@
 //! The scripted run end to end: bootstrap with engine failures, the
 //! capacity cap, a context stop and its continuation, every watchdog, a
 //! review rejection, a split, a replan, out-of-role edits, a pause and
-//! resume, and the final review. Each test plays the whole run and checks
-//! one of them.
+//! resume, and the final review. One test plays them all at once, as
+//! `tenaz demo` does; each other plays the happy path with only what it
+//! checks.
 
 use std::sync::Arc;
 
@@ -116,8 +117,8 @@ fn completed(record: &JournalRecord) -> bool {
     matches!(record, JournalRecord::Run { outcome, .. } if outcome == "COMPLETE")
 }
 
-/// The scripted run, with the recoveries it plays, reaches COMPLETE with
-/// five tasks done and one split.
+/// The scripted run with every recovery at once, as `tenaz demo` plays it,
+/// reaches COMPLETE with five tasks done and one split.
 #[tokio::test]
 async fn the_scripted_run_completes() {
     let run = Played::with(ScriptedHarness::every_recovery()).await;
@@ -157,7 +158,11 @@ async fn the_happy_path_needs_no_recovery() {
 
 #[tokio::test]
 async fn bootstrap_engine_errors_are_retried_without_using_an_attempt() {
-    let run = Played::with(ScriptedHarness::every_recovery()).await;
+    let run = Played::with(ScriptedHarness {
+        engine_failures: true,
+        ..Default::default()
+    })
+    .await;
     assert!(run.has(|r| matches!(r, JournalRecord::EngineRetry { .. })));
     assert!(
         run.has(|r| matches!(r, JournalRecord::BootstrapValidation { attempt: 1, .. })),
@@ -167,7 +172,11 @@ async fn bootstrap_engine_errors_are_retried_without_using_an_attempt() {
 
 #[tokio::test]
 async fn a_capacity_error_lowers_the_budget_and_held_sessions_raise_it() {
-    let run = Played::with(ScriptedHarness::every_recovery()).await;
+    let run = Played::with(ScriptedHarness {
+        engine_failures: true,
+        ..Default::default()
+    })
+    .await;
     let lowered = |r: &JournalRecord| {
         matches!(
             r,
@@ -207,7 +216,11 @@ async fn a_capacity_error_lowers_the_budget_and_held_sessions_raise_it() {
 
 #[tokio::test]
 async fn a_session_past_its_budget_is_continued_without_the_map() {
-    let run = Played::with(ScriptedHarness::every_recovery()).await;
+    let run = Played::with(ScriptedHarness {
+        context_stop_task: Some("T001".into()),
+        ..Default::default()
+    })
+    .await;
     assert!(run.aborted_with("context budget exceeded"));
     assert!(run.has(|r| matches!(
         r,
@@ -235,7 +248,13 @@ async fn a_session_past_its_budget_is_continued_without_the_map() {
 
 #[tokio::test]
 async fn the_watchdogs_steer_and_then_abort() {
-    let run = Played::with(ScriptedHarness::every_recovery()).await;
+    let run = Played::with(ScriptedHarness {
+        engine_failures: true,
+        looping_task: Some("T002".into()),
+        alternating_task: Some("T004".into()),
+        ..Default::default()
+    })
+    .await;
     assert!(
         run.watchdog("steer:big-output-1"),
         "large output not steered"
@@ -257,7 +276,15 @@ async fn the_watchdogs_steer_and_then_abort() {
 
 #[tokio::test]
 async fn reviews_without_a_verdict_are_retried_and_rejections_recorded() {
-    let run = Played::with(ScriptedHarness::every_recovery()).await;
+    let run = Played::with(ScriptedHarness {
+        rejected_review: Some("T001".into()),
+        no_verdict_review: Some("T004".into()),
+        alternating_task: Some("T004".into()),
+        // Continued after a context stop: not a stopped session.
+        context_stop_task: Some("T001".into()),
+        ..Default::default()
+    })
+    .await;
     assert!(
         run.has(|r| matches!(r, JournalRecord::Review { task, attempt: 1, review: 2, verdict: Some(Verdict::Accept) } if task.as_str() == "T004")),
         "T004 review without a verdict was not retried"
@@ -289,7 +316,11 @@ async fn reviews_without_a_verdict_are_retried_and_rejections_recorded() {
 
 #[tokio::test]
 async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
-    let run = Played::with(ScriptedHarness::every_recovery()).await;
+    let run = Played::with(ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    })
+    .await;
     assert!(run.has(
         |r| matches!(r, JournalRecord::Task { task, outcome: TaskOutcome::Split, .. } if task.as_str() == "T003")
     ));
@@ -309,7 +340,11 @@ async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
 
 #[tokio::test]
 async fn the_backlog_is_replanned_and_the_brief_kept() {
-    let run = Played::with(ScriptedHarness::every_recovery()).await;
+    let run = Played::with(ScriptedHarness {
+        tampered_brief: true,
+        ..Default::default()
+    })
+    .await;
     assert!(run.has(|r| matches!(r, JournalRecord::ReplanAccepted { .. })));
     let reverted = run
         .sessions()
@@ -325,7 +360,7 @@ async fn the_backlog_is_replanned_and_the_brief_kept() {
 async fn a_builder_without_its_check_is_asked_for_one() {
     let run = Played::with(ScriptedHarness {
         forget_checks_task: Some("T002".into()),
-        ..ScriptedHarness::every_recovery()
+        ..Default::default()
     })
     .await;
     let asked = run
@@ -354,7 +389,7 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
     let stop = CancellationToken::new();
     let stopping = ScriptedHarness {
         stop_at: Some(("T002".into(), stop.clone())),
-        ..ScriptedHarness::every_recovery()
+        ..Default::default()
     };
     let clock = Arc::new(FastClock::new(100));
     let paused = deps(&project, vcs.clone(), Arc::new(stopping), clock.clone());
@@ -368,7 +403,7 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
     assert_eq!(attempts.as_deref(), Some("0"), "paused attempt was counted");
     assert!(project.load_ledger().unwrap().paused_at.is_some());
 
-    let harness = Arc::new(ScriptedHarness::every_recovery());
+    let harness = Arc::new(ScriptedHarness::default());
     run(
         &project,
         deps(&project, vcs, harness, clock),
@@ -380,7 +415,6 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
         |r| matches!(r, JournalRecord::Paused { label: Some(l), .. } if l.ends_with("-builder-T002"))
     ));
     assert!(run.has(|r| matches!(r, JournalRecord::Resumed { .. })));
-    // T002 loops on its first attempt in the script, so a second follows.
     let first = run.verifies("T002").first().copied();
     assert_eq!(first, Some(1), "the resumed attempt is not the first");
     assert!(run.has(completed), "{}", run.log);
@@ -393,7 +427,7 @@ async fn a_stop_during_the_preflight_pauses_the_run() {
     let work = tempfile::tempdir().unwrap();
     let (project, vcs) = fake_project(work.path(), &[]);
     let clock = Arc::new(FastClock::new(100));
-    let harness = || Arc::new(ScriptedHarness::every_recovery());
+    let harness = || Arc::new(ScriptedHarness::default());
     let stop = CancellationToken::new();
     stop.cancel();
     run(
@@ -428,7 +462,7 @@ async fn run_outgrowing(context_split: bool) -> Played {
     let split = format!("contextSplit={context_split}");
     let harness = ScriptedHarness {
         outgrow_task: Some("T003".into()),
-        ..ScriptedHarness::every_recovery()
+        ..Default::default()
     };
     Played::play(&["contextContinuations=1", &split], harness).await
 }

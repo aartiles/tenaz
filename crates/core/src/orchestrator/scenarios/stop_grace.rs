@@ -127,7 +127,7 @@ async fn a_pause_after_a_long_wait_keeps_the_aborted_turn() {
     let stop = CancellationToken::new();
     let clock = Arc::new(FastClock::new(100));
     let harness = Arc::new(SilentBootstrap {
-        scripted: ScriptedHarness::every_recovery(),
+        scripted: ScriptedHarness::default(),
         clock: clock.clone(),
         stop: stop.clone(),
     });
