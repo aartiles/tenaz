@@ -10,6 +10,8 @@ use crate::role::Role;
 use crate::spec::coverage;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 
+use super::PromptParts;
+
 /// A planner session about one task (split).
 pub(super) struct PlannerTask {
     id: TaskId,
@@ -95,10 +97,12 @@ impl Runner {
         let card = task.map(|t| (t.id.card_path(), t.card_text.clone()));
         self.briefing(
             role,
-            fields,
-            card.as_ref().map(|(p, t)| (p.as_str(), t.as_str())),
-            extra,
-            &[],
+            PromptParts {
+                fields,
+                card: card.as_ref().map(|(p, t)| (p.as_str(), t.as_str())),
+                extra,
+                ..PromptParts::default()
+            },
         )
     }
 

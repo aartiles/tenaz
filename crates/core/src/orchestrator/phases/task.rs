@@ -11,6 +11,7 @@ use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
 use crate::verify::{VerifyOutcome, judge_attempt, with_stop_reason};
 
+use super::PromptParts;
 use super::review::{Review, ReviewInput};
 
 /// A task card as an attempt loads it: parsed, and its text.
@@ -403,10 +404,12 @@ impl Runner {
         };
         self.briefing(
             Role::Builder,
-            fields,
-            Some((&card.file, &loaded.text)),
-            extra,
-            cites,
+            PromptParts {
+                fields,
+                card: Some((&card.file, &loaded.text)),
+                extra,
+                cites,
+            },
         )
     }
 

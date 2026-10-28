@@ -18,6 +18,20 @@ mod review;
 mod task;
 mod task_loop;
 
+/// What a session's prompt adds to the role prompt, spec and map.
+#[derive(Default)]
+struct PromptParts<'a> {
+    /// Header lines, `Key: value`.
+    fields: Vec<(String, String)>,
+    /// The task card's path and text.
+    card: Option<(&'a str, &'a str)>,
+    /// Titled sections after the card.
+    extra: Vec<(String, String)>,
+    /// The requirements to keep from the spec (`spec::cited`); the whole
+    /// spec when empty.
+    cites: &'a [String],
+}
+
 impl Runner {
     pub(crate) async fn run_verify(&self, args: &[&str]) -> VerifyOutcome {
         let timeout = Duration::from_secs(self.params.verify_timeout_sec);
@@ -30,16 +44,15 @@ impl Runner {
         )
     }
 
-    /// Composes a prompt from the project's role prompt, spec and map.
-    fn briefing(
-        &self,
-        role: Role,
-        fields: Vec<(String, String)>,
-        card: Option<(&str, &str)>,
-        extra: Vec<(String, String)>,
-        cites: &[String],
-    ) -> Result<String, RunError> {
-        let mut fields = fields;
+    /// Composes a prompt from the project's role prompt, spec and map, and
+    /// what `parts` adds for this session.
+    fn briefing(&self, role: Role, parts: PromptParts<'_>) -> Result<String, RunError> {
+        let PromptParts {
+            mut fields,
+            card,
+            extra,
+            cites,
+        } = parts;
         let root = self.project.root().display().to_string();
         if root.chars().any(char::is_whitespace) {
             // Models write unquoted paths; a space splits them in the shell.

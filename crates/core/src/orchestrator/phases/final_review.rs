@@ -10,6 +10,8 @@ use crate::spec::{Coverage, coverage};
 use crate::task::TaskId;
 use crate::verify::VerifyOutcome;
 
+use super::PromptParts;
+
 /// Where the final reviewer writes its review.
 const FINAL_REVIEW: &str = ".tenaz/reviews/FINAL.md";
 
@@ -74,7 +76,14 @@ impl Runner {
             ("Coverage".to_owned(), coverage_report(cov)),
             ("./verify --all".to_owned(), all.summary.clone()),
         ];
-        let prompt = self.briefing(Role::FinalReviewer, fields, None, extra, &[])?;
+        let prompt = self.briefing(
+            Role::FinalReviewer,
+            PromptParts {
+                fields,
+                extra,
+                ..PromptParts::default()
+            },
+        )?;
         self.session(
             Role::FinalReviewer,
             &prompt,

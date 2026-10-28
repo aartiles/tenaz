@@ -9,6 +9,8 @@ use crate::role::Role;
 use crate::task::{TaskCard, TaskId};
 use crate::verify::VerifyOutcome;
 
+use super::PromptParts;
+
 /// What a review session is given.
 pub(super) struct ReviewInput<'a> {
     pub(super) card: &'a TaskCard,
@@ -175,10 +177,12 @@ impl Runner {
         ];
         self.briefing(
             Role::Reviewer,
-            fields,
-            Some((&input.card.file, input.card_text)),
-            extra,
-            &[],
+            PromptParts {
+                fields,
+                card: Some((&input.card.file, input.card_text)),
+                extra,
+                ..PromptParts::default()
+            },
         )
     }
 

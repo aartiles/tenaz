@@ -13,6 +13,8 @@ use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::spec::{Requirement, coverage};
 
+use super::PromptParts;
+
 impl Runner {
     /// What is wrong with the files of the bootstrap up to `step`: the spec
     /// and map, then the task cards (Tasks step), then a deterministic
@@ -159,7 +161,14 @@ impl Runner {
                 ),
             ),
         ];
-        self.briefing(Role::Bootstrap, fields, None, extra, &[])
+        self.briefing(
+            Role::Bootstrap,
+            PromptParts {
+                fields,
+                extra,
+                ..PromptParts::default()
+            },
+        )
     }
 
     /// What a retried bootstrap session is told about the attempt before
