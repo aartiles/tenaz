@@ -3,16 +3,15 @@
 //! failures, capacity caps and context stops without charging the task an
 //! attempt, or pauses it.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::briefing::without_map;
 use crate::ledger::{Inflight, JournalRecord, SessionRecord};
 use crate::memory::MemoryWindow;
-use crate::metrics::{EngineCounters, RequestRecord, delta, engine_summary};
+use crate::metrics::engine_summary;
 use crate::ownership;
 use crate::role::Role;
-use crate::session::{SessionEvent, SessionMetrics};
+use crate::session::SessionMetrics;
 use crate::task::TaskId;
 use crate::watchdog::WatchConfig;
 
@@ -20,6 +19,7 @@ use super::recovery::{Continuation, FailureCause, GiveUp, Recovery, Step};
 use super::{RunError, Runner};
 
 mod harness;
+mod requests;
 
 pub(crate) use harness::HarnessRun;
 
@@ -426,112 +426,6 @@ impl Runner {
     }
 }
 
-/// One model response to record.
-struct RequestInput {
-    usage: crate::session::Usage,
-    stop_reason: crate::session::StopReason,
-    server: Option<crate::session::ServerTimings>,
-    sent: Option<crate::session::RequestSettings>,
-    timing: ClientTiming,
-}
-
-/// Records requests off the session loop: reading the engine's counters may
-/// take a second per response, and the loop must keep up with the harness.
-struct RequestRecorder {
-    tx: Option<tokio::sync::mpsc::UnboundedSender<RequestInput>>,
-    task: tokio::task::JoinHandle<Vec<RequestRecord>>,
-}
-
-impl RequestRecorder {
-    fn start(
-        label: &str,
-        project: Option<crate::project::Project>,
-        source: Option<Arc<dyn crate::ports::EngineMetricsSource>>,
-        clock: Arc<dyn crate::ports::Clock>,
-    ) -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<RequestInput>();
-        let label = label.to_owned();
-        let task = tokio::spawn(async move {
-            let mut before: Option<EngineCounters> = match &source {
-                Some(source) => source.counters().await,
-                None => None,
-            };
-            let mut requests: Vec<RequestRecord> = Vec::new();
-            let mut matched_once = false;
-            while let Some(input) = rx.recv().await {
-                // Wait up to a second for the counters only once the engine has
-                // been seen serving this session; otherwise a foreign engine's
-                // counters would cost a second per response.
-                let waits = if matched_once { 10 } else { 2 };
-                let engine = match (&source, before.clone()) {
-                    (Some(source), Some(prior)) => {
-                        engine_delta(source.as_ref(), clock.as_ref(), &prior, &mut before, waits)
-                            .await
-                    }
-                    _ => None,
-                };
-                let sequence = u32::try_from(requests.len() + 1).unwrap_or(u32::MAX);
-                let mut record = request_record(
-                    &label,
-                    sequence,
-                    &input.usage,
-                    &input.stop_reason,
-                    input.timing,
-                )
-                .with_engine(engine);
-                record.server = input.server;
-                record.sent = input.sent;
-                matched_once |= record.engine_matched;
-                if let Some(project) = &project
-                    && let Ok(line) = serde_json::to_string(&record)
-                {
-                    let _ = project.append(".tenaz/private/requests.jsonl", &format!("{line}\n"));
-                }
-                requests.push(record);
-            }
-            requests
-        });
-        Self { tx: Some(tx), task }
-    }
-
-    fn record(&self, input: RequestInput) {
-        if let Some(tx) = &self.tx {
-            let _ = tx.send(input);
-        }
-    }
-
-    /// Closes the queue and waits for every record.
-    async fn finish(mut self) -> Vec<RequestRecord> {
-        self.tx.take();
-        self.task.await.unwrap_or_default()
-    }
-}
-
-/// The engine counters' change since the previous response. The engine may
-/// publish them just after the stream closes, so wait briefly.
-async fn engine_delta(
-    source: &dyn crate::ports::EngineMetricsSource,
-    clock: &dyn crate::ports::Clock,
-    prior: &EngineCounters,
-    before: &mut Option<EngineCounters>,
-    waits: u32,
-) -> Option<EngineCounters> {
-    let mut now = source.counters().await;
-    for _ in 0..waits {
-        match &now {
-            Some(n) if n.get("requests") == prior.get("requests") => {
-                clock.sleep(Duration::from_millis(100)).await;
-                now = source.counters().await;
-            }
-            _ => break,
-        }
-    }
-    let now = now?;
-    let change = delta(&now, prior);
-    *before = Some(now);
-    Some(change)
-}
-
 /// Sessions the engine must hold before a lowered budget is raised: the
 /// configured count, doubled per raise that failed, at most four times it.
 fn raise_wait(recover_sessions: u32, failed_raises: u32) -> u32 {
@@ -555,46 +449,6 @@ fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
     Some(raised)
 }
 
-/// Client-side timings of one turn, in monotonic milliseconds.
-#[derive(Clone, Copy, Debug)]
-struct ClientTiming {
-    turn_started: Option<u64>,
-    first_token: Option<u64>,
-    now: u64,
-}
-
-fn seconds_between(from: u64, to: u64) -> f64 {
-    f64::from(u32::try_from(to.saturating_sub(from)).unwrap_or(u32::MAX)) / 1000.0
-}
-
-/// The harness's view of one model response; engine deltas are attached by the caller.
-fn request_record(
-    label: &str,
-    sequence: u32,
-    usage: &crate::session::Usage,
-    stop_reason: &crate::session::StopReason,
-    timing: ClientTiming,
-) -> RequestRecord {
-    RequestRecord {
-        session: label.to_owned(),
-        sequence,
-        stop_reason: Some(stop_reason.as_str().to_owned()),
-        prompt_tokens: usage.input + usage.cache_read,
-        cached_tokens: usage.cache_read,
-        output_tokens: usage.output,
-        reasoning_tokens: usage.reasoning,
-        client_first_token_s: timing
-            .turn_started
-            .zip(timing.first_token)
-            .map(|(t, f)| seconds_between(t, f)),
-        client_total_s: timing.turn_started.map(|t| seconds_between(t, timing.now)),
-        engine: None,
-        engine_matched: false,
-        server: None,
-        sent: None,
-    }
-}
-
 /// The repository facts the ownership rules need, read from git.
 struct RepoView<'a>(&'a dyn crate::ports::Vcs);
 
@@ -607,83 +461,9 @@ impl ownership::RepoFacts for RepoView<'_> {
     }
 }
 
-/// When the current turn started and gave its first token, for the
-/// requests recorded at each message end.
-#[derive(Default)]
-struct TurnTiming {
-    turn_started: Option<u64>,
-    first_token: Option<u64>,
-}
-
-impl TurnTiming {
-    fn observe(&mut self, event: &SessionEvent, now: u64, recorder: &RequestRecorder) {
-        match event {
-            SessionEvent::TurnStart => {
-                self.turn_started = Some(now);
-                self.first_token = None;
-            }
-            SessionEvent::FirstToken => {
-                self.first_token.get_or_insert(now);
-            }
-            SessionEvent::MessageEnd {
-                usage,
-                stop_reason,
-                server,
-                sent,
-                ..
-            } => recorder.record(RequestInput {
-                usage: *usage,
-                stop_reason: stop_reason.clone(),
-                server: *server,
-                sent: sent.clone(),
-                timing: ClientTiming {
-                    turn_started: self.turn_started,
-                    first_token: self.first_token,
-                    now,
-                },
-            }),
-            _ => {}
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{StopReason, Usage};
-
-    fn counters(requests: f64, tokens: f64) -> EngineCounters {
-        EngineCounters::from([
-            ("requests".to_owned(), requests),
-            ("tokens".to_owned(), tokens),
-        ])
-    }
-
-    #[tokio::test]
-    async fn the_engine_delta_waits_for_the_counters_to_move_and_no_longer() {
-        let source = crate::testing::Replay::new([
-            counters(3.0, 100.0),
-            counters(3.0, 100.0),
-            counters(4.0, 160.0),
-            counters(5.0, 200.0),
-        ]);
-        let clock = crate::testing::FastClock::new(100);
-        let prior = counters(3.0, 100.0);
-        let mut before = Some(prior.clone());
-        let change = engine_delta(&source, &clock, &prior, &mut before, 3).await;
-        assert_eq!(change, Some(counters(1.0, 60.0)));
-        assert_eq!(before, Some(counters(4.0, 160.0)));
-    }
-
-    #[tokio::test]
-    async fn counters_that_never_move_give_a_zero_delta() {
-        let source = crate::testing::Replay::new([counters(3.0, 100.0)]);
-        let clock = crate::testing::FastClock::new(100);
-        let prior = counters(3.0, 100.0);
-        let mut before = Some(prior.clone());
-        let change = engine_delta(&source, &clock, &prior, &mut before, 2).await;
-        assert_eq!(change, Some(counters(0.0, 0.0)));
-    }
 
     #[test]
     fn raises_go_halfway_and_stop_at_the_ceiling_a_failed_raise_set() {
@@ -708,39 +488,5 @@ mod tests {
         assert_eq!(raise_wait(4, 2), 16);
         assert_eq!(raise_wait(4, 7), 16);
         assert_eq!(raise_wait(0, 3), 0);
-    }
-
-    /// Pi reports reasoning per message; the request row keeps it, and rows
-    /// written before the field existed still read.
-    #[test]
-    fn request_rows_keep_reasoning_tokens() {
-        let usage = Usage {
-            input: 1871,
-            output: 111,
-            cache_read: 2048,
-            reasoning: 57,
-            ..Default::default()
-        };
-        let timing = ClientTiming {
-            turn_started: Some(1_000),
-            first_token: Some(4_424),
-            now: 9_420,
-        };
-        let row = request_record("001-bootstrap", 1, &usage, &StopReason::ToolUse, timing);
-        assert_eq!(
-            (
-                row.prompt_tokens,
-                row.cached_tokens,
-                row.output_tokens,
-                row.reasoning_tokens
-            ),
-            (3919, 2048, 111, 57)
-        );
-        assert_eq!(row.client_first_token_s, Some(3.424));
-        let old: RequestRecord = serde_json::from_str(
-            r#"{"session":"s","sequence":1,"stop_reason":"stop","prompt_tokens":1,"cached_tokens":0,"output_tokens":1,"client_first_token_s":null,"client_total_s":null,"engine":null,"engine_matched":false}"#,
-        )
-        .unwrap();
-        assert_eq!(old.reasoning_tokens, 0);
     }
 }

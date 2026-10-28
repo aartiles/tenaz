@@ -13,7 +13,7 @@ use crate::task::TaskId;
 use crate::verify::retarget;
 use crate::watchdog::{Action, WatchConfig, Watchdog};
 
-use super::{RequestRecorder, TurnTiming};
+use super::requests::{RequestRecorder, TurnTiming};
 
 /// The grace given to a harness between an abort and a kill, in
 /// milliseconds.
