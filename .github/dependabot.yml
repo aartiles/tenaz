@@ -6,6 +6,10 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    # Its version is the minimum Rust that ci.yml checks, set by
+    # rust-version in Cargo.toml, not a release to keep current.
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
     groups:
       actions:
         patterns: ["*"]
