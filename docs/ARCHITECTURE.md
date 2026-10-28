@@ -53,7 +53,8 @@ a test gives it, `ScriptedVerify`, which judges the scripted harness's
 checks without a shell, and `SnapshotVcs`, a repository kept as snapshots
 in memory; `vcs_contract_tests!` holds it and
 `GitRepo` to the same checks (ADR 0005). They serve the core's own tests
-and the crates above it.
+and the crates above it. `tenaz-adapters` has a `testing` feature too:
+`write_executable`, for a test that writes a script and then runs it.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations

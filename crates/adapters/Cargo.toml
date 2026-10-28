@@ -19,11 +19,17 @@ reqwest.workspace = true
 time.workspace = true
 base64.workspace = true
 
+[features]
+# Helpers for tests of this crate and the crates above it.
+testing = []
+
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock.workspace = true
 
 [dev-dependencies]
 tenaz-core = { workspace = true, features = ["testing"] }
+# For the integration tests, which see the crate without `cfg(test)`.
+tenaz-adapters = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 axum.workspace = true
 tokio-util.workspace = true

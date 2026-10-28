@@ -198,16 +198,10 @@ fn init_with_the_pi_harness_reads_models_json() {
     .unwrap();
     // A stand-in for the pi executable: only `--version` is needed at init.
     let pi = work.path().join("pi");
-    std::fs::write(
+    tenaz_adapters::testing::write_executable(
         &pi,
         "#!/bin/sh\n[ \"$1\" = --version ] && echo 9.9.9-test && exit 0\nexit 1\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    );
     let brief = work.path().join("brief.md");
     std::fs::write(&brief, "# Brief\n").unwrap();
     let project = work.path().join("project");

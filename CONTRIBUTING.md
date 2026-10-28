@@ -63,6 +63,15 @@ against real tools are documented in
 [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) rather than added to
 `cargo test`.
 
+A test that writes a script and then runs it, in a test binary whose other
+threads may fork meanwhile, writes it with
+`tenaz_adapters::testing::write_executable` (feature `testing`), not
+`std::fs::write`. On Linux the exec fails now and then with "Text file busy"
+when another thread forks while the script is open for writing. A binary
+with a single test (`crates/acp/tests/subprocess_exit.rs`) does not need it.
+The scripted harness in `tenaz-core`, which may not start processes, still
+writes its `verify` in-process.
+
 ## License
 
 By contributing you agree that your contributions are licensed under
