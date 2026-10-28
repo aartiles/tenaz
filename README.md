@@ -142,8 +142,15 @@ brew install aartiles/tap/tenaz
 ```
 
 The [releases page](https://github.com/aartiles/tenaz/releases) also has
-the archive for each platform with its SHA-256 checksum. Or build from
-source with Rust 1.91 or later:
+the archive for each platform with its SHA-256 checksum. To check that
+an archive was built from this repository by its release workflow
+(optional; needs the GitHub CLI, logged in with `gh auth login`):
+
+```bash
+gh attestation verify tenaz-aarch64-apple-darwin.tar.gz --repo aartiles/tenaz
+```
+
+Or build from source with Rust 1.91 or later:
 
 ```bash
 cargo install --locked --git https://github.com/aartiles/tenaz tenaz

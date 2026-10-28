@@ -19,3 +19,6 @@ install-path = ["$XDG_BIN_HOME/", "$XDG_DATA_HOME/../bin", "~/.local/bin"]
 unix-archive = ".tar.gz"
 install-updater = false
 pr-run-mode = "plan"
+# Sign each archive with a build provenance attestation, which
+# `gh attestation verify` checks against this repository.
+github-attestations = true

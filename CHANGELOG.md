@@ -21,6 +21,11 @@ uses [Semantic Versioning](https://semver.org/).
   one ends the session. Pi's `bash` has no default timeout, and a hung call
   held a session for 21 minutes. See ADR 0004.
 
+- Release archives come with a GitHub build provenance attestation, which
+  shows that an archive was built from this repository by the release
+  workflow. Check one with
+  `gh attestation verify <archive> --repo aartiles/tenaz`.
+
 ### Fixed
 
 - A session stopped at its context budget keeps the work of the reply that
