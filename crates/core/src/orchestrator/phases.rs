@@ -20,9 +20,7 @@ use super::{RunError, Runner};
 mod planner;
 mod review;
 mod task;
-
-/// Replan sessions in a row that may fix invalid task cards before the run blocks.
-const CARD_REPAIRS: u32 = 2;
+mod task_loop;
 
 impl Runner {
     pub(crate) async fn run_verify(&self, args: &[&str]) -> VerifyOutcome {
@@ -325,86 +323,6 @@ impl Runner {
             "{}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right.",
             stat.trim()
         )))
-    }
-
-    pub(crate) async fn loop_phase(&mut self) -> Result<(), RunError> {
-        let loaded = self.project.load_backlog();
-        if !loaded.errors.is_empty() {
-            // A planner wrote cards the orchestrator cannot read: a replan
-            // session gets the problems to fix before the run blocks.
-            if self.ledger.card_repairs < CARD_REPAIRS {
-                self.ledger.card_repairs += 1;
-                self.save()?;
-                self.log(&format!(
-                    "Task cards are invalid ({}); a replan session fixes them ({} of {CARD_REPAIRS})",
-                    loaded.errors.join("; "),
-                    self.ledger.card_repairs
-                ));
-                self.planner_session(
-                    Role::Replan,
-                    None,
-                    &format!(
-                        "The orchestrator cannot read these task cards. Fix them (cards that are not done only), change nothing else:\n{}",
-                        loaded
-                            .errors
-                            .iter()
-                            .map(|e| format!("- {e}"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    ),
-                )
-                .await?;
-                return Ok(());
-            }
-            return self.block(&format!(
-                "task cards are invalid: {}",
-                loaded.errors.join("; ")
-            ));
-        }
-        if self.ledger.card_repairs > 0 {
-            self.ledger.card_repairs = 0;
-            self.save()?;
-        }
-        let backlog = loaded.backlog;
-        if self.params.replan_every > 0
-            && self.ledger.done_since_replan >= self.params.replan_every
-            && self.ledger.current.is_none()
-        {
-            self.ledger.done_since_replan = 0;
-            self.save()?;
-            self.planner_session(
-                Role::Replan,
-                None,
-                &format!(
-                    "Periodic replan after {} completed tasks.",
-                    self.params.replan_every
-                ),
-            )
-            .await?;
-            return Ok(());
-        }
-        if let Some(task) = backlog.ready().first().copied().cloned() {
-            return self.run_task(&backlog, &task).await;
-        }
-        let open: Vec<String> = backlog
-            .open()
-            .iter()
-            .map(|t| format!("{} [{}]", t.id, t.status))
-            .collect();
-        if open.is_empty() {
-            self.ledger.phase = Phase::Final;
-            return self.save();
-        }
-        if !self.ledger.stuck_replanned {
-            self.ledger.stuck_replanned = true;
-            self.save()?;
-            self.planner_session(Role::Replan, None, &format!("No task is ready. Blocked or unreachable: {}. Route the work around the blocked tasks.", open.join(", "))).await?;
-            return Ok(());
-        }
-        self.block(&format!(
-            "no task is ready; open tasks: {}",
-            open.join(", ")
-        ))
     }
 
     pub(crate) async fn final_phase(&mut self) -> Result<(), RunError> {
