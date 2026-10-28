@@ -4,10 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
-
 use super::ScriptedHarness;
-use super::pace::{Abort, Pace};
+use super::abort::Abort;
+use super::paced::PacedSender;
 use crate::session::{SessionEvent, StopReason, Usage};
 
 /// One tool call of the scripted model: the tool, its arguments, what it
@@ -35,9 +34,8 @@ impl<'a> ToolCall<'a> {
 pub(super) struct Player {
     pub(super) cwd: PathBuf,
     pub(super) stderr_log: Option<PathBuf>,
-    pub(super) tx: mpsc::UnboundedSender<SessionEvent>,
+    pub(super) events: PacedSender,
     pub(super) abort: Arc<Abort>,
-    pub(super) pace: Arc<Pace>,
     pub(super) prompts: u32,
     pub(super) call: u32,
     pub(super) script: ScriptedHarness,
@@ -85,8 +83,20 @@ fn card(id: &str, requires: &[&str], depends: &[&str], parent: Option<&str>) -> 
 
 impl Player {
     fn emit(&self, event: SessionEvent) {
-        if self.tx.send(event).is_ok() {
-            self.pace.sent();
+        self.events.send(event);
+    }
+
+    /// Whether the turn was aborted, or the runner closed the session:
+    /// either way nothing more is read.
+    fn reads_no_more(&self) -> bool {
+        self.abort.is_set() || self.events.is_closed()
+    }
+
+    /// Returns once the turn is aborted, or the runner closed the session.
+    async fn until_no_more_read(&self) {
+        tokio::select! {
+            () = self.abort.wait() => {}
+            () = self.events.closed() => {}
         }
     }
 
@@ -163,7 +173,7 @@ impl Player {
             text: String::new(),
         });
         self.emit(SessionEvent::TurnEnd);
-        self.pace.handled().await;
+        self.events.handled().await;
     }
 
     async fn write_tool(&mut self, path: &str, text: &str, executable: bool) {
@@ -342,7 +352,7 @@ impl Player {
         if let Some(log) = &self.stderr_log {
             let _ = std::fs::write(log, stderr);
         }
-        self.pace.handled().await;
+        self.events.handled().await;
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
@@ -357,7 +367,7 @@ impl Player {
             name: "bash".to_owned(),
             args: serde_json::json!({ "command": "./verify --all" }),
         });
-        self.abort.wait().await;
+        self.until_no_more_read().await;
         self.emit(SessionEvent::ToolCallEnd {
             id,
             name: "bash".to_owned(),
@@ -389,14 +399,15 @@ impl Player {
             thinking_chars: 4,
             text: String::new(),
         });
-        // An abort sent at the reply's end arrives before the write runs.
-        self.pace.handled().await;
+        // An abort sent at the reply's end, or a close, arrives before the
+        // write runs.
+        self.events.handled().await;
         self.emit(SessionEvent::ToolCallStart {
             id: id.clone(),
             name: "write".to_owned(),
             args: serde_json::json!({ "path": path }),
         });
-        let (result_text, is_error) = if self.abort.is_set() {
+        let (result_text, is_error) = if self.reads_no_more() {
             ("Operation aborted", true)
         } else {
             self.write(&path, &format!("{task}\n"), false);
@@ -410,7 +421,7 @@ impl Player {
         });
         self.emit(SessionEvent::TurnEnd);
         self.emit(SessionEvent::TurnStart);
-        self.abort.wait().await;
+        self.until_no_more_read().await;
         self.finish("Stopped.");
     }
 
@@ -434,7 +445,7 @@ impl Player {
         if let Some(log) = &self.stderr_log {
             let _ = std::fs::write(log, "the agent connection ended: OutputTruncated\n");
         }
-        self.pace.handled().await;
+        self.events.handled().await;
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
@@ -566,7 +577,7 @@ impl Player {
     /// Reads until the context passes the stop and the session is aborted.
     async fn outgrow(&mut self) {
         let mut n = 1;
-        while !self.abort.is_set() && n < 20 {
+        while !self.reads_no_more() && n < 20 {
             let read = ToolCall {
                 input: Some(30_000 * n),
                 ..ToolCall::new(
@@ -675,7 +686,7 @@ impl Player {
 
     /// The same tool call until the turn is aborted.
     async fn tool_loop(&mut self) {
-        while !self.abort.is_set() {
+        while !self.reads_no_more() {
             let ls = ToolCall::new("bash", serde_json::json!({ "command": "ls checks" }));
             self.turn(ls, |_| {}).await;
         }
@@ -685,7 +696,7 @@ impl Player {
     /// New files until the session is stopped at its turn budget.
     async fn long_session(&mut self, task: &str) {
         let mut n = 0;
-        while !self.abort.is_set() && n < 200 {
+        while !self.reads_no_more() && n < 200 {
             n += 1;
             self.write_tool(&format!("src/{task}-part{n}.txt"), "part\n", false)
                 .await;
@@ -740,7 +751,7 @@ impl Player {
 
     /// Finished, then circles between two calls with the same results.
     async fn alternate(&mut self, task: &str) {
-        while !self.abort.is_set() {
+        while !self.reads_no_more() {
             self.write_notes(task).await;
             let wc = ToolCall::new(
                 "bash",

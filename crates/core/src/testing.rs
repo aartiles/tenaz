@@ -4,10 +4,11 @@
 //! scripted harness's `verify` judged without a shell, and a repository kept
 //! as snapshots in memory with the contract that holds it to git.
 
+mod abort;
 mod clock;
 mod harness;
 mod notifier;
-mod pace;
+mod paced;
 mod player;
 mod replay;
 mod vcs;

@@ -49,9 +49,9 @@ holds the scripted harness, which plays the happy path of a small goal
 with each recovery opt-in (`every_recovery` is what `tenaz demo` plays),
 `VirtualClock`, which runs on tokio's paused time (ADR 0006), `Replay`,
 which answers for the memory probe and the engine counters with readings
-a test gives it, `ScriptedVerify`, which judges
-the scripted harness's checks without a shell, and `SnapshotVcs`, a
-repository kept as snapshots in memory; `vcs_contract_tests!` holds it and
+a test gives it, `ScriptedVerify`, which judges the scripted harness's
+checks without a shell, and `SnapshotVcs`, a repository kept as snapshots
+in memory; `vcs_contract_tests!` holds it and
 `GitRepo` to the same checks (ADR 0005). They serve the core's own tests
 and the crates above it.
 `orchestrator` is the application service: phases (bootstrap in three
@@ -108,8 +108,9 @@ protocol without a model: the adapter's integration tests spawn it.
   of their deadlines (ADR 0006).
 - `crates/adapters/tests/existing_project.rs` is the one whole run kept on
   a real git repository and the real `verify` (ADR 0005), so the adapters
-  are exercised together. It runs in real time on `SystemClock` and plays
-  no recovery that waits.
+  are exercised together. It runs in real time on `SystemClock`, with no
+  engine or capacity wait; its other recoveries end on events, not
+  timers.
 - The `tenaz` binary runs the fake harness end to end through the real
   wiring (proxy, git, verify) in `crates/cli/tests/cli.rs`.
 - The Pi adapter runs against the scripted `fake-pi` binary: a tool turn,

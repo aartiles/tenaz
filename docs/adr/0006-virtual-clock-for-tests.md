@@ -37,7 +37,8 @@ That has three problems:
 - With time paused, tokio moves its clock to the next timer only when
   every task is idle. A wait takes no real time, and timers fire in the
   order of their deadlines whatever the load.
-- The scripted harness's own short sleeps are on the same paused clock.
+- Anything else in a scenario that sleeps or polls moves the same
+  paused clock, so the scripted harness must wait on events instead.
 - It needs tokio's `test-util` feature in the tests (core already has it
   for `stop_grace`).
 - Paused time cannot be used with real processes: while tokio waits on a
@@ -63,13 +64,16 @@ run's waits.
 
 The scripted harness waits on the runner instead of polling it: a call
 that runs until its turn is aborted waits for the abort, and a reply waits
-until the runner has read the events before it. A poll would move the
-paused clock by its interval on every turn, and a long tool time limit
-would cost thousands of them.
+until the runner has handled the events before it. Its events go through
+one channel that counts what was sent and what the runner handled
+(`testing/paced.rs`); closing the session releases every wait. A poll
+would move the paused clock by its interval on every turn, and a long
+tool time limit would cost thousands of them.
 
 `crates/adapters/tests/existing_project.rs`, the one run on real `git` and
-`sh`, uses `SystemClock` in real time. It plays no recovery that waits
-(`engineRetryBaseSec=0`, `capacityRetryWaitSec=0`).
+`sh`, uses `SystemClock` in real time. Its engine and capacity waits are
+zero (`engineRetryBaseSec=0`, `capacityRetryWaitSec=0`); the other
+recoveries it plays end on the harness's events, not on a timer.
 
 ## Consequences
 

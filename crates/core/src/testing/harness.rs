@@ -6,14 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 
 use crate::ports::{
     Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit, SessionSpec,
 };
 use crate::session::SessionEvent;
 
-use super::pace::{Abort, Pace};
+use super::abort::Abort;
+use super::paced::{self, PacedReceiver, PacedSender};
 use super::player::{Player, field};
 
 /// The scripted stand-in for an agent harness. By default it plays the
@@ -137,16 +137,15 @@ impl Harness for ScriptedHarness {
     }
 
     async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (events, rx) = paced::channel();
         Ok(Box::new(ScriptedSession {
             cwd: spec.cwd,
             raw_log: spec.raw_log,
             stderr_log: spec.stderr_log,
             exit_code: Some(0),
-            tx,
+            events,
             rx,
             abort: Arc::default(),
-            pace: Arc::default(),
             prompts: 0,
             first: String::new(),
             role: String::new(),
@@ -161,10 +160,9 @@ struct ScriptedSession {
     raw_log: Option<PathBuf>,
     stderr_log: Option<PathBuf>,
     exit_code: Option<i32>,
-    tx: mpsc::UnboundedSender<SessionEvent>,
-    rx: mpsc::UnboundedReceiver<SessionEvent>,
+    events: PacedSender,
+    rx: PacedReceiver,
     abort: Arc<Abort>,
-    pace: Arc<Pace>,
     prompts: u32,
     /// The first prompt, which a prompt after a stopped tool call continues.
     first: String,
@@ -196,9 +194,8 @@ impl Session for ScriptedSession {
         let player = Player {
             cwd: self.cwd.clone(),
             stderr_log: self.stderr_log.clone(),
-            tx: self.tx.clone(),
+            events: self.events.clone(),
             abort: self.abort.clone(),
-            pace: self.pace.clone(),
             prompts: self.prompts,
             call: 0,
             script: self.script.clone(),
@@ -209,9 +206,7 @@ impl Session for ScriptedSession {
     }
 
     async fn next_event(&mut self) -> Option<SessionEvent> {
-        self.pace.ask();
         let event = self.rx.recv().await?;
-        self.pace.received();
         if let SessionEvent::Exited { code } = event {
             self.exit_code = code;
         }
@@ -257,8 +252,7 @@ impl Session for ScriptedSession {
 
     async fn close(&mut self, _grace: Duration) -> SessionExit {
         // The runner reads no more: a turn that waits on it ends.
-        self.abort.set();
-        self.pace.close();
+        self.rx.close();
         if let Some(play) = self.play.take() {
             let _ = play.await;
         }
@@ -301,5 +295,67 @@ mod tests {
             matches!(&events[0], SessionEvent::MessageEnd { text, stop_reason: StopReason::Stop, .. } if text == "323")
         );
         assert_eq!(session.close(Duration::ZERO).await.code, Some(0));
+    }
+
+    /// A session of `harness` in `dir`, prompted as T001's first builder.
+    async fn builder(harness: ScriptedHarness, dir: &std::path::Path) -> Box<dyn Session> {
+        let mut session = harness
+            .open(SessionSpec {
+                label: "001-builder-T001".into(),
+                cwd: dir.to_path_buf(),
+                persist_dir: None,
+                raw_log: None,
+                thinking_log: None,
+                stderr_log: None,
+            })
+            .await
+            .unwrap();
+        session
+            .prompt("Role: BUILDER\nTask: T001\nAttempt: 1\n")
+            .await
+            .unwrap();
+        session
+    }
+
+    /// Reads `session`'s events up to the first that `is`.
+    async fn read_until(session: &mut Box<dyn Session>, is: impl Fn(&SessionEvent) -> bool) {
+        while let Some(event) = session.next_event().await {
+            if is(&event) {
+                return;
+            }
+        }
+    }
+
+    /// A builder looping on one call ends when the runner closes the
+    /// session, even without an abort.
+    #[tokio::test(start_paused = true)]
+    async fn closing_a_session_ends_a_turn_that_loops() {
+        let dir = tempfile::tempdir().unwrap();
+        let harness = ScriptedHarness {
+            looping_task: Some("T001".into()),
+            ..Default::default()
+        };
+        let mut session = builder(harness, dir.path()).await;
+        read_until(&mut session, |e| matches!(e, SessionEvent::TurnEnd)).await;
+        let closed = tokio::time::timeout(Duration::from_secs(60), session.close(Duration::ZERO));
+        assert!(closed.await.is_ok(), "the looping turn did not end");
+    }
+
+    /// A session closed at the end of a reply does not run the reply's
+    /// write, as an agent that was stopped would not.
+    #[tokio::test(start_paused = true)]
+    async fn a_write_after_the_session_is_closed_does_not_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let harness = ScriptedHarness {
+            big_write_task: Some("T001".into()),
+            ..Default::default()
+        };
+        let mut session = builder(harness, dir.path()).await;
+        read_until(&mut session, |e| {
+            matches!(e, SessionEvent::MessageEnd { .. })
+        })
+        .await;
+        session.close(Duration::ZERO).await;
+        assert!(!dir.path().join("src/T001.txt").exists());
     }
 }
