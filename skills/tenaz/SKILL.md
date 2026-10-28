@@ -51,7 +51,7 @@ Do this once, and again whenever a run fails before its first session.
    tools is checked by `tenaz run` before its first session, not here.
 3. To show the user what a run looks like before the setup is done,
    `tenaz demo --project <empty scratch dir>` runs a scripted goal with no
-   model and no agent in about a minute. Put it outside the user's
+   model and no agent in well under a minute. Put it outside the user's
    repository. It proves nothing about their engine or model.
 
 For the `init` line, take the engine address and the model id from what

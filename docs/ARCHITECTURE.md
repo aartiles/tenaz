@@ -30,7 +30,7 @@ Pure modules, each unit-tested without I/O:
 | `spec` | Requirement lines (`- R1: ...`, `manual:`) and coverage. |
 | `backlog` | Card validation, dependency DAG, resolved and ready tasks. |
 | `verify` | The `verify` contract: last-line JSON, exit code, clipping. |
-| `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction and provider-error rules; emits steer or abort. |
+| `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time and provider-error rules; emits steer, abort or interrupt (stop the turn, prompt again). |
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal). |
 | `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |
 | `role` | The session roles, their prompt paths and what a steered session is asked to write before it stops. |
@@ -45,8 +45,13 @@ Pure modules, each unit-tested without I/O:
 `Session`, `Vcs`, `VerifyRunner`, `Clock`, `Notifier`, `MemoryProbe`,
 `EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
-holds the scripted harness that plays a fixed session script and a fast
-clock, for the crates above the core.
+holds the scripted harness that plays a fixed session script, a fast
+clock, and `Replay`, which answers for the memory probe and the engine
+counters with readings a test gives it, `ScriptedVerify`, which judges
+the scripted harness's checks without a shell, and `SnapshotVcs`, a
+repository kept as snapshots in memory; `vcs_contract_tests!` holds it and
+`GitRepo` to the same checks (ADR 0005). They serve the core's own tests
+and the crates above it.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations,
@@ -84,8 +89,12 @@ protocol without a model: the adapter's integration tests spawn it.
 
 - Unit tests next to each core module.
 - Adapter conformance tests against fakes or a temporary git repository.
-- One end-to-end test drives the whole loop with a scripted fake harness
-  and a real temporary git repository.
+- Whole runs in `orchestrator/scenarios.rs` and `orchestrator/scenarios/`
+  drive the loop with the scripted harness, `SnapshotVcs` and
+  `ScriptedVerify`: no git or shell, under a second each (ADR 0005).
+- `crates/adapters/tests/existing_project.rs` is the one whole run kept on
+  a real git repository and the real `verify` (ADR 0005), so the adapters
+  are exercised together.
 - The `tenaz` binary runs the fake harness end to end through the real
   wiring (proxy, git, verify) in `crates/cli/tests/cli.rs`.
 - The Pi adapter runs against the scripted `fake-pi` binary: a tool turn,

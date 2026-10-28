@@ -1,6 +1,8 @@
 //! Fakes for tests: a scripted harness that exercises every orchestrator
-//! path without a model (a fixed session script), and a clock that runs
-//! faster than real time.
+//! path without a model (a fixed session script), a clock that runs faster
+//! than real time, replayed memory readings and engine counters, the
+//! scripted harness's `verify` judged without a shell, and a repository kept
+//! as snapshots in memory with the contract that holds it to git.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,6 +12,18 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+mod notifier;
+mod replay;
+mod vcs;
+pub mod vcs_contract;
+mod verify;
+
+pub use notifier::SilentNotifier;
+pub use replay::Replay;
+pub use vcs::SnapshotVcs;
+pub use vcs_contract::MakeVcs;
+pub use verify::ScriptedVerify;
+
 use crate::ports::{
     Clock, Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit,
     SessionSpec,
@@ -17,17 +31,18 @@ use crate::ports::{
 use crate::session::{SessionEvent, StopReason, Usage};
 
 /// A clock that runs `speed` times faster than real time, so backoffs and
-/// grace periods in tests take milliseconds.
+/// grace periods in tests take milliseconds. It reads and sleeps on tokio's
+/// clock, so under paused time (`start_paused`) both stand still together.
 #[derive(Debug)]
 pub struct FastClock {
-    started: std::time::Instant,
+    started: tokio::time::Instant,
     speed: u32,
 }
 
 impl FastClock {
     pub fn new(speed: u32) -> Self {
         Self {
-            started: std::time::Instant::now(),
+            started: tokio::time::Instant::now(),
             speed: speed.max(1),
         }
     }
@@ -58,9 +73,9 @@ impl Clock for FastClock {
 /// edits that must be reverted, and the final review.
 #[derive(Clone, Debug, Default)]
 pub struct ScriptedHarness {
-    /// A builder session for this task waits before acting, so a test can pause the run.
-    pub slow_task: Option<String>,
-    pub slow_for: Duration,
+    /// When a builder session for this task starts, it cancels this token
+    /// (a test's Ctrl-C) and waits until its turn is aborted.
+    pub stop_at: Option<(String, tokio_util::sync::CancellationToken)>,
     /// The first builder session for this task dies mid-turn between tool
     /// calls: it writes to stderr and exits with code 1.
     pub crash_task: Option<String>,
@@ -98,6 +113,10 @@ pub struct ScriptedHarness {
     /// The first builder session of this task keeps writing new files until
     /// it is stopped at its turn budget.
     pub long_task: Option<String>,
+    /// The first `hang_times` builder turns of this task start a shell call
+    /// that never ends until the turn is aborted.
+    pub hang_task: Option<String>,
+    pub hang_times: u32,
 }
 
 impl ScriptedHarness {
@@ -127,6 +146,7 @@ impl Harness for ScriptedHarness {
             rx,
             aborted: Arc::new(AtomicBool::new(false)),
             prompts: 0,
+            first: String::new(),
             role: String::new(),
             play: None,
             script: self.clone(),
@@ -143,6 +163,8 @@ struct ScriptedSession {
     rx: mpsc::UnboundedReceiver<SessionEvent>,
     aborted: Arc<AtomicBool>,
     prompts: u32,
+    /// The first prompt, which a prompt after a stopped tool call continues.
+    first: String,
     /// The `Role` field of the first prompt.
     role: String,
     play: Option<tokio::task::JoinHandle<()>>,
@@ -153,7 +175,17 @@ struct ScriptedSession {
 impl Session for ScriptedSession {
     async fn prompt(&mut self, text: &str) -> Result<(), HarnessError> {
         self.prompts += 1;
-        if let Some(role) = field(text, "Role")
+        self.aborted.store(false, Ordering::SeqCst);
+        if self.first.is_empty() {
+            text.clone_into(&mut self.first);
+        }
+        // After a stopped tool call the session goes on with its first task.
+        let text = if text.contains("was stopped") {
+            self.first.clone()
+        } else {
+            text.to_owned()
+        };
+        if let Some(role) = field(&text, "Role")
             && self.role.is_empty()
         {
             role.clone_into(&mut self.role);
@@ -167,7 +199,7 @@ impl Session for ScriptedSession {
             call: 0,
             script: self.script.clone(),
         };
-        let prompt = text.to_owned();
+        let prompt = text;
         self.play = Some(tokio::spawn(async move { player.play(&prompt).await }));
         Ok(())
     }
@@ -246,7 +278,8 @@ fn field<'a>(prompt: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
-const VERIFY: &str = r#"#!/bin/sh
+/// The `verify` the scripted harness writes at bootstrap.
+pub const VERIFY: &str = r#"#!/bin/sh
 # Runs checks/<ID>.<name>.sh; --task T007 selects the T007. prefix.
 prefix=""
 [ "$1" = "--task" ] && prefix="$2."
@@ -520,6 +553,29 @@ impl Player {
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
+    /// A shell call that runs until the turn is aborted, as a script in an
+    /// endless loop would.
+    async fn hang(&mut self) {
+        self.call += 1;
+        let id = format!("call_{}", self.call);
+        self.emit(SessionEvent::TurnStart);
+        self.emit(SessionEvent::ToolCallStart {
+            id: id.clone(),
+            name: "bash".to_owned(),
+            args: serde_json::json!({ "command": "./verify --all" }),
+        });
+        while !self.aborted() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        self.emit(SessionEvent::ToolCallEnd {
+            id,
+            name: "bash".to_owned(),
+            result_text: "Command aborted".to_owned(),
+            is_error: true,
+        });
+        self.finish("Stopped.");
+    }
+
     /// One reply that reasons until it is cut at the output limit, then the
     /// harness exits with code 1, as fx does on `OutputTruncated`.
     async fn truncate(&mut self) {
@@ -670,9 +726,20 @@ impl Player {
         self.finish("Done.");
     }
 
+    /// Whether the run is stopped at this task's builder; stops it if so.
+    fn stops_at(&self, task: &str) -> bool {
+        match &self.script.stop_at {
+            Some((at, stop)) if at == task => {
+                stop.cancel();
+                true
+            }
+            _ => false,
+        }
+    }
+
     async fn builder(&mut self, task: &str, attempt: u32) {
-        if self.script.slow_task.as_deref() == Some(task) {
-            tokio::time::sleep(self.script.slow_for).await; // gives the test time to pause the run
+        if self.stops_at(task) {
+            return self.hang().await;
         }
         if self.script.crash_task.as_deref() == Some(task)
             && self.bump(&format!("crash-{task}")) == 1
@@ -704,6 +771,11 @@ impl Player {
         }
         if self.script.outgrow_task.as_deref() == Some(task) {
             return self.outgrow().await;
+        }
+        if self.script.hang_task.as_deref() == Some(task)
+            && self.bump(&format!("hang-{task}")) <= self.script.hang_times
+        {
+            return self.hang().await;
         }
         if self.script.long_task.as_deref() == Some(task) && self.bump(&format!("long-{task}")) == 1
         {

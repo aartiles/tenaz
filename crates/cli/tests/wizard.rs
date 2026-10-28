@@ -6,13 +6,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 
-/// The binary, kept from the engines and image servers running on this
-/// machine: it looks only where the test points it.
-fn tenaz() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_tenaz"));
-    command.env("TENAZ_NO_PROBE", "1");
-    command
-}
+mod common;
+
+use common::tenaz;
 
 /// A tiny HTTP server: an OpenAI-compatible model list with two models and
 /// `ComfyUI`'s `/system_stats`. Returns its origin.
@@ -67,7 +63,7 @@ fn the_wizard_pins_everything_run_needs() {
         .args(["init", "--interactive", "--harness", "fake"])
         .args(["--base-url", &format!("{origin}/v1")])
         .args(["--comfyui", &origin])
-        .args(["--set", "engineRetryBaseSec=0", "--set", "notify=false"])
+        .args(common::FAST)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

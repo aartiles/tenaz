@@ -22,7 +22,7 @@ use tenaz_adapters::sandbox::{Guard, GuardedHarness, GuardedVerify, Policy};
 use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::effort::EffortDial;
 use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
-use tenaz_core::ledger::{JournalRecord, SkillPin};
+use tenaz_core::ledger::{HarnessKind, JournalRecord, SkillPin};
 use tenaz_core::orchestrator::Deps;
 use tenaz_core::params::RunParams;
 use tenaz_core::ports::{EngineAdapter, Harness, MediaAdapter};
@@ -324,8 +324,8 @@ pub async fn wire(
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
         )),
-        engine: (config.harness != "fake").then_some(engine_adapter),
-        lease: (config.harness != "fake").then_some(lease),
+        engine: (config.harness != HarnessKind::Fake).then_some(engine_adapter),
+        lease: (config.harness != HarnessKind::Fake).then_some(lease),
         engine_metrics: PrometheusMetrics::from_base_url(&base_url)
             .map(|m| Arc::new(m) as Arc<dyn tenaz_core::ports::EngineMetricsSource>),
         memory: cfg!(target_os = "macos").then(|| {
@@ -501,13 +501,13 @@ fn build_harness(
     feed: &tokio::sync::broadcast::Sender<EngineObservation>,
     wrapper: &[String],
 ) -> anyhow::Result<Arc<dyn Harness>> {
-    match config.harness.as_str() {
+    match config.harness {
         // The scripted harness writes from inside Tenaz: there is no process to sandbox.
-        "fake" => Ok(Arc::new(ScriptedHarness {
+        HarnessKind::Fake => Ok(Arc::new(ScriptedHarness {
             verify_path: Some(verify_path.to_owned()),
             ..ScriptedHarness::default()
         })),
-        "pi" => {
+        HarnessKind::Pi => {
             // Pi gets an agent directory of its own pointing it at the proxy
             // (or the engine); the media MCP server is not on its path.
             let agent_dir = project.private_dir().join("pi-agent");
@@ -544,7 +544,7 @@ fn build_harness(
                 .wrapper(wrapper.to_vec());
             Ok(Arc::new(launch.harness(config.harness_version.clone())))
         }
-        "fx" => {
+        HarnessKind::Fx => {
             let home = project.private_dir().join("fx-home");
             let settings = FxSettings {
                 provider: config
@@ -598,7 +598,6 @@ fn build_harness(
             }
             Ok(Arc::new(acp))
         }
-        other => bail!("unknown harness {other} in the ledger"),
     }
 }
 

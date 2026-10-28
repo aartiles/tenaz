@@ -5,13 +5,14 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-fn tenaz() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_tenaz"))
-}
+mod common;
+
+use common::tenaz;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .current_dir(dir)
+        .env("HOME", common::home())
         .args([
             "-c",
             "user.name=Someone",
@@ -47,7 +48,7 @@ fn repository() -> (tempfile::TempDir, PathBuf, PathBuf) {
     (work, repo, brief)
 }
 
-const FAKE: [&str; 14] = [
+const FAKE: &[&str] = &[
     "--harness",
     "fake",
     "--model",
@@ -56,10 +57,6 @@ const FAKE: [&str; 14] = [
     "fake",
     "--set",
     "maxAttempts=2",
-    "--set",
-    "engineRetryBaseSec=0",
-    "--set",
-    "notify=false",
     "--set",
     "replanEvery=2",
 ];
@@ -70,6 +67,7 @@ fn init(repo: &Path, brief: Option<&Path>, extra: &[&str]) -> Output {
         .args(["init", "--project"])
         .arg(repo)
         .args(FAKE)
+        .args(common::FAST)
         .args(extra);
     if let Some(brief) = brief {
         command.arg("--brief").arg(brief);

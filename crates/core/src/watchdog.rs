@@ -30,8 +30,18 @@ pub struct WatchConfig {
 /// What the session runner must do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
-    Steer { key: String, message: String },
-    Abort { reason: String },
+    Steer {
+        key: String,
+        message: String,
+    },
+    Abort {
+        reason: String,
+    },
+    /// Stop the running turn and, once it settles, prompt `message` in the
+    /// same session.
+    Interrupt {
+        message: String,
+    },
 }
 
 /// Rule state plus the metrics of one session.
@@ -46,6 +56,11 @@ pub struct Watchdog {
     idle_turns: i64,
     recent: VecDeque<String>,
     call_args: HashMap<String, (String, serde_json::Value)>,
+    /// When each open tool call started (ms into the session).
+    call_started: HashMap<String, u64>,
+    tool_timeouts: u32,
+    /// A tool call was stopped; the aborted turn is not the session's end.
+    interrupting: bool,
     /// Arguments of every read so far: a read of something new is progress.
     reads: HashSet<String>,
     fingerprint: Option<String>,
@@ -64,6 +79,9 @@ impl Watchdog {
             idle_turns: 0,
             recent: VecDeque::new(),
             call_args: HashMap::new(),
+            call_started: HashMap::new(),
+            tool_timeouts: 0,
+            interrupting: false,
             reads: HashSet::new(),
             fingerprint: None,
         }
@@ -93,6 +111,70 @@ impl Watchdog {
         let mut actions = Vec::new();
         self.abort(reason, elapsed_ms, &mut actions);
         actions
+    }
+
+    /// When the oldest open tool call passes `toolMinutes`, if one is open.
+    pub fn tool_deadline(&self) -> Option<u64> {
+        let limit = self.params.tool_minutes.saturating_mul(60_000);
+        if limit == 0 {
+            return None;
+        }
+        self.call_started.values().min().map(|s| s + limit)
+    }
+
+    /// The oldest open tool call passed `toolMinutes`. The first time, stop
+    /// the turn and tell the session which call and what to do; the second,
+    /// end the session.
+    pub fn tool_timeout(&mut self, elapsed_ms: u64) -> Vec<Action> {
+        let mut actions = Vec::new();
+        let minutes = self.params.tool_minutes;
+        self.tool_timeouts += 1;
+        if self.tool_timeouts >= 2 {
+            self.abort(
+                &format!("a tool call ran over {minutes} minutes twice"),
+                elapsed_ms,
+                &mut actions,
+            );
+            return actions;
+        }
+        let call = self.oldest_call();
+        self.event("tool-timeout", Some(&call), elapsed_ms);
+        self.interrupting = true;
+        // A call the harness does not stop starts its time again, so it
+        // ends the session at the next deadline.
+        for start in self.call_started.values_mut() {
+            *start = elapsed_ms;
+        }
+        actions.push(Action::Interrupt {
+            message: format!(
+                "[orchestrator] Your call `{call}` ran for more than {minutes} minutes and was stopped. It was probably waiting for input, serving, or looping. Find out why by running it with a time limit (`timeout 60 <command>`), fix the cause, and go on with your task. Give any command that may run long a time limit: a call that runs over {minutes} minutes again ends this session."
+            ),
+        });
+        actions
+    }
+
+    /// The open tool call that started first: its command, path or
+    /// arguments.
+    fn oldest_call(&self) -> String {
+        let Some(id) = self
+            .call_started
+            .iter()
+            .min_by_key(|(id, start)| (**start, id.as_str()))
+            .map(|(id, _)| id)
+        else {
+            return String::new();
+        };
+        let Some((name, args)) = self.call_args.get(id) else {
+            return String::new();
+        };
+        let shown = ["command", "cmd", "path"]
+            .iter()
+            .find_map(|k| args.get(*k).and_then(serde_json::Value::as_str))
+            .map_or_else(|| format!("{name} {args}"), str::to_owned);
+        match shown.char_indices().nth(200) {
+            Some((cut, _)) => format!("{}…", &shown[..cut]),
+            None => shown,
+        }
     }
 
     /// Records something the runner sent the session outside the rules.
@@ -184,7 +266,11 @@ impl Watchdog {
                 }
             }
             SessionEvent::Settled { aborted } => {
-                if *aborted || self.metrics.abort_reason.is_some() {
+                self.call_started.clear();
+                let interrupted = std::mem::take(&mut self.interrupting);
+                if *aborted && interrupted && self.metrics.abort_reason.is_none() {
+                    // The turn a tool timeout stopped; the session goes on.
+                } else if *aborted || self.metrics.abort_reason.is_some() {
                     self.metrics.aborted = true;
                 } else {
                     self.metrics.settled = true;
@@ -241,6 +327,7 @@ impl Watchdog {
         self.metrics.tool_calls += 1;
         self.call_args
             .insert(id.to_owned(), (name.to_owned(), args.clone()));
+        self.call_started.insert(id.to_owned(), elapsed_ms);
         let key = format!("{name}:{args}");
         self.same_count = if self.last_key.as_deref() == Some(&key) {
             self.same_count + 1
@@ -284,6 +371,7 @@ impl Watchdog {
         elapsed_ms: u64,
         actions: &mut Vec<Action>,
     ) {
+        self.call_started.remove(id);
         let args = self
             .call_args
             .remove(id)
@@ -352,6 +440,16 @@ impl Watchdog {
         elapsed_ms: u64,
         actions: &mut Vec<Action>,
     ) {
+        // A request cancelled because the runner stopped the turn is part of
+        // that stop, not an engine failure. Pi reports it as an error ("This
+        // operation was aborted").
+        let stop_reason = if *stop_reason == StopReason::Error
+            && (self.metrics.abort_reason.is_some() || self.interrupting)
+        {
+            &StopReason::Aborted
+        } else {
+            stop_reason
+        };
         self.metrics.usage.add(usage);
         self.metrics.reasoning_chars += thinking_chars;
         self.metrics.context_peak = self.metrics.context_peak.max(usage.context());
@@ -606,6 +704,7 @@ mod tests {
                     Action::Steer { key, .. } if key.starts_with("repeat-") => seen_steer = true,
                     Action::Steer { key, .. } => panic!("unexpected steer {key}"),
                     Action::Abort { reason } => aborted = Some(reason),
+                    Action::Interrupt { message } => panic!("unexpected interrupt {message}"),
                 }
             }
         }
@@ -746,6 +845,64 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_call_over_its_time_is_interrupted_then_ends_the_session() {
+        let mut w = watched();
+        assert_eq!(w.tool_deadline(), None, "no call open");
+        let start = |w: &mut Watchdog, id: &str, at: u64| {
+            w.handle(
+                &SessionEvent::ToolCallStart {
+                    id: id.into(),
+                    name: "bash".into(),
+                    args: serde_json::json!({ "command": "./verify --all" }),
+                },
+                at,
+                String::new,
+            )
+        };
+        start(&mut w, "call_1", 1_000);
+        assert_eq!(w.tool_deadline(), Some(601_000), "ten minutes by default");
+        let actions = w.tool_timeout(601_000);
+        let [Action::Interrupt { message }] = actions.as_slice() else {
+            panic!("{actions:?}");
+        };
+        assert!(
+            message.contains("`./verify --all` ran for more than 10 minutes"),
+            "{message}"
+        );
+        assert_eq!(
+            w.tool_deadline(),
+            Some(1_201_000),
+            "a call not stopped gets its time again"
+        );
+        // The stopped turn settles aborted; the session is not.
+        w.handle(
+            &SessionEvent::Settled { aborted: true },
+            601_500,
+            String::new,
+        );
+        assert!(!w.aborting() && !w.metrics().aborted);
+        assert_eq!(w.tool_deadline(), None);
+        start(&mut w, "call_2", 700_000);
+        let actions = w.tool_timeout(1_300_000);
+        assert!(
+            matches!(actions.as_slice(), [Action::Abort { reason }] if reason == "a tool call ran over 10 minutes twice"),
+            "{actions:?}"
+        );
+        let kinds: Vec<&str> = w.metrics().events.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(kinds, ["tool-timeout", "abort"]);
+
+        let mut off = Watchdog::new(
+            RunParams {
+                tool_minutes: 0,
+                ..RunParams::default()
+            },
+            None,
+        );
+        start(&mut off, "call_1", 0);
+        assert_eq!(off.tool_deadline(), None, "0 turns it off");
+    }
+
+    #[test]
     fn idle_turns_count_only_unchanged_worktrees() {
         let mut p = RunParams::default();
         p.idle_steer = 2;
@@ -843,6 +1000,7 @@ mod tests {
                     Action::Steer { key, .. } if key == "turns" => steered_at = Some(turn),
                     Action::Abort { .. } => aborted_at = Some(turn),
                     Action::Steer { key, .. } => panic!("unexpected steer {key}"),
+                    Action::Interrupt { message } => panic!("unexpected interrupt {message}"),
                 }
             }
         }

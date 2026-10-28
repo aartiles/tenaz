@@ -716,7 +716,7 @@ mod tests {
 
         // A ledger Tenaz saves while the run works is the one kept.
         let config = tenaz_core::ledger::ModelConfig {
-            harness: "fake".into(),
+            harness: tenaz_core::ledger::HarnessKind::Fake,
             harness_version: "0".into(),
             model: "fake".into(),
             provider: None,

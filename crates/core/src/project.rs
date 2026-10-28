@@ -7,10 +7,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::backlog::{Backlog, LoadedBacklog};
-use crate::ledger::{JournalEntry, JournalRecord, Ledger};
+use crate::ledger::{JournalEntry, JournalRecord, Ledger, Verdict};
 use crate::role::Role;
 use crate::spec::{Requirement, parse_requirements};
-use crate::task::{TaskId, set_card_fields};
+use crate::task::{TaskId, TaskStatus, set_card_fields};
 
 /// The original request, copied at `init`.
 pub const BRIEF: &str = ".tenaz/brief.md";
@@ -341,6 +341,22 @@ impl Project {
         self.write(&id.card_path(), &set_card_fields(&text, fields))
     }
 
+    /// Writes `status` on the card, leaving its other fields alone.
+    pub fn set_status(&self, id: &TaskId, status: TaskStatus) -> io::Result<()> {
+        self.set_card_fields(id, &[("status", status.as_str().to_owned())])
+    }
+
+    /// Puts a task back to `todo` with no attempts, as a new card starts.
+    pub fn reset_card(&self, id: &TaskId) -> io::Result<()> {
+        self.set_card_fields(
+            id,
+            &[
+                ("status", TaskStatus::Todo.as_str().to_owned()),
+                ("attempts", "0".to_owned()),
+            ],
+        )
+    }
+
     pub fn note(&self, id: &str) -> Option<String> {
         self.read_if(&format!(".tenaz/notes/{id}.md"))
     }
@@ -358,7 +374,7 @@ impl Project {
     }
 
     /// `(verdict, text)` of a review file: the first `Verdict: ACCEPT|CHANGES` line.
-    pub fn verdict(&self, relative: &str) -> (Option<String>, Option<String>) {
+    pub fn verdict(&self, relative: &str) -> (Option<Verdict>, Option<String>) {
         let text = self.read_if(relative);
         let verdict = text.as_deref().and_then(verdict_in);
         (verdict, text)
@@ -386,8 +402,6 @@ impl Project {
     }
 }
 
-/// The first `Verdict: ACCEPT` or `Verdict: CHANGES` line of `text`, also
-/// in Markdown bold (`**Verdict:** ACCEPT`, `**Verdict: ACCEPT**`).
 /// A review that asks for changes with MINOR findings only: the reviewer
 /// prompt reserves `CHANGES` for MAJOR ones. Untagged findings do not count
 /// as minor.
@@ -400,16 +414,19 @@ pub fn only_minor_findings(review: &str) -> bool {
     tagged("[MINOR]") && !tagged("[MAJOR]")
 }
 
-pub fn verdict_in(text: &str) -> Option<String> {
+/// The first `Verdict: ACCEPT` or `Verdict: CHANGES` line of `text`, also
+/// in Markdown bold (`**Verdict:** ACCEPT`, `**Verdict: ACCEPT**`).
+pub fn verdict_in(text: &str) -> Option<Verdict> {
     text.lines().find_map(|line| {
         let plain: String = line.chars().filter(|c| *c != '*' && *c != '_').collect();
         let rest = plain.trim_start().strip_prefix("Verdict:")?.trim_start();
-        ["ACCEPT", "CHANGES"]
+        [("ACCEPT", Verdict::Accept), ("CHANGES", Verdict::Changes)]
             .into_iter()
-            .find(|v| {
-                rest.starts_with(v) && !rest[v.len()..].starts_with(|c: char| c.is_alphanumeric())
+            .find(|(word, _)| {
+                rest.starts_with(word)
+                    && !rest[word.len()..].starts_with(|c: char| c.is_alphanumeric())
             })
-            .map(str::to_owned)
+            .map(|(_, verdict)| verdict)
     })
 }
 
@@ -463,15 +480,28 @@ mod tests {
         let loaded = p.load_backlog();
         assert_eq!(loaded.errors, Vec::<String>::new());
         let id = TaskId::parse("T001").unwrap();
-        p.set_card_fields(&id, &[("status", "done".into())])
-            .unwrap();
+        p.set_status(&id, TaskStatus::Done).unwrap();
         assert_eq!(
             p.load_backlog().backlog.get(&id).unwrap().status,
-            crate::task::TaskStatus::Done
+            TaskStatus::Done
         );
         assert_eq!(p.note("T001"), None);
         p.write(".tenaz/notes/T001.md", "did it").unwrap();
         assert_eq!(p.note("T001").as_deref(), Some("did it"));
+    }
+
+    #[test]
+    fn reset_card_puts_a_card_back_to_todo_with_no_attempts() {
+        let (_dir, p) = project();
+        let id = TaskId::parse("T001").unwrap();
+        p.write(
+            ".tenaz/tasks/T001.md",
+            "---\nid: T001\nstatus: blocked\nattempts: 2\n---\n",
+        )
+        .unwrap();
+        p.reset_card(&id).unwrap();
+        let card = p.card_text(&id).unwrap();
+        assert!(card.contains("status: todo\nattempts: 0\n"), "{card}");
     }
 
     #[test]
@@ -509,22 +539,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            p.verdict(".tenaz/reviews/T001.md").0.as_deref(),
-            Some("CHANGES")
+            p.verdict(".tenaz/reviews/T001.md").0,
+            Some(Verdict::Changes)
         );
         p.write(".tenaz/reviews/T001.md", "Verdict: ACCEPTED?\n")
             .unwrap();
         assert_eq!(p.verdict(".tenaz/reviews/T001.md").0, None);
         assert_eq!(p.verdict(".tenaz/reviews/none.md"), (None, None));
         assert_eq!(
-            verdict_in("**Verdict:** ACCEPT — fine").as_deref(),
-            Some("ACCEPT")
+            verdict_in("**Verdict:** ACCEPT — fine"),
+            Some(Verdict::Accept)
         );
-        assert_eq!(verdict_in("so **Verdict: CHANGES**").as_deref(), None);
-        assert_eq!(
-            verdict_in("**Verdict: CHANGES**").as_deref(),
-            Some("CHANGES")
-        );
+        assert_eq!(verdict_in("so **Verdict: CHANGES**"), None);
+        assert_eq!(verdict_in("**Verdict: CHANGES**"), Some(Verdict::Changes));
     }
 
     #[test]

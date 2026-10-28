@@ -3,6 +3,7 @@
 //! scripts that read them (`jq` over the journal) keep working.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -101,8 +102,7 @@ impl std::fmt::Display for Phase {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelConfig {
-    /// `fx`, `pi`, ...
-    pub harness: String,
+    pub harness: HarnessKind,
     pub harness_version: String,
     /// The model as the harness names it (`sushi/Qwen3.8-Flash-Next-Sushi-2.6bpw`).
     pub model: String,
@@ -121,6 +121,34 @@ pub struct ModelConfig {
 impl ModelConfig {
     pub fn supports_images(&self) -> bool {
         self.input.iter().any(|i| i == "image")
+    }
+}
+
+/// The agent harness a run is pinned to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HarnessKind {
+    /// fx over ACP.
+    Fx,
+    /// Pi in RPC mode.
+    Pi,
+    /// The scripted harness, which needs no agent and no engine.
+    Fake,
+}
+
+impl HarnessKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fx => "fx",
+            Self::Pi => "pi",
+            Self::Fake => "fake",
+        }
+    }
+}
+
+impl fmt::Display for HarnessKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -472,6 +500,14 @@ pub enum TaskOutcome {
     Blocked,
 }
 
+/// A reviewer's verdict, journaled as the reviewer wrote it (`ACCEPT`, `CHANGES`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Verdict {
+    Accept,
+    Changes,
+}
+
 /// One line of `journal.jsonl`, tagged by `type`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[expect(
@@ -590,11 +626,11 @@ pub enum JournalRecord {
         task: TaskId,
         attempt: u32,
         review: u32,
-        verdict: Option<String>,
+        verdict: Option<Verdict>,
     },
     FinalReview {
         cycle: u32,
-        verdict: Option<String>,
+        verdict: Option<Verdict>,
         verify_ok: bool,
         coverage: Coverage,
         added: Vec<TaskId>,
@@ -683,9 +719,36 @@ fn is_zero(n: &u32) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_harness_is_pinned_by_its_lowercase_name() {
+        for (kind, name) in [
+            (HarnessKind::Fx, "fx"),
+            (HarnessKind::Pi, "pi"),
+            (HarnessKind::Fake, "fake"),
+        ] {
+            assert_eq!(serde_json::json!(kind), name);
+            assert_eq!(
+                serde_json::from_value::<HarnessKind>(name.into()).unwrap(),
+                kind
+            );
+        }
+        assert!(serde_json::from_str::<HarnessKind>("\"codex\"").is_err());
+    }
+
+    #[test]
+    fn verdicts_are_journaled_as_reviewers_write_them() {
+        let line = r#"{"at":"t","type":"review","task":"T001","attempt":1,"review":2,"verdict":"CHANGES"}"#;
+        let entry: JournalEntry = serde_json::from_str(line).unwrap();
+        let JournalRecord::Review { verdict, .. } = &entry.record else {
+            panic!("not a review: {entry:?}");
+        };
+        assert_eq!(*verdict, Some(Verdict::Changes));
+        assert_eq!(serde_json::to_string(&entry).unwrap(), line);
+    }
+
     fn config() -> ModelConfig {
         ModelConfig {
-            harness: "fx".into(),
+            harness: HarnessKind::Fx,
             harness_version: "0.0.14".into(),
             model: "sushi/m".into(),
             provider: Some("sushi".into()),

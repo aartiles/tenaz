@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 use tenaz_core::ledger::Phase;
-use tenaz_core::ledger::{EngineApi, Launch, ModelConfig};
+use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, ModelConfig};
 use tenaz_core::orchestrator::{
     InitOptions, RunOptions, Runner, Templates, init, status_json, status_text,
 };
@@ -181,7 +181,7 @@ struct Cli {
 
 /// Which harness runs the sessions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-enum HarnessKind {
+enum HarnessArg {
     /// fx over ACP (default).
     Fx,
     /// Pi in RPC mode, with a models.json Tenaz writes for the run.
@@ -190,11 +190,13 @@ enum HarnessKind {
     Fake,
 }
 
-fn harness_name(harness: HarnessKind) -> &'static str {
-    match harness {
-        HarnessKind::Fx => "fx",
-        HarnessKind::Pi => "pi",
-        HarnessKind::Fake => "fake",
+impl HarnessArg {
+    fn kind(self) -> HarnessKind {
+        match self {
+            Self::Fx => HarnessKind::Fx,
+            Self::Pi => HarnessKind::Pi,
+            Self::Fake => HarnessKind::Fake,
+        }
     }
 }
 
@@ -245,7 +247,7 @@ struct InitArgs {
     brief: Option<PathBuf>,
     /// The coding agent (default: fx; the wizard offers what is installed).
     #[arg(long, value_enum)]
-    harness: Option<HarnessKind>,
+    harness: Option<HarnessArg>,
     /// The fx executable.
     #[arg(long)]
     fx_bin: Option<PathBuf>,
@@ -334,7 +336,7 @@ impl InitArgs {
         let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
         flag("project", path(&self.project));
         flag("brief", path(&self.brief));
-        flag("harness", self.harness.map(|h| harness_name(h).to_owned()));
+        flag("harness", self.harness.map(|h| h.kind().to_string()));
         flag("fx-bin", path(&self.fx_bin));
         flag("pi-bin", path(&self.pi_bin));
         flag("model", self.model.clone());
@@ -408,7 +410,7 @@ fn shell_quote(text: &str) -> String {
 struct InitPlan {
     project: PathBuf,
     brief: Option<PathBuf>,
-    harness: HarnessKind,
+    harness: HarnessArg,
     harness_bin: Option<PathBuf>,
     model: String,
     provider: String,
@@ -440,7 +442,7 @@ async fn plan_from_flags(args: InitArgs) -> anyhow::Result<InitPlan> {
     let Some(project) = args.project.clone() else {
         anyhow::bail!("--project is required");
     };
-    let harness = args.harness.unwrap_or(HarnessKind::Fx);
+    let harness = args.harness.unwrap_or(HarnessArg::Fx);
     let detected = match &args.base_url {
         Some(url) if args.engine.is_none() || args.provider.is_none() => {
             detect::engine_at(&detect::client(), url).await
@@ -468,9 +470,9 @@ async fn plan_from_flags(args: InitArgs) -> anyhow::Result<InitPlan> {
         brief: args.brief.clone(),
         harness,
         harness_bin: match harness {
-            HarnessKind::Fx => args.fx_bin.clone(),
-            HarnessKind::Pi => args.pi_bin.clone(),
-            HarnessKind::Fake => None,
+            HarnessArg::Fx => args.fx_bin.clone(),
+            HarnessArg::Pi => args.pi_bin.clone(),
+            HarnessArg::Fake => None,
         },
         model,
         provider,
@@ -563,7 +565,7 @@ fn init_at(
     for pair in &plan.args.sets {
         params.apply_override(pair)?;
     }
-    let (harness_name, harness_version, entry) = pin_harness(
+    let (harness_version, entry) = pin_harness(
         plan.harness,
         plan.harness_bin.as_deref(),
         &plan.provider,
@@ -576,7 +578,7 @@ fn init_at(
         plan.context_window,
     );
     let config = ModelConfig {
-        harness: harness_name,
+        harness: plan.harness.kind(),
         harness_version,
         model: format!("{}/{}", plan.provider, plan.model),
         provider: Some(plan.provider),
@@ -711,7 +713,7 @@ struct RunArgs {
 
 impl RunArgs {
     /// `launch` with this command line's flags applied.
-    fn apply(&self, launch: &Launch, harness: &str) -> anyhow::Result<Launch> {
+    fn apply(&self, launch: &Launch, harness: HarnessKind) -> anyhow::Result<Launch> {
         let mut next = launch.clone();
         if let Some(engine) = self.engine {
             next.engine = engine.api();
@@ -724,9 +726,9 @@ impl RunArgs {
         }
         next.no_proxy |= self.no_proxy;
         let bin = match harness {
-            "fx" => self.fx_bin.as_deref(),
-            "pi" => self.pi_bin.as_deref(),
-            _ => None,
+            HarnessKind::Fx => self.fx_bin.as_deref(),
+            HarnessKind::Pi => self.pi_bin.as_deref(),
+            HarnessKind::Fake => None,
         };
         if let Some(bin) = bin {
             next.harness_bin = Some(pinned_path(bin));
@@ -1116,7 +1118,7 @@ async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     if let Some(origin) = &ledger.origin {
         tracing::info!("{}", worktree::describe(origin));
     }
-    let launch = args.apply(&ledger.launch, &ledger.config.harness)?;
+    let launch = args.apply(&ledger.launch, ledger.config.harness)?;
     if launch != ledger.launch {
         ledger.launch = launch.clone();
         project.save_ledger(&ledger)?;
@@ -1146,22 +1148,22 @@ async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         },
         proxy: !launch.no_proxy,
     };
-    let bin = |name: &str| {
+    let bin = |kind: HarnessKind| {
         PathBuf::from(
             launch
                 .harness_bin
                 .clone()
-                .filter(|_| ledger.config.harness == name)
-                .unwrap_or_else(|| name.to_owned()),
+                .filter(|_| ledger.config.harness == kind)
+                .unwrap_or_else(|| kind.as_str().to_owned()),
         )
     };
     let harness = wiring::HarnessOptions {
-        fx_bin: bin("fx"),
+        fx_bin: bin(HarnessKind::Fx),
         fx_args: launch
             .fx_args
             .clone()
             .unwrap_or_else(|| vec!["acp".to_owned()]),
-        pi_bin: bin("pi"),
+        pi_bin: bin(HarnessKind::Pi),
     };
     let wired = wiring::wire(&project, &engine, &harness, &media).await?;
     let mut runner = Runner::open(project.clone(), wired.deps, stop)?;
@@ -1204,6 +1206,8 @@ async fn demo(project: PathBuf) -> anyhow::Result<ExitCode> {
         "fake",
         "--set",
         "engineRetryBaseSec=0",
+        "--set",
+        "capacityRetryWaitSec=0",
         "--set",
         "notify=false",
     ];
@@ -1266,37 +1270,33 @@ fn run_exit_code(ledger: &tenaz_core::ledger::Ledger) -> ExitCode {
     }
 }
 
-/// The harness name and version to pin and, with Pi, the model's entry in
+/// The harness version to pin and, with Pi, the model's entry in
 /// `~/.pi/agent/models.json` when that file lists it.
 fn pin_harness(
-    harness: HarnessKind,
+    harness: HarnessArg,
     bin: Option<&Path>,
     provider: &str,
     model: &str,
-) -> anyhow::Result<(String, String, Option<ModelEntry>)> {
-    let name = harness_name(harness);
-    let bin = bin.unwrap_or_else(|| Path::new(name));
+) -> anyhow::Result<(String, Option<ModelEntry>)> {
+    let bin = bin.unwrap_or_else(|| Path::new(harness.kind().as_str()));
     Ok(match harness {
-        HarnessKind::Fx => (
-            name.to_owned(),
+        HarnessArg::Fx => (
             tenaz_acp::fx::fx_version(bin)
                 .with_context(|| format!("cannot run {} --version", bin.display()))?,
             None,
         ),
-        HarnessKind::Pi => {
+        HarnessArg::Pi => {
             let entry = match tenaz_pi::models::default_models_path() {
                 Some(path) => tenaz_pi::models::model_entry(&path, provider, model)?,
                 None => None,
             };
             (
-                name.to_owned(),
                 tenaz_pi::pi_version(bin)
                     .with_context(|| format!("cannot run {} --version", bin.display()))?,
                 entry,
             )
         }
-        HarnessKind::Fake => (
-            name.to_owned(),
+        HarnessArg::Fake => (
             tenaz_core::testing::ScriptedHarness::default().version(),
             None,
         ),

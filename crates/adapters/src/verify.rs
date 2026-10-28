@@ -11,7 +11,9 @@ use tenaz_core::verify::RawVerifyOutput;
 use tokio::io::AsyncReadExt;
 
 /// The project's `verify` (`./verify` unless set with [`Self::at`]), run
-/// from the project root with `CI=1`.
+/// from the project root with `CI=1`, in a process group of its own that is
+/// killed when it ends: a server a check started and left running would
+/// hold its port, or verify's output, until the next run.
 #[derive(Clone, Debug)]
 pub struct VerifyProcess {
     root: PathBuf,
@@ -76,6 +78,7 @@ impl VerifyRunner for VerifyProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0)
             .kill_on_drop(true)
             .spawn();
         let mut child = match spawned {
@@ -104,6 +107,7 @@ impl VerifyRunner for VerifyProcess {
             }
             buffer
         });
+        let group = child.id();
         let (status, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
             Ok(Ok(status)) => (status.code(), false),
             Ok(Err(_)) => (None, false),
@@ -112,6 +116,10 @@ impl VerifyRunner for VerifyProcess {
                 (None, true)
             }
         };
+        // Before reading to the end: what is left may hold the pipes open.
+        if let Some(group) = group {
+            kill_group(group).await;
+        }
         let stdout = String::from_utf8_lossy(&out.await.unwrap_or_default()).into_owned();
         let stderr = String::from_utf8_lossy(&err.await.unwrap_or_default()).into_owned();
         RawVerifyOutput {
@@ -122,6 +130,19 @@ impl VerifyRunner for VerifyProcess {
             stderr,
         }
     }
+}
+
+/// Kills process group `group` and so whatever `verify` left running.
+/// Through `kill(1)`, as the crate has no unsafe code; a group already
+/// empty is no error.
+async fn kill_group(group: u32) {
+    let _ = tokio::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{group}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
 }
 
 #[cfg(test)]
@@ -169,6 +190,37 @@ mod tests {
             .await;
         assert_eq!(raw.status, Some(0), "{}", raw.stderr);
         assert!(!raw.missing);
+    }
+
+    fn alive(pid: &str) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    /// A check that leaves a server running, as `npm run dev` started and
+    /// never stopped: one holding verify's stdout, one not.
+    #[tokio::test]
+    async fn kills_what_verify_leaves_running() {
+        let (dir, verify) = project(
+            "#!/bin/sh\nsleep 30 >/dev/null 2>&1 &\necho $! > quiet.pid\nsleep 30 &\necho $! > loud.pid\necho '{\"ok\":true,\"passed\":1,\"failed\":[]}'\n",
+        );
+        let started = std::time::Instant::now();
+        let raw = verify.run(&["--all"], Duration::from_secs(20)).await;
+        assert_eq!(raw.status, Some(0), "{}", raw.stderr);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        for name in ["quiet.pid", "loud.pid"] {
+            let pid = std::fs::read_to_string(dir.path().join(name)).unwrap();
+            let pid = pid.trim();
+            let gone = std::time::Instant::now();
+            while alive(pid) && gone.elapsed() < Duration::from_secs(5) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            assert!(!alive(pid), "{name} still running");
+        }
     }
 
     #[tokio::test]

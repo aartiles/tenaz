@@ -9,79 +9,40 @@
 //! The bootstrap runs in steps, and a step that fails is retried with the
 //! files the earlier session left.
 
-use std::path::Path;
 use std::sync::Arc;
 
-use tenaz_adapters::git::GitRepo;
-use tenaz_adapters::notify::SilentNotifier;
-use tenaz_adapters::verify::VerifyProcess;
-use tenaz_core::ledger::{BootstrapStep, JournalRecord, ModelConfig, Phase};
-use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
-use tenaz_core::params::RunParams;
-use tenaz_core::project::Project;
-use tenaz_core::testing::{FastClock, ScriptedHarness};
 use tokio_util::sync::CancellationToken;
+
+use super::{deps, fake_project};
+use crate::effort::EffortDial;
+use crate::ledger::{BootstrapStep, JournalRecord, Phase};
+use crate::orchestrator::Deps;
+use crate::project::Project;
+use crate::testing::{FastClock, ScriptedHarness};
 
 /// Runs the fake goal to the end with `harness` and `maxAttempts`; the
 /// project and its log.
 async fn run(harness: ScriptedHarness, max_attempts: u32) -> (tempfile::TempDir, Project, String) {
-    let work = tempfile::tempdir().unwrap();
-    let brief = work.path().join("brief.md");
-    std::fs::write(&brief, "# Fake brief\n\nBuild four trivial files.\n").unwrap();
-    let project = Project::new(work.path().join("project"));
-    let mut params = RunParams::default();
-    for pair in [
-        &format!("maxAttempts={max_attempts}"),
-        "replanEvery=2",
-        "engineRetryBaseSec=0",
-        "notify=false",
-    ] {
-        params.apply_override(pair).unwrap();
-    }
-    let config = ModelConfig {
-        harness: "fake".into(),
-        harness_version: "fake-pi 0.0.1".into(),
-        model: "fake/fake".into(),
-        provider: Some("fake".into()),
-        id: "fake".into(),
-        base_url: None,
-        context_window: 131072,
-        input: vec!["text".into()],
-        thinking: Some("medium".into()),
-    };
-    let vcs = GitRepo::new(project.root());
-    let templates =
-        Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();
-    let options = InitOptions {
-        launch: tenaz_core::ledger::Launch::default(),
-        brief: Some(brief),
-        config,
-        params,
-        skills: vec![],
-        runner_version: "test".into(),
-    };
-    init(&project, &vcs, &FastClock::new(100), &templates, options).unwrap();
+    run_with(harness, max_attempts, &[]).await
+}
 
+/// [`run`] with more parameter overrides.
+async fn run_with(
+    harness: ScriptedHarness,
+    max_attempts: u32,
+    set: &[&str],
+) -> (tempfile::TempDir, Project, String) {
+    let work = tempfile::tempdir().unwrap();
+    let attempts = format!("maxAttempts={max_attempts}");
+    let mut overrides = vec![attempts.as_str(), "replanEvery=2"];
+    overrides.extend_from_slice(set);
+    let (project, vcs) = fake_project(work.path(), &overrides);
+    let clock = Arc::new(FastClock::new(100));
     let deps = Deps {
-        harness: Arc::new(harness),
-        vcs: Arc::new(GitRepo::new(project.root())),
-        verify: Arc::new(VerifyProcess::new(project.root())),
-        clock: Arc::new(FastClock::new(100)),
-        notifier: Arc::new(SilentNotifier),
-        engine: None,
-        lease: None,
-        engine_metrics: None,
-        memory: None,
-        effort: Some(tenaz_core::effort::EffortDial::new()),
+        effort: Some(EffortDial::new()),
+        ..deps(&project, vcs, Arc::new(harness), clock)
     };
-    let mut runner = Runner::open(project.clone(), deps, CancellationToken::new()).unwrap();
-    runner
-        .run(RunOptions {
-            runner_version: "test".into(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    super::run(&project, deps, CancellationToken::new()).await;
     let log = project.read(".tenaz/private/orchestrator.log").unwrap();
     assert_eq!(
         project.load_ledger().unwrap().phase,
@@ -548,7 +509,10 @@ async fn an_attempt_that_leaves_fewer_passing_checks_fails() {
         .read(&format!(".tenaz/private/{}.prompt.md", builders[1]))
         .unwrap();
     assert!(second.contains("fewer than the"), "{second}");
-    assert!(project.exists("checks/T001.exists.sh"), "the check is back");
+    assert!(
+        project.exists("checks/T001.exists.sh"),
+        "the builder put the check back"
+    );
     assert!(log.contains("T004 done (2 attempts"), "{log}");
 }
 
@@ -612,4 +576,95 @@ async fn the_final_reviewer_judges_the_product_against_the_brief_as_a_whole() {
         .unwrap();
     assert!(prompt.contains("judge the product as a whole"), "{prompt}");
     assert!(prompt.contains("under `## Overall`"), "{prompt}");
+}
+
+/// A builder's shell call that never ends, as `./verify --all` with an
+/// endless loop did under Pi in the Digger 3D run of 2026-10-27, is stopped
+/// at `toolMinutes`. The session is told why and goes on with its context
+/// to do the task.
+#[tokio::test]
+async fn a_tool_call_over_its_time_is_stopped_and_the_session_goes_on() {
+    let (_work, project, log) = run_with(
+        ScriptedHarness {
+            hang_task: Some("T001".into()),
+            hang_times: 1,
+            ..Default::default()
+        },
+        3,
+        &["toolMinutes=1"],
+    )
+    .await;
+    assert!(
+        log.contains("tool call over its time limit; stopped, the session goes on"),
+        "{log}"
+    );
+    let sessions: Vec<_> = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-builder-T001") => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    // The fake's first T001 session that does the work then outgrows its
+    // context on purpose; that, not the tool call, is what ends it.
+    let first = &sessions[0];
+    assert_eq!(first.attempt, Some(1));
+    assert!(
+        first
+            .abort_reason
+            .as_deref()
+            .is_some_and(|r| r.starts_with("context budget exceeded")),
+        "{first:?}"
+    );
+    let stopped = first
+        .watchdog
+        .iter()
+        .find(|e| e.kind == "tool-timeout")
+        .expect("the timeout is in the session record");
+    assert_eq!(stopped.detail.as_deref(), Some("./verify --all"));
+    let raw = project
+        .read(&format!(".tenaz/private/{}.rpc.jsonl", first.label))
+        .unwrap();
+    assert!(
+        raw.contains("src/T001.txt"),
+        "the session went on to do the task"
+    );
+}
+
+/// A second call over the time limit in the same session ends it, and the
+/// attempt counts.
+#[tokio::test]
+async fn a_second_tool_call_over_its_time_ends_the_session() {
+    let (_work, project, log) = run_with(
+        ScriptedHarness {
+            hang_task: Some("T001".into()),
+            hang_times: 2,
+            ..Default::default()
+        },
+        3,
+        &["toolMinutes=1"],
+    )
+    .await;
+    assert!(
+        log.contains("abort — a tool call ran over 1 minutes twice"),
+        "{log}"
+    );
+    let sessions: Vec<_> = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-builder-T001") => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(!sessions[0].ok);
+    assert_eq!(
+        sessions[0].abort_reason.as_deref(),
+        Some("a tool call ran over 1 minutes twice")
+    );
+    assert!(
+        sessions.iter().any(|s| s.attempt == Some(2) && s.ok),
+        "the next attempt does the task: {sessions:?}"
+    );
 }

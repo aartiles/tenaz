@@ -6,7 +6,38 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `capacityRetryWaitSec` (10 by default): the pause before a session is
+  rerun after the engine ran out of memory and Tenaz lowered the context
+  budget. It was a fixed 10 seconds. A stop (Ctrl-C) during the pause now
+  pauses the run at once; before, the pause ran out and the next session
+  started first. `tenaz demo` sets it to 0, so the demo ends about 10
+  seconds sooner.
+
+- A time limit per tool call, `toolMinutes` (10 by default, 0 turns it
+  off). A call that runs over it, such as a script in an endless loop, is
+  stopped and the same session is told which call and what to do; a second
+  one ends the session. Pi's `bash` has no default timeout, and a hung call
+  held a session for 21 minutes. See ADR 0004.
+
 ### Fixed
+
+- The engine proxy no longer garbles a character that the network splits
+  across two chunks of a streamed reply. It decoded each chunk on its own,
+  so an accented letter or emoji cut in half reached the harness as `�`
+  in every repaired stream. It now decodes only whole events.
+
+- A request the harness cancels because Tenaz stopped the turn no longer
+  counts as an engine error. Pi reports it as one ("This operation was
+  aborted"), so a session aborted at its second compaction was rerun as an
+  engine failure: the attempt did not count and an engine retry was spent.
+
+- `verify` runs in a process group of its own, and Tenaz kills the group
+  when it ends or times out. A check that started `npm run dev` and failed
+  left Vite running on its fixed port, so the next check failed on the port
+  (with `--strictPort`), and a leftover process that kept verify's output
+  open made Tenaz wait for it.
 
 - `verify` runs with `NO_COLOR=1` as well as `CI=1`. `CI` turns colours
   on in some tools (Vite), so a check that read their output failed under

@@ -11,7 +11,7 @@ use tenaz_core::doctor;
 use tenaz_core::ledger::EngineApi;
 
 use crate::detect::{self, Engine};
-use crate::{HarnessKind, InitArgs, InitPlan, worktree};
+use crate::{HarnessArg, InitArgs, InitPlan, worktree};
 
 /// Numbered choices, free text and yes/no over a line-based terminal.
 pub struct Prompter<R, W> {
@@ -154,7 +154,7 @@ pub async fn run<R: BufRead, W: Write>(
     let project = ask_project(args, &goal, p)?;
     let args = &ask_placement(args, &goal, &project, p)?;
     let harness = ask_agent(args, p)?;
-    let choice = if harness == HarnessKind::Pi && args.model.is_none() {
+    let choice = if harness == HarnessArg::Pi && args.model.is_none() {
         pi_model(args, &client, p).await?
     } else {
         engine_model(args, &client, p).await?
@@ -195,9 +195,9 @@ pub async fn run<R: BufRead, W: Write>(
             Goal::InProject | Goal::Text(_) => None,
         },
         harness_bin: match harness {
-            HarnessKind::Fx => args.fx_bin.clone(),
-            HarnessKind::Pi => args.pi_bin.clone(),
-            HarnessKind::Fake => None,
+            HarnessArg::Fx => args.fx_bin.clone(),
+            HarnessArg::Pi => args.pi_bin.clone(),
+            HarnessArg::Fake => None,
         },
         provider: choice
             .provider
@@ -351,7 +351,7 @@ fn ask_project<R: BufRead, W: Write>(
 fn ask_agent<R: BufRead, W: Write>(
     args: &InitArgs,
     p: &mut Prompter<R, W>,
-) -> anyhow::Result<HarnessKind> {
+) -> anyhow::Result<HarnessArg> {
     if let Some(harness) = args.harness {
         return Ok(harness);
     }
@@ -641,10 +641,7 @@ fn show<R: BufRead, W: Write>(
     p.say("")?;
     p.say(&format!("  Project   {}", plan.project.display()))?;
     p.say(&format!("  Goal      {goal_text}"))?;
-    p.say(&format!(
-        "  Agent     {}",
-        crate::harness_name(plan.harness)
-    ))?;
+    p.say(&format!("  Agent     {}", plan.harness.kind()))?;
     if let Some(engine) = engine {
         p.say(&format!(
             "  Engine    {} at {}",
@@ -747,11 +744,11 @@ async fn choose_engine<R: BufRead, W: Write>(
     }
 }
 
-fn harness_kind(name: &str) -> HarnessKind {
+fn harness_kind(name: &str) -> HarnessArg {
     if name == "pi" {
-        HarnessKind::Pi
+        HarnessArg::Pi
     } else {
-        HarnessKind::Fx
+        HarnessArg::Fx
     }
 }
 
