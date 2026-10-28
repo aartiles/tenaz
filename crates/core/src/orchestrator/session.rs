@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::briefing::{CONTINUATION, TURN_CONTINUATION, image_continuation, without_map};
+use crate::briefing::without_map;
 use crate::ledger::{Inflight, JournalRecord, SessionRecord};
 use crate::memory::MemoryWindow;
 use crate::metrics::{EngineCounters, RequestRecord, delta, engine_summary};
@@ -19,6 +19,7 @@ use crate::task::TaskId;
 use crate::verify::retarget;
 use crate::watchdog::{Action, WatchConfig, Watchdog};
 
+use super::recovery::{Continuation, FailureCause, GiveUp, Recovery, Step};
 use super::{RunError, Runner};
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
@@ -458,23 +459,14 @@ impl Runner {
         prompt: &str,
         ctx: &SessionCtx,
     ) -> Result<SessionResult, RunError> {
-        let mut retry = 0;
-        let mut capacity = 0;
-        let mut continued = 0;
-        let mut image_stopped: Option<String> = None;
-        let mut turns_stopped = false;
+        let mut recovery = Recovery::default();
         loop {
             let resumed = std::mem::take(&mut self.ledger.pending_continuation);
             if resumed {
                 self.save()?;
             }
-            let note = match (&image_stopped, turns_stopped) {
-                (Some(refusal), _) => image_continuation(refusal),
-                (None, true) => TURN_CONTINUATION.to_owned(),
-                (None, false) => CONTINUATION.to_owned(),
-            };
-            let text = if continued > 0 || resumed {
-                format!("{}\n\n{note}", without_map(prompt))
+            let text = if recovery.has_continued() || resumed {
+                format!("{}\n\n{}", without_map(prompt), recovery.note())
             } else {
                 prompt.to_owned()
             };
@@ -483,94 +475,73 @@ impl Runner {
             if self.stopping() {
                 return Err(self.pause(&label, role, ctx)?);
             }
-            let metrics = &result.metrics;
-            if !metrics.engine_failed() {
+            if !result.metrics.engine_failed() {
                 self.note_engine_held(&label, result.record.memory.as_ref())?;
             }
-            if metrics.context_stopped() && continued < self.params.context_continuations {
-                continued += 1;
-                turns_stopped = false;
+            match recovery.next(&result.metrics, role, &self.params) {
+                Step::Done => return Ok(result),
+                Step::Continue { kind, count } => self.continue_session(&result, kind, count),
+                Step::LowerCap { limit, count } => {
+                    self.lower_context_cap(&label, limit, count)?;
+                    self.capacity_wait(&label, role, ctx).await?;
+                }
+                Step::Retry { retry, cause } => {
+                    self.engine_backoff(&label, retry, cause).await;
+                    if self.stopping() {
+                        return Err(self.pause(&label, role, ctx)?);
+                    }
+                    self.wait_for_engine().await;
+                }
+                Step::GiveUp(why) => return Err(self.give_up(&label, why)),
+            }
+        }
+    }
+
+    /// Journals and logs that a fresh session continues the work of `result`.
+    fn continue_session(&mut self, result: &SessionResult, kind: Continuation, count: u32) {
+        let label = result.record.label.clone();
+        let limit = self.params.context_continuations;
+        let why = match kind {
+            Continuation::Context => {
                 self.journal(JournalRecord::ContextContinuation {
                     label: label.clone(),
                     context_peak: result.record.context_peak,
                     context_budget: result.record.context_budget,
-                    continuation: continued,
+                    continuation: count,
                 });
-                self.log(&format!("  {label}: stopped at its context budget; a fresh session continues the same work ({continued}/{}, not counted as an attempt)", self.params.context_continuations));
-                continue;
+                "stopped at its context budget"
             }
-            if let Some(refusal) = &metrics.image_refusal
-                && continued < self.params.context_continuations
-            {
-                continued += 1;
-                turns_stopped = false;
-                image_stopped = Some(refusal.clone());
+            Continuation::Image(refusal) => {
                 self.journal(JournalRecord::ImageContinuation {
                     label: label.clone(),
                     refusal: refusal.chars().take(300).collect(),
-                    continuation: continued,
+                    continuation: count,
                 });
-                self.log(&format!("  {label}: the engine refused an image the session read; a fresh session continues the same work ({continued}/{}, not counted as an attempt)", self.params.context_continuations));
-                continue;
+                "the engine refused an image the session read"
             }
-            // A session that edits files and ran out of turns was working, not
-            // looping (the loop, repeat and idle rules stop those first): its
-            // changes are kept, like a context stop, and a fresh session
-            // finishes them instead of the attempt counting as failed.
-            if metrics.turns_stopped()
-                && role.edits_code()
-                && continued < self.params.context_continuations
-            {
-                continued += 1;
-                turns_stopped = true;
-                image_stopped = None;
+            Continuation::Turns => {
                 self.journal(JournalRecord::TurnContinuation {
                     label: label.clone(),
-                    turns: metrics.turns,
-                    continuation: continued,
+                    turns: result.metrics.turns,
+                    continuation: count,
                 });
-                self.log(&format!("  {label}: stopped at its turn budget; a fresh session continues the same work ({continued}/{}, not counted as an attempt)", self.params.context_continuations));
-                continue;
+                "stopped at its turn budget"
             }
-            image_stopped = None;
-            if !metrics.engine_failed() {
-                return Ok(result);
+        };
+        self.log(&format!("  {label}: {why}; a fresh session continues the same work ({count}/{limit}, not counted as an attempt)"));
+    }
+
+    /// The error that ends the run when a session keeps failing in the engine.
+    fn give_up(&self, label: &str, why: GiveUp) -> RunError {
+        RunError::EngineUnavailable(match why {
+            GiveUp::Capacity => format!(
+                "sessions still overflow the engine's memory after the context budget was lowered to {} (last: {label})",
+                self.ledger.context_cap.unwrap_or(0)
+            ),
+            GiveUp::Engine { sessions } => {
+                format!("{sessions} sessions in a row ended with engine errors (last: {label})")
             }
-            // A prompt larger than the engine's current memory allows fails the same way
-            // after any wait. If the reported maximum is still usable, lower the budget and
-            // rerun after a pause; a tiny maximum means something else holds it, so back off.
-            if let Some(limit) = metrics.capacity_limit()
-                && limit >= self.params.context_floor
-            {
-                if capacity >= self.params.capacity_retries {
-                    return Err(RunError::EngineUnavailable(format!(
-                        "sessions still overflow the engine's memory after the context budget was lowered to {} (last: {label})",
-                        self.ledger.context_cap.unwrap_or(0)
-                    )));
-                }
-                capacity += 1;
-                self.lower_context_cap(&label, limit, capacity)?;
-                self.capacity_wait(&label, role, ctx).await?;
-                continue;
-            }
-            if retry >= self.params.engine_retries {
-                return Err(RunError::EngineUnavailable(format!(
-                    "{} sessions in a row ended with engine errors (last: {label})",
-                    retry + 1
-                )));
-            }
-            let cause = if result.metrics.harness_exit.is_some() {
-                "harness"
-            } else {
-                "engine"
-            };
-            self.engine_backoff(&label, retry, cause).await;
-            retry += 1;
-            if self.stopping() {
-                return Err(self.pause(&label, role, ctx)?);
-            }
-            self.wait_for_engine().await;
-        }
+        })
     }
 
     /// Records a pause during `label` and returns the error that unwinds the run.
@@ -691,21 +662,21 @@ impl Runner {
 
     /// Waits before rerunning a session the engine failed: the base backoff,
     /// doubling per retry up to 15 minutes, cut short by a pause.
-    async fn engine_backoff(&mut self, label: &str, retry: u32, cause: &str) {
+    async fn engine_backoff(&mut self, label: &str, retry: u32, cause: FailureCause) {
         let wait = (self.params.engine_retry_base_sec * 2u64.pow(retry)).min(900);
         self.journal(JournalRecord::EngineRetry {
             label: label.to_owned(),
             retry: retry + 1,
             wait_s: wait,
-            cause: Some(cause.to_owned()),
+            cause: Some(cause.as_str().to_owned()),
         });
-        let what = if cause == "harness" {
+        let what = if cause == FailureCause::Harness {
             "the harness ended before the turn settled"
         } else {
             "engine error"
         };
         self.log(&format!("  {label}: {what}; retrying the same session in {wait} s ({}/{}, not counted as an attempt)", retry + 1, self.params.engine_retries));
-        if retry == 0 && cause == "engine" {
+        if retry == 0 && cause == FailureCause::Engine {
             self.notify("The engine is failing (often memory). Free memory; the run retries the same session.");
         }
         self.sleep_unless_stopped(Duration::from_secs(wait)).await;

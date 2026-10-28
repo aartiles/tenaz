@@ -54,7 +54,8 @@ repository kept as snapshots in memory; `vcs_contract_tests!` holds it and
 and the crates above it.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
-the session wrapper with engine retries, capacity caps and continuations,
+the session wrapper with engine retries, capacity caps and continuations
+(which one comes next is decided by the pure `orchestrator::recovery`),
 the task attempt loop with review, split and block, and pause and resume.
 
 State lives on disk under `.tenaz/` in the project, so a run survives the
