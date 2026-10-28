@@ -76,6 +76,7 @@ fn deps(
         engine_metrics: None,
         memory: None,
         effort: None,
+        cache_report: None,
     }
 }
 

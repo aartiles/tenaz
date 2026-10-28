@@ -6,6 +6,17 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The preflight no longer fails an engine that does not report cached
+  prompt tokens. LM Studio 0.4 reuses the prompt prefix but leaves
+  `cached_tokens` out of its usage, which looked like no cache and needed
+  `--allow-weak-engine`. Such an engine now passes with a warning, and
+  `tenaz status` says its prompt cache is "not reported" instead of 0 %;
+  `run.json` has `preflight.cache_reported` and `tenaz status --json` has
+  `prompt_cache_reported` and `prompt_cache_percent`. An engine that
+  reports 0 cached tokens still fails. Needs the engine proxy. See ADR 0007.
+
 ## [0.2.0] - 2026-10-28
 
 ### Added

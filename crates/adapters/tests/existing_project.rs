@@ -85,6 +85,23 @@ fn params() -> RunParams {
     params
 }
 
+/// The real git and verify in `root`, `harness` and no engine.
+fn deps(harness: ScriptedHarness, root: &Path, verify_path: &str) -> Deps {
+    Deps {
+        harness: Arc::new(harness),
+        vcs: Arc::new(GitRepo::new(root)),
+        verify: Arc::new(VerifyProcess::new(root).at(verify_path)),
+        clock: Arc::new(SystemClock::new()),
+        notifier: Arc::new(SilentNotifier),
+        engine: None,
+        lease: None,
+        engine_metrics: None,
+        memory: None,
+        effort: None,
+        cache_report: None,
+    }
+}
+
 #[tokio::test]
 async fn a_run_in_an_existing_project_stays_under_tenaz() {
     let work = tempfile::tempdir().unwrap();
@@ -149,18 +166,7 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
     assert!(!added.contains(".tenaz/run.json"), "{added}");
     assert_eq!(git(&root, &["status", "--porcelain"]), "");
 
-    let deps = Deps {
-        harness: Arc::new(harness),
-        vcs: Arc::new(GitRepo::new(&root)),
-        verify: Arc::new(VerifyProcess::new(&root).at(ledger.params.verify_path())),
-        clock: Arc::new(SystemClock::new()),
-        notifier: Arc::new(SilentNotifier),
-        engine: None,
-        lease: None,
-        engine_metrics: None,
-        memory: None,
-        effort: None,
-    };
+    let deps = deps(harness, &root, ledger.params.verify_path());
     let mut runner = Runner::open(project.clone(), deps, CancellationToken::new()).unwrap();
     runner
         .run(RunOptions {

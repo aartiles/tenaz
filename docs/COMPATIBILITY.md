@@ -33,7 +33,10 @@ The preflight runs before the first session and checks:
 - **Reasoning output.** A model that cannot think fails the preflight; pass
   `--allow-weak-engine` to record the failure and run anyway.
 - **Prefix caching.** Without it every turn pays the whole prompt again.
-  Same flag.
+  Same flag. An engine whose usage never names its cached tokens (LM
+  Studio 0.4) cannot be checked: the preflight passes with a warning, and
+  `tenaz status` shows its cache as "not reported" (ADR 0007). With
+  `--no-proxy` Tenaz cannot see that, and such an engine fails.
 - **Vision**, only when the project was initialised with `--vision`.
 
 Some engines' tool-call parsers hand an object argument back as JSON
@@ -101,6 +104,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   it finds by itself.
 
 ## Known gaps
+
+- **An engine that does not report cached tokens** (ADR 0007). Tested with
+  recorded usage shapes, LM Studio's among them, and the fake harness; the
+  preflight has not yet been run against LM Studio with this change.
 
 - **A tool call over `toolMinutes`.** Tenaz aborts the turn and prompts
   the same session again (ADR 0004). Tested with the fake harness only:

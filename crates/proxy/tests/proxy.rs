@@ -175,7 +175,7 @@ async fn forwards_requests_and_records_usage_and_errors() {
             false,
             Some(ProxyUsage {
                 prompt_tokens: 10,
-                cached_tokens: 0,
+                cached_tokens: None,
                 completion_tokens: 3,
                 reasoning_tokens: 0
             }),
@@ -190,7 +190,7 @@ async fn forwards_requests_and_records_usage_and_errors() {
             true,
             Some(ProxyUsage {
                 prompt_tokens: 50,
-                cached_tokens: 40,
+                cached_tokens: Some(40),
                 completion_tokens: 2,
                 reasoning_tokens: 0
             }),

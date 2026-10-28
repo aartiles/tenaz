@@ -23,7 +23,7 @@ pub use preflight::TOOL_PROBE_FILE;
 pub use sampler::Sampler;
 pub use status::{TOOL_REPAIRS, status_json, status_text};
 
-use crate::ledger::{JournalRecord, Ledger, Phase};
+use crate::ledger::{JournalRecord, Ledger, Phase, Preflight};
 use crate::params::RunParams;
 use crate::ports::{
     Clock, EngineAdapter, EngineMetricsSource, Harness, HarnessError, MemoryProbe, Notifier, Vcs,
@@ -48,6 +48,8 @@ pub struct Deps {
     pub memory: Option<Arc<dyn MemoryProbe>>,
     /// Lowers the engine proxy's reasoning effort for a session; `None` without a proxy.
     pub effort: Option<crate::effort::EffortDial>,
+    /// What the engine proxy saw of the engine's cached-token counts; `None` without a proxy.
+    pub cache_report: Option<crate::cache_report::CacheReport>,
 }
 
 impl std::fmt::Debug for Deps {
@@ -290,6 +292,19 @@ impl Runner {
         Ok(())
     }
 
+    /// Logs what the preflight found, and what it could not check.
+    fn log_preflight(&self, preflight: &Preflight) {
+        self.log(&format!(
+            "Preflight: reasoning={} cache={} tools={}",
+            preflight.reasoning,
+            preflight.cache_check(),
+            preflight.tools.unwrap_or(false)
+        ));
+        if let Some(warning) = preflight::warnings(preflight) {
+            self.log(warning);
+        }
+    }
+
     /// Runs the engine preflight unless an earlier one passed. `false` when
     /// a stop interrupted it and the run paused.
     async fn ensure_preflight(&mut self, allow_weak_engine: bool) -> Result<bool, RunError> {
@@ -317,12 +332,7 @@ impl Runner {
             self.log("PAUSED during the preflight. Run again (no --resume needed) to continue.");
             return Ok(false);
         }
-        self.log(&format!(
-            "Preflight: reasoning={} cache={} tools={}",
-            preflight.reasoning,
-            preflight.cache,
-            preflight.tools.unwrap_or(false)
-        ));
+        self.log_preflight(&preflight);
         let ok = preflight.ok;
         self.ledger.preflight = Some(preflight);
         self.save()?;

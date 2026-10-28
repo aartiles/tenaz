@@ -10,7 +10,9 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, run};
+use crate::cache_report::CacheReport;
 use crate::ledger::{JournalRecord, SessionRecord, TaskOutcome, Verdict};
+use crate::orchestrator::Deps;
 use crate::project::Project;
 use crate::testing::{ScriptedHarness, VirtualClock};
 
@@ -126,6 +128,54 @@ async fn the_scripted_run_completes() {
     let status = crate::orchestrator::status_text(&run.project);
     assert!(status.starts_with("Phase: COMPLETE\n"), "{status}");
     assert!(status.contains("Tasks: done 5, split 1"), "{status}");
+}
+
+/// Without the engine proxy nobody saw whether the engine reports cached
+/// tokens: `status --json` leaves it open and gives the share.
+#[tokio::test(start_paused = true)]
+async fn without_the_engine_proxy_the_cache_report_is_open() {
+    let run = Played::with(ScriptedHarness::default()).await;
+    let json = crate::orchestrator::status_json(&run.project);
+    assert!(json["prompt_cache_reported"].is_null(), "{json}");
+    assert!(json["prompt_cache_percent"].is_f64(), "{json}");
+}
+
+/// An engine that caches but leaves cached tokens out of its usage passes
+/// the preflight with a warning, and status shows its cache as not
+/// reported, not as 0 %.
+#[tokio::test(start_paused = true)]
+async fn a_run_on_an_engine_that_does_not_report_its_cache_completes() {
+    let work = tempfile::tempdir().unwrap();
+    let (project, vcs) = fake_project(work.path(), &["maxAttempts=2", "replanEvery=2"]);
+    let harness = ScriptedHarness {
+        uncached: true,
+        ..ScriptedHarness::default()
+    };
+    let report = CacheReport::new();
+    report.note(false);
+    let deps = Deps {
+        cache_report: Some(report),
+        ..deps(
+            &project,
+            vcs,
+            Arc::new(harness),
+            Arc::new(VirtualClock::new()),
+        )
+    };
+    run(&project, deps, CancellationToken::new()).await;
+    let run = Played::read(work, project);
+    assert!(run.has(completed), "{}", run.log);
+    assert!(
+        run.log.contains("does not report cached prompt tokens"),
+        "{}",
+        run.log
+    );
+    let status = crate::orchestrator::status_text(&run.project);
+    assert!(status.contains(" cache=not reported "), "{status}");
+    assert!(status.contains("prompt cache not reported"), "{status}");
+    let json = crate::orchestrator::status_json(&run.project);
+    assert_eq!(json["prompt_cache_reported"], false, "{json}");
+    assert!(json["prompt_cache_percent"].is_null(), "{json}");
 }
 
 /// The scripted harness on its own plays the happy path: four tasks
