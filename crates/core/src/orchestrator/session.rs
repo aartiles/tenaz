@@ -1,9 +1,8 @@
-//! One session: open the harness, feed the watchdog, answer permissions,
-//! steer and abort, then record it. And the wrapper that reruns a session
-//! after engine failures, capacity caps and context stops without charging
-//! the task an attempt.
+//! One session, start to journal record (the harness run itself is in
+//! `harness`), and the wrapper that reruns a session after engine
+//! failures, capacity caps and context stops without charging the task an
+//! attempt, or pauses it.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,15 +11,17 @@ use crate::ledger::{Inflight, JournalRecord, SessionRecord};
 use crate::memory::MemoryWindow;
 use crate::metrics::{EngineCounters, RequestRecord, delta, engine_summary};
 use crate::ownership;
-use crate::ports::{PermissionDecision, SessionSpec};
 use crate::role::Role;
 use crate::session::{SessionEvent, SessionMetrics};
 use crate::task::TaskId;
-use crate::verify::retarget;
-use crate::watchdog::{Action, WatchConfig, Watchdog};
+use crate::watchdog::WatchConfig;
 
 use super::recovery::{Continuation, FailureCause, GiveUp, Recovery, Step};
 use super::{RunError, Runner};
+
+mod harness;
+
+pub(crate) use harness::HarnessRun;
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
 const CRITICAL_PRESSURE: u32 = 4;
@@ -51,266 +52,7 @@ impl SessionResult {
     }
 }
 
-/// The grace given to a harness between an abort and a kill.
-const ABORT_GRACE: Duration = Duration::from_secs(60);
-
 impl Runner {
-    /// How to open a session; `persist` keeps its logs and state under
-    /// `.tenaz/private/`.
-    fn session_spec(&self, label: &str, cwd: PathBuf, persist: bool) -> SessionSpec {
-        let private = self.project.private_dir();
-        let log = |suffix: &str| persist.then(|| private.join(format!("{label}.{suffix}")));
-        SessionSpec {
-            label: label.to_owned(),
-            cwd,
-            persist_dir: persist.then(|| private.join("sessions")),
-            raw_log: log("rpc.jsonl"),
-            thinking_log: log("thinking.md"),
-            stderr_log: log("stderr.log"),
-        }
-    }
-
-    /// Runs the harness once with `prompts` sent one after another (the
-    /// preflight sends several). `persist` keeps the raw stream and the
-    /// harness state under `.tenaz/private/`. With `own_checks`, a session
-    /// that answered every prompt while `./verify --task` runs no passing
-    /// check of that task gets one more prompt asking for them.
-    pub(crate) async fn run_harness(
-        &self,
-        label: &str,
-        prompts: &[String],
-        cwd: PathBuf,
-        watch: Option<WatchConfig>,
-        persist: bool,
-        mut own_checks: Option<&TaskId>,
-    ) -> Result<(SessionMetrics, Vec<RequestRecord>), RunError> {
-        let spec = self.session_spec(label, cwd, persist);
-        let stderr_log = spec.stderr_log.clone();
-        let mut session = self.deps.harness.open(spec).await?;
-        let mut watchdog = Watchdog::new(self.params.clone(), watch);
-        if watch.is_some_and(|w| w.idle) {
-            watchdog.set_fingerprint(self.deps.vcs.worktree_fingerprint().ok());
-        }
-        let clock = self.deps.clock.clone();
-        let started = clock.monotonic_ms();
-        let wall_ms = self.params.session_minutes * 60_000;
-        let recorder = RequestRecorder::start(
-            label,
-            persist.then(|| self.project.clone()),
-            self.deps.engine_metrics.clone(),
-            clock.clone(),
-        );
-        let mut timing = TurnTiming::default();
-        let mut kill_at: Option<u64> = None;
-        // What to prompt once a turn stopped at its tool time limit settles.
-        let mut resume: Option<String> = None;
-        let mut prompt_index = 0;
-        if let Some(first) = prompts.first() {
-            session.prompt(first).await?;
-            prompt_index = 1;
-        }
-        loop {
-            let now = clock.monotonic_ms();
-            let elapsed = now.saturating_sub(started);
-            // Deadlines are checked here, not only in the timers below: with a
-            // backlog of ready events a fresh timer future never gets to fire.
-            if kill_at.is_some_and(|k| now >= k) {
-                tracing::debug!("{label}: kill deadline passed");
-                break;
-            }
-            if kill_at.is_none()
-                && let Some(actions) = self.deadline_actions(label, &mut watchdog, elapsed)
-            {
-                kill_at = self
-                    .apply(&mut *session, actions, now, kill_at, &mut resume)
-                    .await;
-                continue;
-            }
-            // The session's wall clock, or sooner the oldest tool call's
-            // limit: a hung call sends no event to wake on.
-            let deadline = watchdog.tool_deadline().map_or(wall_ms, |d| d.min(wall_ms));
-            let deadline_left = Duration::from_millis(deadline.saturating_sub(elapsed));
-            let kill_left = Duration::from_millis(kill_at.map_or(0, |k| k.saturating_sub(now)));
-            let event = tokio::select! {
-                event = session.next_event() => event,
-                () = clock.sleep(kill_left), if kill_at.is_some() => {
-                    tracing::debug!("{label}: kill timer fired");
-                    break;
-                }
-                // What the deadline asks starts when the wait ends: `now` is
-                // from before it, and an abort's grace would already be over.
-                () = clock.sleep(deadline_left), if kill_at.is_none() => {
-                    let now = clock.monotonic_ms();
-                    if let Some(actions) = self.deadline_actions(label, &mut watchdog, now.saturating_sub(started)) {
-                        kill_at = self.apply(&mut *session, actions, now, kill_at, &mut resume).await;
-                    }
-                    continue;
-                }
-                () = self.stop.cancelled(), if kill_at.is_none() => {
-                    let _ = session.abort().await;
-                    kill_at = Some(clock.monotonic_ms() + 5_000);
-                    continue;
-                }
-            };
-            let Some(event) = event else {
-                tracing::debug!("{label}: event stream ended");
-                break;
-            };
-            // The wait above may have been long; the event's time is now, not
-            // the time the wait started.
-            let now = clock.monotonic_ms();
-            tracing::trace!(
-                "{label}: event {} (kill_at {kill_at:?}, now {now})",
-                event_name(&event)
-            );
-            match &event {
-                SessionEvent::Exited { .. } => break,
-                SessionEvent::PermissionRequest { id, .. } => {
-                    let _ = session
-                        .answer_permission(id, PermissionDecision::Allow)
-                        .await;
-                    continue;
-                }
-                _ => timing.observe(&event, now, &recorder),
-            }
-            let vcs = self.deps.vcs.clone();
-            let actions = watchdog.handle(&event, elapsed, move || {
-                vcs.worktree_fingerprint().unwrap_or_default()
-            });
-            for action in &actions {
-                self.log(&format!("  {label}: {}", describe(action)));
-            }
-            kill_at = self
-                .apply(&mut *session, actions, now, kill_at, &mut resume)
-                .await;
-            if let SessionEvent::Settled { aborted } = event {
-                if let Some(note) = resume.take()
-                    && !watchdog.aborting()
-                    && !self.stopping()
-                {
-                    session.prompt(&note).await?;
-                    continue;
-                }
-                if aborted || watchdog.aborting() || self.stopping() {
-                    break;
-                }
-                if let Some(next) = prompts.get(prompt_index) {
-                    session.prompt(next).await?;
-                    prompt_index += 1;
-                } else if let Some(message) = self.own_checks_prompt(label, own_checks.take()).await
-                {
-                    watchdog.note("own-checks", clock.monotonic_ms().saturating_sub(started));
-                    session.prompt(&message).await?;
-                } else {
-                    break;
-                }
-            }
-        }
-        let grace = if kill_at.is_some_and(|k| clock.monotonic_ms() >= k) {
-            Duration::ZERO
-        } else {
-            ABORT_GRACE
-        };
-        let exit = session.close(grace).await;
-        watchdog.finish(exit.code, clock.monotonic_ms().saturating_sub(started));
-        let requests = recorder.finish().await;
-        let mut metrics = watchdog.into_metrics();
-        // The harness went away before its turn settled and nobody stopped it.
-        // Between tool calls that says nothing about the task, so it is
-        // handled like an engine failure (rerun, uncounted). During a tool
-        // call, the call ended it and a rerun would make the same call (fx
-        // dies on output that is not UTF-8), so the session stops with that
-        // call as the reason and the attempt counts. The stderr is kept for
-        // diagnosis either way.
-        if metrics.ended_early() && !self.stopping() {
-            let note = harness_exit_note(exit.code, stderr_log.as_deref());
-            if let Some(call) = &metrics.tool_in_flight {
-                metrics.abort_reason = Some(crashed_running(call, &note));
-            } else if metrics.output_truncated() {
-                // fx exits when a reply is cut at the output limit; the model
-                // was still reasoning, and would again in an unchanged rerun.
-                metrics.abort_reason = Some(OUTPUT_LIMIT.to_owned());
-            }
-            metrics.harness_exit = Some(note);
-        }
-        Ok((metrics, requests))
-    }
-
-    /// The prompt for a builder session that answered every prompt while
-    /// `./verify --task` runs no passing check of `task`; `None` when it does.
-    /// The attempt would fail on that alone, and the session still holds what
-    /// it learned, so it adds them now.
-    async fn own_checks_prompt(&self, label: &str, task: Option<&TaskId>) -> Option<String> {
-        let task = task?;
-        let own = self.run_verify(&["--task", task.as_str()]).await;
-        if own.passed() > 0 {
-            return None;
-        }
-        self.log(&format!(
-            "  {label}: no passing {task} check; asking for one"
-        ));
-        Some(retarget(
-            &no_own_checks(task, &own.summary),
-            self.params.verify_path(),
-        ))
-    }
-
-    /// Sends steers and aborts to the session; an abort starts the kill timer.
-    async fn apply(
-        &self,
-        session: &mut dyn crate::ports::Session,
-        actions: Vec<Action>,
-        now: u64,
-        kill_at: Option<u64>,
-        resume: &mut Option<String>,
-    ) -> Option<u64> {
-        let mut kill_at = kill_at;
-        for action in actions {
-            match action {
-                Action::Steer { message, .. } => {
-                    let message = retarget(&message, self.params.verify_path());
-                    let _ = session.steer(&message).await;
-                }
-                Action::Interrupt { message } => {
-                    let _ = session.abort().await;
-                    *resume = Some(retarget(&message, self.params.verify_path()));
-                }
-                Action::Abort { .. } => {
-                    tracing::debug!("aborting the session; kill in {ABORT_GRACE:?}");
-                    let _ = session.abort().await;
-                    kill_at.get_or_insert(
-                        now + u64::try_from(ABORT_GRACE.as_millis()).unwrap_or(60_000),
-                    );
-                }
-            }
-        }
-        kill_at
-    }
-
-    /// What a passed deadline asks, logged: the session's wall clock, then
-    /// the oldest tool call's time limit. `None` before either.
-    fn deadline_actions(
-        &self,
-        label: &str,
-        watchdog: &mut Watchdog,
-        elapsed: u64,
-    ) -> Option<Vec<Action>> {
-        let actions = if elapsed >= self.params.session_minutes * 60_000 {
-            watchdog.abort_external(
-                &format!("session exceeded {} minutes", self.params.session_minutes),
-                elapsed,
-            )
-        } else if watchdog.tool_deadline().is_some_and(|d| elapsed >= d) {
-            watchdog.tool_timeout(elapsed)
-        } else {
-            return None;
-        };
-        for action in &actions {
-            self.log(&format!("  {label}: {}", describe(action)));
-        }
-        Some(actions)
-    }
-
     /// Reverts the changes a session left where its role may not write.
     fn enforce_ownership(
         &self,
@@ -372,14 +114,14 @@ impl Runner {
             sampler.begin(&label).await;
         }
         let (metrics, requests) = self
-            .run_harness(
-                &label,
-                &[prompt.to_owned()],
-                self.project.root().to_path_buf(),
-                Some(watch),
-                true,
-                ctx.task.as_ref().filter(|_| role == Role::Builder),
-            )
+            .run_harness(HarnessRun {
+                label: &label,
+                prompts: &[prompt.to_owned()],
+                cwd: self.project.root().to_path_buf(),
+                watch: Some(watch),
+                persist: true,
+                own_checks: ctx.task.as_ref().filter(|_| role == Role::Builder),
+            })
             .await?;
         let memory = match &self.sampler {
             Some(sampler) => sampler.end().await,
@@ -790,14 +532,6 @@ async fn engine_delta(
     Some(change)
 }
 
-/// The prompt for a builder session that ended with no passing check of its
-/// task.
-fn no_own_checks(task: &TaskId, summary: &str) -> String {
-    format!(
-        "[orchestrator] `./verify --task {task}` runs no passing check with ID prefix `{task}.`, so this attempt fails however the rest went. Add the card's acceptance checks to `verify` with IDs `{task}.<name>`, run `./verify --task {task}` until they pass, then stop.\n\n{summary}"
-    )
-}
-
 /// Sessions the engine must hold before a lowered budget is raised: the
 /// configured count, doubled per raise that failed, at most four times it.
 fn raise_wait(recover_sessions: u32, failed_raises: u32) -> u32 {
@@ -819,42 +553,6 @@ fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
         raised
     };
     Some(raised)
-}
-
-/// How much of the harness's stderr a harness-exit note quotes.
-const STDERR_TAIL_BYTES: usize = 2000;
-
-/// What the journal says when the harness ended before its turn settled.
-fn harness_exit_note(code: Option<i32>, stderr_log: Option<&std::path::Path>) -> String {
-    let code = code.map_or_else(|| "no exit code".to_owned(), |c| format!("exit code {c}"));
-    let tail = stderr_log
-        .and_then(|path| std::fs::read(path).ok())
-        .map(|bytes| {
-            let start = bytes.len().saturating_sub(STDERR_TAIL_BYTES);
-            String::from_utf8_lossy(&bytes[start..]).trim().to_owned()
-        })
-        .filter(|t| !t.is_empty());
-    match tail {
-        Some(tail) => {
-            format!("the harness ended before the turn settled ({code}); stderr tail:\n{tail}")
-        }
-        None => format!("the harness ended before the turn settled ({code}); its stderr was empty"),
-    }
-}
-
-/// Why a session stopped when its last reply was cut at the output limit,
-/// for the next attempt's briefing.
-const OUTPUT_LIMIT: &str = "the reply reached the output limit while the model was still reasoning, before it acted; reason briefly, act in small steps and write files early";
-
-/// Why a session stopped when its harness crashed during `call`, for the
-/// next attempt's briefing.
-fn crashed_running(call: &str, note: &str) -> String {
-    let mut reason =
-        format!("the harness crashed while running this tool call; do not repeat it: {call}");
-    if note.contains("valid UTF-8") {
-        reason.push_str(". Its output had bytes that are not valid UTF-8, which the harness cannot read: do not cut output by bytes (`head -c`, `cut -b`, `dd`); cut by lines (`head -n`, `tail -n`) instead");
-    }
-    reason
 }
 
 /// Client-side timings of one turn, in monotonic milliseconds.
@@ -909,22 +607,6 @@ impl ownership::RepoFacts for RepoView<'_> {
     }
 }
 
-fn event_name(event: &SessionEvent) -> &'static str {
-    match event {
-        SessionEvent::PromptRejected { .. } => "prompt_rejected",
-        SessionEvent::TurnStart => "turn_start",
-        SessionEvent::FirstToken => "first_token",
-        SessionEvent::ToolCallStart { .. } => "tool_call_start",
-        SessionEvent::ToolCallEnd { .. } => "tool_call_end",
-        SessionEvent::MessageEnd { .. } => "message_end",
-        SessionEvent::TurnEnd => "turn_end",
-        SessionEvent::CompactionStart { .. } => "compaction_start",
-        SessionEvent::PermissionRequest { .. } => "permission_request",
-        SessionEvent::Settled { .. } => "settled",
-        SessionEvent::Exited { .. } => "exited",
-    }
-}
-
 /// When the current turn started and gave its first token, for the
 /// requests recorded at each message end.
 #[derive(Default)]
@@ -961,16 +643,6 @@ impl TurnTiming {
                 },
             }),
             _ => {}
-        }
-    }
-}
-
-fn describe(action: &Action) -> String {
-    match action {
-        Action::Steer { key, .. } => format!("steer:{key}"),
-        Action::Abort { reason } => format!("abort — {reason}"),
-        Action::Interrupt { .. } => {
-            "tool call over its time limit; stopped, the session goes on".to_owned()
         }
     }
 }
