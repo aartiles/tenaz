@@ -3,21 +3,12 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
 
 use tokio::sync::mpsc;
 
 use super::ScriptedHarness;
+use super::pace::{Abort, Pace};
 use crate::session::{SessionEvent, StopReason, Usage};
-
-/// How far the runner has read a session's events: it asks for the next
-/// one only after handling the last.
-#[derive(Debug, Default)]
-pub(super) struct Pace {
-    pub(super) sent: AtomicU64,
-    pub(super) asked: AtomicU64,
-}
 
 /// One tool call of the scripted model: the tool, its arguments, what it
 /// returns, and the prompt tokens of the reply that made it (`None`: a few
@@ -45,7 +36,7 @@ pub(super) struct Player {
     pub(super) cwd: PathBuf,
     pub(super) stderr_log: Option<PathBuf>,
     pub(super) tx: mpsc::UnboundedSender<SessionEvent>,
-    pub(super) aborted: Arc<AtomicBool>,
+    pub(super) abort: Arc<Abort>,
     pub(super) pace: Arc<Pace>,
     pub(super) prompts: u32,
     pub(super) call: u32,
@@ -95,20 +86,8 @@ fn card(id: &str, requires: &[&str], depends: &[&str], parent: Option<&str>) -> 
 impl Player {
     fn emit(&self, event: SessionEvent) {
         if self.tx.send(event).is_ok() {
-            self.pace.sent.fetch_add(1, Ordering::SeqCst);
+            self.pace.sent();
         }
-    }
-
-    /// Waits until the runner has handled every event sent so far, so a
-    /// steer or abort it sends in reply has arrived.
-    async fn handled(&self) {
-        while self.pace.asked.load(Ordering::SeqCst) <= self.pace.sent.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    }
-
-    fn aborted(&self) -> bool {
-        self.aborted.load(Ordering::SeqCst)
     }
 
     /// Per-project counters, so repeated sessions take different branches.
@@ -184,7 +163,7 @@ impl Player {
             text: String::new(),
         });
         self.emit(SessionEvent::TurnEnd);
-        tokio::time::sleep(Duration::from_millis(2)).await;
+        self.pace.handled().await;
     }
 
     async fn write_tool(&mut self, path: &str, text: &str, executable: bool) {
@@ -197,7 +176,7 @@ impl Player {
     }
 
     fn finish(&self, text: &str) {
-        let aborted = self.aborted();
+        let aborted = self.abort.is_set();
         self.emit(SessionEvent::MessageEnd {
             server: None,
             sent: None,
@@ -363,7 +342,7 @@ impl Player {
         if let Some(log) = &self.stderr_log {
             let _ = std::fs::write(log, stderr);
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        self.pace.handled().await;
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
@@ -378,9 +357,7 @@ impl Player {
             name: "bash".to_owned(),
             args: serde_json::json!({ "command": "./verify --all" }),
         });
-        while !self.aborted() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        self.abort.wait().await;
         self.emit(SessionEvent::ToolCallEnd {
             id,
             name: "bash".to_owned(),
@@ -413,13 +390,13 @@ impl Player {
             text: String::new(),
         });
         // An abort sent at the reply's end arrives before the write runs.
-        self.handled().await;
+        self.pace.handled().await;
         self.emit(SessionEvent::ToolCallStart {
             id: id.clone(),
             name: "write".to_owned(),
             args: serde_json::json!({ "path": path }),
         });
-        let (result_text, is_error) = if self.aborted() {
+        let (result_text, is_error) = if self.abort.is_set() {
             ("Operation aborted", true)
         } else {
             self.write(&path, &format!("{task}\n"), false);
@@ -433,9 +410,7 @@ impl Player {
         });
         self.emit(SessionEvent::TurnEnd);
         self.emit(SessionEvent::TurnStart);
-        while !self.aborted() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        self.abort.wait().await;
         self.finish("Stopped.");
     }
 
@@ -459,7 +434,7 @@ impl Player {
         if let Some(log) = &self.stderr_log {
             let _ = std::fs::write(log, "the agent connection ended: OutputTruncated\n");
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        self.pace.handled().await;
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
@@ -591,7 +566,7 @@ impl Player {
     /// Reads until the context passes the stop and the session is aborted.
     async fn outgrow(&mut self) {
         let mut n = 1;
-        while !self.aborted() && n < 20 {
+        while !self.abort.is_set() && n < 20 {
             let read = ToolCall {
                 input: Some(30_000 * n),
                 ..ToolCall::new(
@@ -700,7 +675,7 @@ impl Player {
 
     /// The same tool call until the turn is aborted.
     async fn tool_loop(&mut self) {
-        while !self.aborted() {
+        while !self.abort.is_set() {
             let ls = ToolCall::new("bash", serde_json::json!({ "command": "ls checks" }));
             self.turn(ls, |_| {}).await;
         }
@@ -710,7 +685,7 @@ impl Player {
     /// New files until the session is stopped at its turn budget.
     async fn long_session(&mut self, task: &str) {
         let mut n = 0;
-        while !self.aborted() && n < 200 {
+        while !self.abort.is_set() && n < 200 {
             n += 1;
             self.write_tool(&format!("src/{task}-part{n}.txt"), "part\n", false)
                 .await;
@@ -765,7 +740,7 @@ impl Player {
 
     /// Finished, then circles between two calls with the same results.
     async fn alternate(&mut self, task: &str) {
-        while !self.aborted() {
+        while !self.abort.is_set() {
             self.write_notes(task).await;
             let wc = ToolCall::new(
                 "bash",

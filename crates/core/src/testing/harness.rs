@@ -3,7 +3,6 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -14,7 +13,8 @@ use crate::ports::{
 };
 use crate::session::SessionEvent;
 
-use super::player::{Pace, Player, field};
+use super::pace::{Abort, Pace};
+use super::player::{Player, field};
 
 /// The scripted stand-in for an agent harness. By default it plays the
 /// happy path of a four-task goal: a bootstrap that writes the spec, map,
@@ -145,7 +145,7 @@ impl Harness for ScriptedHarness {
             exit_code: Some(0),
             tx,
             rx,
-            aborted: Arc::new(AtomicBool::new(false)),
+            abort: Arc::default(),
             pace: Arc::default(),
             prompts: 0,
             first: String::new(),
@@ -163,7 +163,7 @@ struct ScriptedSession {
     exit_code: Option<i32>,
     tx: mpsc::UnboundedSender<SessionEvent>,
     rx: mpsc::UnboundedReceiver<SessionEvent>,
-    aborted: Arc<AtomicBool>,
+    abort: Arc<Abort>,
     pace: Arc<Pace>,
     prompts: u32,
     /// The first prompt, which a prompt after a stopped tool call continues.
@@ -178,7 +178,7 @@ struct ScriptedSession {
 impl Session for ScriptedSession {
     async fn prompt(&mut self, text: &str) -> Result<(), HarnessError> {
         self.prompts += 1;
-        self.aborted.store(false, Ordering::SeqCst);
+        self.abort.clear();
         if self.first.is_empty() {
             text.clone_into(&mut self.first);
         }
@@ -197,7 +197,7 @@ impl Session for ScriptedSession {
             cwd: self.cwd.clone(),
             stderr_log: self.stderr_log.clone(),
             tx: self.tx.clone(),
-            aborted: self.aborted.clone(),
+            abort: self.abort.clone(),
             pace: self.pace.clone(),
             prompts: self.prompts,
             call: 0,
@@ -209,8 +209,9 @@ impl Session for ScriptedSession {
     }
 
     async fn next_event(&mut self) -> Option<SessionEvent> {
-        self.pace.asked.fetch_add(1, Ordering::SeqCst);
+        self.pace.ask();
         let event = self.rx.recv().await?;
+        self.pace.received();
         if let SessionEvent::Exited { code } = event {
             self.exit_code = code;
         }
@@ -242,7 +243,7 @@ impl Session for ScriptedSession {
     }
 
     async fn abort(&mut self) -> Result<(), HarnessError> {
-        self.aborted.store(true, Ordering::SeqCst);
+        self.abort.set();
         Ok(())
     }
 
@@ -255,6 +256,9 @@ impl Session for ScriptedSession {
     }
 
     async fn close(&mut self, _grace: Duration) -> SessionExit {
+        // The runner reads no more: a turn that waits on it ends.
+        self.abort.set();
+        self.pace.close();
         if let Some(play) = self.play.take() {
             let _ = play.await;
         }

@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use super::{deps, fake_project, run};
 use crate::ledger::{JournalRecord, SessionRecord, TaskOutcome, Verdict};
 use crate::project::Project;
-use crate::testing::{FastClock, ScriptedHarness};
+use crate::testing::{ScriptedHarness, VirtualClock};
 
 /// A scripted run played to its end, and what it journaled.
 struct Played {
@@ -33,7 +33,7 @@ impl Played {
     async fn play(overrides: &[&str], harness: ScriptedHarness) -> Self {
         let work = tempfile::tempdir().unwrap();
         let (project, vcs) = fake_project(work.path(), overrides);
-        let clock = Arc::new(FastClock::new(100));
+        let clock = Arc::new(VirtualClock::new());
         let deps = deps(&project, vcs, Arc::new(harness), clock);
         run(&project, deps, CancellationToken::new()).await;
         Self::read(work, project)
@@ -119,7 +119,7 @@ fn completed(record: &JournalRecord) -> bool {
 
 /// The scripted run with every recovery at once, as `tenaz demo` plays it,
 /// reaches COMPLETE with five tasks done and one split.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_scripted_run_completes() {
     let run = Played::with(ScriptedHarness::every_recovery()).await;
     assert!(run.has(completed), "no COMPLETE run record");
@@ -130,7 +130,7 @@ async fn the_scripted_run_completes() {
 
 /// The scripted harness on its own plays the happy path: four tasks
 /// built and accepted on their first attempt, nothing to recover from.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_happy_path_needs_no_recovery() {
     let run = Played::with(ScriptedHarness::default()).await;
     assert!(run.has(completed), "{}", run.log);
@@ -156,7 +156,7 @@ async fn the_happy_path_needs_no_recovery() {
     assert!(run.sessions().all(|s| s.ok && s.reverted.is_empty()));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn bootstrap_engine_errors_are_retried_without_using_an_attempt() {
     let run = Played::with(ScriptedHarness {
         engine_failures: true,
@@ -170,7 +170,7 @@ async fn bootstrap_engine_errors_are_retried_without_using_an_attempt() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_capacity_error_lowers_the_budget_and_held_sessions_raise_it() {
     let run = Played::with(ScriptedHarness {
         engine_failures: true,
@@ -214,7 +214,7 @@ async fn a_capacity_error_lowers_the_budget_and_held_sessions_raise_it() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_session_past_its_budget_is_continued_without_the_map() {
     let run = Played::with(ScriptedHarness {
         context_stop_task: Some("T001".into()),
@@ -246,7 +246,7 @@ async fn a_session_past_its_budget_is_continued_without_the_map() {
     assert_eq!(first_attempts, 1, "context stop counted as an attempt");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_watchdogs_steer_and_then_abort() {
     let run = Played::with(ScriptedHarness {
         engine_failures: true,
@@ -274,7 +274,7 @@ async fn the_watchdogs_steer_and_then_abort() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn reviews_without_a_verdict_are_retried_and_rejections_recorded() {
     let run = Played::with(ScriptedHarness {
         rejected_review: Some("T001".into()),
@@ -314,7 +314,7 @@ async fn reviews_without_a_verdict_are_retried_and_rejections_recorded() {
     assert!(!run.prompts("reviewer-T001").concat().contains(note));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
     let run = Played::with(ScriptedHarness {
         failing_task: Some("T003".into()),
@@ -338,7 +338,7 @@ async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_backlog_is_replanned_and_the_brief_kept() {
     let run = Played::with(ScriptedHarness {
         tampered_brief: true,
@@ -358,7 +358,7 @@ async fn the_backlog_is_replanned_and_the_brief_kept() {
 
 /// A replan and T001's builder both write T001's card, which is not theirs
 /// to change: each edit is reverted and the card stays done.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn out_of_role_card_edits_are_reverted() {
     let run = Played::with(ScriptedHarness {
         tampered_card: Some("T001".into()),
@@ -376,7 +376,7 @@ async fn out_of_role_card_edits_are_reverted() {
     assert!(run.has(completed), "{}", run.log);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_builder_without_its_check_is_asked_for_one() {
     let run = Played::with(ScriptedHarness {
         forget_checks_task: Some("T002".into()),
@@ -402,7 +402,7 @@ async fn a_builder_without_its_check_is_asked_for_one() {
 
 /// Ctrl-C during a builder session pauses the run without counting the
 /// attempt, and the next run resumes it to the end.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
     let work = tempfile::tempdir().unwrap();
     let (project, vcs) = fake_project(work.path(), &["maxAttempts=2", "replanEvery=2"]);
@@ -411,7 +411,7 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
         stop_at: Some(("T002".into(), stop.clone())),
         ..Default::default()
     };
-    let clock = Arc::new(FastClock::new(100));
+    let clock = Arc::new(VirtualClock::new());
     let paused = deps(&project, vcs.clone(), Arc::new(stopping), clock.clone());
     run(&project, paused, stop).await;
     let log = project.read(".tenaz/private/orchestrator.log").unwrap();
@@ -442,11 +442,11 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
 
 /// Ctrl-C during the preflight pauses the run instead of failing it, and
 /// the next run measures the engine again.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_stop_during_the_preflight_pauses_the_run() {
     let work = tempfile::tempdir().unwrap();
     let (project, vcs) = fake_project(work.path(), &[]);
-    let clock = Arc::new(FastClock::new(100));
+    let clock = Arc::new(VirtualClock::new());
     let harness = || Arc::new(ScriptedHarness::default());
     let stop = CancellationToken::new();
     stop.cancel();
@@ -489,7 +489,7 @@ async fn run_outgrowing(context_split: bool) -> Played {
 
 /// An attempt that uses up its context continuations and still fails is
 /// split at once.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_attempt_that_outgrows_its_context_is_split_at_once() {
     let run = run_outgrowing(true).await;
     let log = &run.log;
@@ -507,7 +507,7 @@ async fn an_attempt_that_outgrows_its_context_is_split_at_once() {
 }
 
 /// With `contextSplit=false` such an attempt is retried as before.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn without_context_split_an_outgrown_attempt_is_retried() {
     let run = run_outgrowing(false).await;
     assert_eq!(run.verifies("T003"), vec![1, 2, 3]);

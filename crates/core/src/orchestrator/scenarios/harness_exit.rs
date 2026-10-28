@@ -18,7 +18,7 @@ use crate::effort::EffortDial;
 use crate::ledger::{BootstrapStep, JournalRecord, Phase};
 use crate::orchestrator::Deps;
 use crate::project::Project;
-use crate::testing::{FastClock, ScriptedHarness};
+use crate::testing::{ScriptedHarness, VirtualClock};
 
 /// Runs the fake goal to the end with `harness` and `maxAttempts`; the
 /// project and its log.
@@ -37,7 +37,7 @@ async fn run_with(
     let mut overrides = vec![attempts.as_str(), "replanEvery=2"];
     overrides.extend_from_slice(set);
     let (project, vcs) = fake_project(work.path(), &overrides);
-    let clock = Arc::new(FastClock::new(100));
+    let clock = Arc::new(VirtualClock::new());
     let deps = Deps {
         effort: Some(EffortDial::new()),
         ..deps(&project, vcs, Arc::new(harness), clock)
@@ -52,7 +52,7 @@ async fn run_with(
     (work, project, log)
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
     let (_work, project, log) = run(
         ScriptedHarness {
@@ -104,7 +104,7 @@ async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_harness_exit_during_a_tool_call_charges_the_attempt_and_names_the_call() {
     // The crash takes one of T001's attempts; the fake run needs one more.
     let (_work, project, log) = run(
@@ -160,7 +160,7 @@ async fn a_harness_exit_during_a_tool_call_charges_the_attempt_and_names_the_cal
     assert!(prompt.contains("do not cut output by bytes"), "{prompt}");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_reply_cut_at_the_output_limit_charges_the_attempt_and_lowers_the_effort() {
     let (_work, project, log) = run(
         ScriptedHarness {
@@ -216,7 +216,7 @@ async fn a_reply_cut_at_the_output_limit_charges_the_attempt_and_lowers_the_effo
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_bootstrap_cut_at_the_output_limit_is_told_why_and_tried_again() {
     let (_work, project, log) = run(
         ScriptedHarness {
@@ -246,7 +246,7 @@ async fn a_bootstrap_cut_at_the_output_limit_is_told_why_and_tried_again() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_next_bootstrap_is_told_which_files_the_previous_one_left() {
     let (_work, project, _log) = run(
         ScriptedHarness {
@@ -284,7 +284,7 @@ async fn the_next_bootstrap_is_told_which_files_the_previous_one_left() {
     assert!(left.contains("Do not start over"), "{second}");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_bootstrap_runs_one_session_per_step() {
     let (_work, project, log) = run(
         ScriptedHarness {
@@ -350,7 +350,7 @@ async fn the_bootstrap_runs_one_session_per_step() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn bootstrap_steps_already_done_need_no_session() {
     let (_work, project, log) = run(ScriptedHarness::default(), 2).await;
     let steps: Vec<BootstrapStep> = project
@@ -372,7 +372,7 @@ async fn bootstrap_steps_already_done_need_no_session() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_reviewer_over_its_context_is_asked_for_its_verdict_not_notes() {
     let (_work, project, log) = run(
         ScriptedHarness {
@@ -396,7 +396,7 @@ async fn a_reviewer_over_its_context_is_asked_for_its_verdict_not_notes() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_review_with_minor_findings_only_accepts_the_task() {
     let (_work, project, log) = run(
         ScriptedHarness {
@@ -420,7 +420,7 @@ async fn a_review_with_minor_findings_only_accepts_the_task() {
     assert_eq!(reviews, 1, "no further attempt for a MINOR finding:\n{log}");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_reviewer_is_given_the_images_the_change_adds() {
     let (_work, project, log) = run(
         ScriptedHarness {
@@ -462,7 +462,7 @@ async fn the_reviewer_is_given_the_images_the_change_adds() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn each_request_line_records_what_the_request_asked_for() {
     let (_work, project, _log) = run(ScriptedHarness::default(), 3).await;
     let lines = project.read(".tenaz/private/requests.jsonl").unwrap();
@@ -478,7 +478,7 @@ async fn each_request_line_records_what_the_request_asked_for() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_attempt_that_leaves_fewer_passing_checks_fails() {
     let (_work, project, log) = run(
         ScriptedHarness {
@@ -513,7 +513,7 @@ async fn an_attempt_that_leaves_fewer_passing_checks_fails() {
     assert!(log.contains("T004 done (2 attempts"), "{log}");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_builder_stopped_at_its_turn_budget_is_continued_not_charged() {
     let (_work, project, log) = run(
         ScriptedHarness {
@@ -555,7 +555,7 @@ async fn a_builder_stopped_at_its_turn_budget_is_continued_not_charged() {
     assert!(prompt.contains("used up its turn budget"), "{prompt}");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_final_reviewer_judges_the_product_against_the_brief_as_a_whole() {
     let (_work, project, _log) = run(ScriptedHarness::default(), 3).await;
     let label = project
@@ -579,7 +579,7 @@ async fn the_final_reviewer_judges_the_product_against_the_brief_as_a_whole() {
 /// endless loop did under Pi in the Digger 3D run of 2026-10-27, is stopped
 /// at `toolMinutes`. The session is told why and goes on with its context
 /// to do the task.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_tool_call_over_its_time_is_stopped_and_the_session_goes_on() {
     let (_work, project, log) = run_with(
         ScriptedHarness {
@@ -624,7 +624,7 @@ async fn a_tool_call_over_its_time_is_stopped_and_the_session_goes_on() {
 
 /// A second call over the time limit in the same session ends it, and the
 /// attempt counts.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_second_tool_call_over_its_time_ends_the_session() {
     let (_work, project, log) = run_with(
         ScriptedHarness {
@@ -670,7 +670,7 @@ async fn a_second_tool_call_over_its_time_ends_the_session() {
 /// A reply that crosses the context stop with the task's whole file in its
 /// write, as in the Digger 3D run of 2026-10-27, where the stop cancelled
 /// the write three times: the write lands, then the session stops.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_write_in_the_reply_that_crosses_the_context_stop_lands() {
     let (_work, project, log) = run(
         ScriptedHarness {
