@@ -60,6 +60,12 @@ the session wrapper with engine retries, capacity caps and continuations
 what a failed bootstrap attempt tells the next one and whether it counts
 (the pure `orchestrator::bootstrap`),
 the task attempt loop with review, split and block, and pause and resume.
+Each phase has a module under `orchestrator/phases/` (`bootstrap`, `task`,
+`review`, `planner` for split and replan, `task_loop`, `final_review`);
+`phases.rs` keeps what they share, the `verify` call and the briefing.
+`orchestrator/session.rs` is the wrapper; one session, start to journal
+record, is `session/record.rs`, the harness run `session/harness.rs`, and
+its requests `session/requests.rs`.
 
 State lives on disk under `.tenaz/` in the project, so a run survives the
 process and the user's existing tooling (`jq` over the journal, `git log`)
