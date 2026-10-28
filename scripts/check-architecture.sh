@@ -17,6 +17,15 @@ if grep -rnE 'Command::new|tokio::process|std::net::|tokio::net::' crates/core/s
   err "tenaz-core must not spawn processes or open sockets; add a port and an adapter"
 fi
 
+# Tests on the virtual clock (every orchestrator scenario uses it) run under
+# paused time (ADR 0006): without it the clock runs in real time and timers
+# fire in whatever order the machine allows.
+while IFS= read -r f; do
+  if grep -nE '^[[:space:]]*#\[tokio::test' "$f" | grep -v 'start_paused = true'; then
+    err "$f: use #[tokio::test(start_paused = true)] (ADR 0006)"
+  fi
+done < <(grep -rlE 'VirtualClock' crates/core/src)
+
 # Only the binary may use anyhow; libraries return thiserror enums.
 for toml in crates/*/Cargo.toml; do
   [ "$toml" = crates/cli/Cargo.toml ] && continue

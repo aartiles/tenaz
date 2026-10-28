@@ -80,6 +80,8 @@ recoveries it plays end on the harness's events, not on a timer.
 - No scenario depends on how fast the machine is. A timed scenario costs
   what its events cost, not what its waits are.
 - A new scenario must use `start_paused = true`. Without it the virtual
-  clock runs in real time: the test is slow, not wrong.
+  clock runs in real time, so the test is slow and its timers race again.
+  `scripts/check-architecture.sh` rejects a `#[tokio::test]` without it
+  in a core file that names `VirtualClock`, as every scenario does.
 - A test that needs real processes and a timed recovery has no clock that
   fits. None does today.
