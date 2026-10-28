@@ -1,9 +1,11 @@
 //! The application service: runs a project from its ledger to the end,
 //! session by session, through the ports.
 
+mod bootstrap;
 mod init;
 mod phases;
 mod preflight;
+mod recovery;
 mod sampler;
 #[cfg(test)]
 mod scenarios;

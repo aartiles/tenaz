@@ -53,12 +53,40 @@ pub struct VerifyOutcome {
 /// prefix) are fewer than at the last checkpoint: one was removed, or
 /// `verify` no longer runs it. The task's own checks are new since then, so
 /// they cannot make up for a removed one.
-pub fn fewer_checks(task: &str, passed: u64, own: u64, floor: Option<u64>) -> Option<String> {
+fn fewer_checks(task: &str, passed: u64, own: u64, floor: Option<u64>) -> Option<String> {
     let floor = floor?;
     let others = passed.saturating_sub(own);
     (others < floor).then(|| {
         format!(
             "./verify --all passes {others} checks besides {task}'s, fewer than the {floor} that passed when the last task was done: a check was removed or is no longer run. Put it back; if a check is wrong, say so in your notes instead."
+        )
+    })
+}
+
+/// Why an attempt at `task` fails, judged by `./verify --all` (`all`) and
+/// `./verify --task` (`own`) after it; `None` when it passed. The whole
+/// suite must pass, keep the `floor` of other tasks' checks (see
+/// `fewer_checks`), and run at least one passing check of the task.
+pub fn judge_attempt(
+    task: &str,
+    all: &VerifyOutcome,
+    own: &VerifyOutcome,
+    floor: Option<u64>,
+) -> Option<String> {
+    if !all.ok {
+        return Some(format!(
+            "./verify --all fails after the attempt:\n{}",
+            all.summary
+        ));
+    }
+    let own_checks = own.passed();
+    if let Some(why) = fewer_checks(task, all.passed(), own_checks, floor) {
+        return Some(why);
+    }
+    (!own.ok || own_checks < 1).then(|| {
+        format!(
+            "./verify --task {task} must run at least one passing check with ID prefix \"{task}.\" (got {own_checks}).\n{}",
+            own.summary
         )
     })
 }
@@ -199,6 +227,126 @@ mod tests {
         let why = fewer_checks("T004", 5, 1, Some(5)).unwrap();
         assert!(
             why.contains("passes 4 checks besides T004's, fewer than the 5"),
+            "{why}"
+        );
+    }
+
+    /// What a real `./verify` run gives: `report` as its last line.
+    fn run(args: &[&str], status: i32, report: &str) -> VerifyOutcome {
+        interpret(args, &raw(status, &format!("{report}\n")), 60, 4000)
+    }
+
+    fn passing(args: &[&str], passed: u64) -> VerifyOutcome {
+        run(
+            args,
+            0,
+            &format!(r#"{{"ok":true,"passed":{passed},"failed":[]}}"#),
+        )
+    }
+
+    fn failing_suite(passed: u64) -> VerifyOutcome {
+        run(
+            &["--all"],
+            1,
+            &format!(r#"{{"ok":false,"passed":{passed},"failed":[{{"id":"T001.a"}}]}}"#),
+        )
+    }
+
+    const ALL: &[&str] = &["--all"];
+    const OWN: &[&str] = &["--task", "T004"];
+    const FEWER: &str = "passes 4 checks besides T004's, fewer than the 5";
+
+    #[test]
+    fn an_attempt_that_keeps_every_check_and_adds_its_own_passes() {
+        let all = passing(ALL, 6);
+        let own = passing(OWN, 1);
+        assert_eq!(judge_attempt("T004", &all, &own, Some(5)), None);
+    }
+
+    /// The suite's failure is named, with its summary, whatever else
+    /// fails: nothing else, a removed check, or a missing own check.
+    #[test]
+    fn a_failing_suite_fails_the_attempt_first_with_its_summary() {
+        let all = failing_suite(0);
+        let expected = format!("./verify --all fails after the attempt:\n{}", all.summary);
+        for (own, floor) in [
+            (passing(OWN, 1), None),
+            (passing(OWN, 1), Some(5)),
+            (passing(OWN, 0), None),
+        ] {
+            assert_eq!(
+                judge_attempt("T004", &all, &own, floor).as_deref(),
+                Some(expected.as_str()),
+                "own {own:?}, floor {floor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_verify_fails_the_attempt() {
+        let missing = RawVerifyOutput {
+            missing: true,
+            ..Default::default()
+        };
+        let all = interpret(ALL, &missing, 60, 4000);
+        assert_eq!(
+            judge_attempt("T004", &all, &passing(OWN, 1), None).as_deref(),
+            Some(
+                "./verify --all fails after the attempt:\nverify does not exist at the project root"
+            )
+        );
+    }
+
+    #[test]
+    fn a_removed_check_fails_the_attempt() {
+        let why = judge_attempt("T004", &passing(ALL, 5), &passing(OWN, 1), Some(5)).unwrap();
+        assert!(why.contains(FEWER), "{why}");
+    }
+
+    #[test]
+    fn a_removed_check_is_named_before_a_missing_own_check() {
+        let why = judge_attempt("T004", &passing(ALL, 4), &passing(OWN, 0), Some(5)).unwrap();
+        assert!(why.contains(FEWER), "{why}");
+        assert!(
+            !why.contains("must run at least one passing check"),
+            "{why}"
+        );
+    }
+
+    #[test]
+    fn an_attempt_without_a_passing_check_of_its_own_fails() {
+        let own = passing(OWN, 0);
+        assert_eq!(
+            judge_attempt("T004", &passing(ALL, 5), &own, Some(5)),
+            Some(format!(
+                "./verify --task T004 must run at least one passing check with ID prefix \"T004.\" (got 0).\n{}",
+                own.summary
+            ))
+        );
+    }
+
+    #[test]
+    fn a_task_run_that_timed_out_fails_the_attempt() {
+        let timed_out = RawVerifyOutput {
+            timed_out: true,
+            ..Default::default()
+        };
+        let own = interpret(OWN, &timed_out, 60, 4000);
+        assert_eq!(
+            judge_attempt("T004", &passing(ALL, 5), &own, Some(5)).as_deref(),
+            Some(
+                "./verify --task T004 must run at least one passing check with ID prefix \"T004.\" (got 0).\nverify --task T004 timed out after 60s"
+            )
+        );
+    }
+
+    #[test]
+    fn only_a_checkpoint_sets_a_floor_of_other_checks() {
+        let (all, own) = (passing(ALL, 1), passing(OWN, 1));
+        assert_eq!(judge_attempt("T004", &all, &own, None), None);
+        let why = judge_attempt("T004", &all, &own, Some(5)).unwrap();
+        assert!(
+            why.contains("passes 0 checks besides T004's, fewer than the 5"),
             "{why}"
         );
     }

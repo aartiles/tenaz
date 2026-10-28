@@ -29,7 +29,7 @@ Pure modules, each unit-tested without I/O:
 | `task` | Task IDs (`T007`, `T007a`), statuses, card frontmatter parse and field updates. |
 | `spec` | Requirement lines (`- R1: ...`, `manual:`) and coverage. |
 | `backlog` | Card validation, dependency DAG, resolved and ready tasks. |
-| `verify` | The `verify` contract: last-line JSON, exit code, clipping. |
+| `verify` | The `verify` contract: last-line JSON, exit code, clipping; whether a builder attempt passed. |
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time and provider-error rules; emits steer, abort or interrupt (stop the turn, prompt again). |
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal). |
 | `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |
@@ -54,7 +54,10 @@ repository kept as snapshots in memory; `vcs_contract_tests!` holds it and
 and the crates above it.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
-the session wrapper with engine retries, capacity caps and continuations,
+the session wrapper with engine retries, capacity caps and continuations
+(which one comes next is decided by the pure `orchestrator::recovery`),
+what a failed bootstrap attempt tells the next one and whether it counts
+(the pure `orchestrator::bootstrap`),
 the task attempt loop with review, split and block, and pause and resume.
 
 State lives on disk under `.tenaz/` in the project, so a run survives the
