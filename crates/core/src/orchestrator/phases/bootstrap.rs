@@ -88,6 +88,8 @@ impl Runner {
         ))
     }
 
+    /// One step of the bootstrap: a session for it unless its files are
+    /// already right, then the step accepted, retried, or the run blocked.
     pub(crate) async fn bootstrap_phase(&mut self) -> Result<(), RunError> {
         let step = self.ledger.bootstrap_step;
         // A step whose files are already right (written by an earlier step's

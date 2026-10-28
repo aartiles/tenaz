@@ -9,6 +9,8 @@ use crate::role::Role;
 const CARD_REPAIRS: u32 = 2;
 
 impl Runner {
+    /// One turn of the loop: repair cards, replan, build the next ready
+    /// task, or go on to the final phase.
     pub(crate) async fn loop_phase(&mut self) -> Result<(), RunError> {
         let loaded = self.project.load_backlog();
         if !loaded.errors.is_empty() {

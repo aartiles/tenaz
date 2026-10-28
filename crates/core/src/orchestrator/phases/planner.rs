@@ -197,17 +197,16 @@ impl Runner {
             .map(|c| c.id.clone())
             .collect();
         if children.len() >= 2 {
-            self.project.set_status(&task.id, TaskStatus::Split)?;
             let names = children
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ");
-            self.ledger.checkpoint = Some(
-                self.deps
-                    .vcs
-                    .commit_all(&format!("tenaz: {} split into {names}", task.id))?,
-            );
+            self.checkpoint_task(
+                &task.id,
+                TaskStatus::Split,
+                &format!("tenaz: {} split into {names}", task.id),
+            )?;
             self.journal(JournalRecord::Task {
                 task: task.id.clone(),
                 outcome: TaskOutcome::Split,
@@ -225,12 +224,11 @@ impl Runner {
 
     /// Blocks `task` with the history of its attempts.
     fn block_task(&mut self, task: &TaskCard, history: Vec<String>) -> Result<(), RunError> {
-        self.project.set_status(&task.id, TaskStatus::Blocked)?;
-        self.ledger.checkpoint = Some(
-            self.deps
-                .vcs
-                .commit_all(&format!("tenaz: {} blocked", task.id))?,
-        );
+        self.checkpoint_task(
+            &task.id,
+            TaskStatus::Blocked,
+            &format!("tenaz: {} blocked", task.id),
+        )?;
         self.journal(JournalRecord::Task {
             task: task.id.clone(),
             outcome: TaskOutcome::Blocked,

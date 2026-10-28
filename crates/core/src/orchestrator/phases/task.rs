@@ -131,15 +131,6 @@ impl Runner {
         self.params.context_split && id.split_depth() < self.params.max_split_depth
     }
 
-    /// The commit the current task started from.
-    pub(super) fn current_base(&self) -> String {
-        self.ledger
-            .current
-            .as_ref()
-            .map(|c| c.base.clone())
-            .unwrap_or_default()
-    }
-
     /// Splits or blocks `task` with the history of its attempts, and
     /// leaves it.
     async fn escalate_current(&mut self, task: &TaskCard, why: &str) -> Result<(), RunError> {
@@ -325,17 +316,16 @@ impl Runner {
         attempt: u32,
         reviewed: bool,
     ) -> Result<(), RunError> {
-        self.project.set_status(&task.id, TaskStatus::Done)?;
-        self.ledger.checkpoint = Some(
-            self.deps
-                .vcs
-                .commit_all(&format!("tenaz: {} done", task.id))?,
-        );
+        self.checkpoint_task(
+            &task.id,
+            TaskStatus::Done,
+            &format!("tenaz: {} done", task.id),
+        )?;
         let stopped_sessions = self
             .ledger
             .current
-            .as_ref()
-            .map(|c| c.stopped.clone())
+            .take()
+            .map(|c| c.stopped)
             .unwrap_or_default();
         self.journal(JournalRecord::Task {
             task: task.id.clone(),
@@ -346,7 +336,6 @@ impl Runner {
             reviewed: Some(reviewed),
             stopped_sessions: Some(stopped_sessions.clone()),
         });
-        self.ledger.current = None;
         self.ledger.done_since_replan += 1;
         self.ledger.stuck_replanned = false;
         self.save()?;

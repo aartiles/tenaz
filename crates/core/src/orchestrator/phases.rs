@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::briefing::{self, Briefing};
 use crate::role::Role;
 use crate::spec;
+use crate::task::{TaskId, TaskStatus};
 use crate::verify::{VerifyOutcome, interpret, retarget};
 
 use super::{RunError, Runner};
@@ -33,6 +34,7 @@ struct PromptParts<'a> {
 }
 
 impl Runner {
+    /// `./verify` with `args`, judged as its contract says.
     pub(crate) async fn run_verify(&self, args: &[&str]) -> VerifyOutcome {
         let timeout = Duration::from_secs(self.params.verify_timeout_sec);
         let raw = self.deps.verify.run(args, timeout).await;
@@ -42,6 +44,28 @@ impl Runner {
             self.params.verify_timeout_sec,
             self.params.verify_clip_bytes,
         )
+    }
+
+    /// The commit the current task started from.
+    fn current_base(&self) -> String {
+        self.ledger
+            .current
+            .as_ref()
+            .map(|c| c.base.clone())
+            .unwrap_or_default()
+    }
+
+    /// Writes `status` on `task`'s card and commits the run's checkpoint
+    /// with `message`.
+    fn checkpoint_task(
+        &mut self,
+        task: &TaskId,
+        status: TaskStatus,
+        message: &str,
+    ) -> Result<(), RunError> {
+        self.project.set_status(task, status)?;
+        self.ledger.checkpoint = Some(self.deps.vcs.commit_all(message)?);
+        Ok(())
     }
 
     /// Composes a prompt from the project's role prompt, spec and map, and

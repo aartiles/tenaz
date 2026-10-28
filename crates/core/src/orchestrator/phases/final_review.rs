@@ -16,6 +16,7 @@ use super::PromptParts;
 const FINAL_REVIEW: &str = ".tenaz/reviews/FINAL.md";
 
 impl Runner {
+    /// One final review and what it leads to.
     pub(crate) async fn final_phase(&mut self) -> Result<(), RunError> {
         let tasks = self.project.load_backlog().backlog;
         let all = self.run_verify(&["--all"]).await;

@@ -32,7 +32,7 @@ struct Left {
 
 impl Runner {
     /// One session, start to journal record.
-    pub(crate) async fn session_once(
+    pub(super) async fn session_once(
         &mut self,
         role: Role,
         prompt: &str,

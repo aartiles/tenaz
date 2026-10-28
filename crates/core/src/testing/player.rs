@@ -57,6 +57,7 @@ fn names(script_field: Option<&str>, task: &str) -> bool {
     script_field == Some(task)
 }
 
+/// The value of the first `name:` line in a prompt.
 pub(super) fn field<'a>(prompt: &'a str, name: &str) -> Option<&'a str> {
     prompt.lines().find_map(|l| {
         l.strip_prefix(name)

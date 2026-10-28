@@ -344,6 +344,9 @@ fn brief_source(plan: &InitPlan) -> anyhow::Result<(Option<String>, Option<PathB
     Ok((None, None))
 }
 
+/// Places the run (a worktree, in place, or a new folder), initializes it
+/// from `plan`, removes a scratch brief, and discards the worktree when
+/// that fails.
 pub(super) fn init_from_plan(plan: InitPlan) -> anyhow::Result<()> {
     let given = absolute(plan.project.clone());
     let (brief_text, brief) = brief_source(&plan)?;

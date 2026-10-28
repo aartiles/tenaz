@@ -92,6 +92,7 @@ pub struct ScriptedHarness {
     /// The first `hang_times` builder turns of this task start a shell call
     /// that never ends until the turn is aborted.
     pub hang_task: Option<String>,
+    /// How many of `hang_task`'s turns hang.
     pub hang_times: u32,
     /// The first builder session of this task writes its file in one reply
     /// that crosses the context stop, in Pi's order: the reply ends, then
