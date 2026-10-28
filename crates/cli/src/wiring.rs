@@ -505,7 +505,7 @@ fn build_harness(
         // The scripted harness writes from inside Tenaz: there is no process to sandbox.
         HarnessKind::Fake => Ok(Arc::new(ScriptedHarness {
             verify_path: Some(verify_path.to_owned()),
-            ..ScriptedHarness::default()
+            ..ScriptedHarness::every_recovery()
         })),
         HarnessKind::Pi => {
             // Pi gets an agent directory of its own pointing it at the proxy

@@ -120,16 +120,44 @@ fn completed(record: &JournalRecord) -> bool {
 /// five tasks done and one split.
 #[tokio::test]
 async fn the_scripted_run_completes() {
-    let run = Played::with(ScriptedHarness::default()).await;
+    let run = Played::with(ScriptedHarness::every_recovery()).await;
     assert!(run.has(completed), "no COMPLETE run record");
     let status = crate::orchestrator::status_text(&run.project);
     assert!(status.starts_with("Phase: COMPLETE\n"), "{status}");
     assert!(status.contains("Tasks: done 5, split 1"), "{status}");
 }
 
+/// The scripted harness on its own plays the happy path: four tasks
+/// built and accepted on their first attempt, nothing to recover from.
+#[tokio::test]
+async fn the_happy_path_needs_no_recovery() {
+    let run = Played::with(ScriptedHarness::default()).await;
+    assert!(run.has(completed), "{}", run.log);
+    let status = crate::orchestrator::status_text(&run.project);
+    assert!(status.contains("Tasks: done 4\n"), "{status}");
+    assert!(
+        !run.has(|r| matches!(
+            r,
+            JournalRecord::EngineRetry { .. }
+                | JournalRecord::ContextCap { .. }
+                | JournalRecord::ContextContinuation { .. }
+                | JournalRecord::Review {
+                    verdict: Some(Verdict::Changes) | None,
+                    ..
+                }
+        )),
+        "{}",
+        run.log
+    );
+    for task in ["T001", "T002", "T003", "T004"] {
+        assert_eq!(run.verifies(task), vec![1], "{task}");
+    }
+    assert!(run.sessions().all(|s| s.ok && s.reverted.is_empty()));
+}
+
 #[tokio::test]
 async fn bootstrap_engine_errors_are_retried_without_using_an_attempt() {
-    let run = Played::with(ScriptedHarness::default()).await;
+    let run = Played::with(ScriptedHarness::every_recovery()).await;
     assert!(run.has(|r| matches!(r, JournalRecord::EngineRetry { .. })));
     assert!(
         run.has(|r| matches!(r, JournalRecord::BootstrapValidation { attempt: 1, .. })),
@@ -139,7 +167,7 @@ async fn bootstrap_engine_errors_are_retried_without_using_an_attempt() {
 
 #[tokio::test]
 async fn a_capacity_error_lowers_the_budget_and_held_sessions_raise_it() {
-    let run = Played::with(ScriptedHarness::default()).await;
+    let run = Played::with(ScriptedHarness::every_recovery()).await;
     let lowered = |r: &JournalRecord| {
         matches!(
             r,
@@ -179,7 +207,7 @@ async fn a_capacity_error_lowers_the_budget_and_held_sessions_raise_it() {
 
 #[tokio::test]
 async fn a_session_past_its_budget_is_continued_without_the_map() {
-    let run = Played::with(ScriptedHarness::default()).await;
+    let run = Played::with(ScriptedHarness::every_recovery()).await;
     assert!(run.aborted_with("context budget exceeded"));
     assert!(run.has(|r| matches!(
         r,
@@ -207,7 +235,7 @@ async fn a_session_past_its_budget_is_continued_without_the_map() {
 
 #[tokio::test]
 async fn the_watchdogs_steer_and_then_abort() {
-    let run = Played::with(ScriptedHarness::default()).await;
+    let run = Played::with(ScriptedHarness::every_recovery()).await;
     assert!(
         run.watchdog("steer:big-output-1"),
         "large output not steered"
@@ -229,7 +257,7 @@ async fn the_watchdogs_steer_and_then_abort() {
 
 #[tokio::test]
 async fn reviews_without_a_verdict_are_retried_and_rejections_recorded() {
-    let run = Played::with(ScriptedHarness::default()).await;
+    let run = Played::with(ScriptedHarness::every_recovery()).await;
     assert!(
         run.has(|r| matches!(r, JournalRecord::Review { task, attempt: 1, review: 2, verdict: Some(Verdict::Accept) } if task.as_str() == "T004")),
         "T004 review without a verdict was not retried"
@@ -261,7 +289,7 @@ async fn reviews_without_a_verdict_are_retried_and_rejections_recorded() {
 
 #[tokio::test]
 async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
-    let run = Played::with(ScriptedHarness::default()).await;
+    let run = Played::with(ScriptedHarness::every_recovery()).await;
     assert!(run.has(
         |r| matches!(r, JournalRecord::Task { task, outcome: TaskOutcome::Split, .. } if task.as_str() == "T003")
     ));
@@ -281,7 +309,7 @@ async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
 
 #[tokio::test]
 async fn the_backlog_is_replanned_and_the_brief_kept() {
-    let run = Played::with(ScriptedHarness::default()).await;
+    let run = Played::with(ScriptedHarness::every_recovery()).await;
     assert!(run.has(|r| matches!(r, JournalRecord::ReplanAccepted { .. })));
     let reverted = run
         .sessions()
@@ -297,7 +325,7 @@ async fn the_backlog_is_replanned_and_the_brief_kept() {
 async fn a_builder_without_its_check_is_asked_for_one() {
     let run = Played::with(ScriptedHarness {
         forget_checks_task: Some("T002".into()),
-        ..Default::default()
+        ..ScriptedHarness::every_recovery()
     })
     .await;
     let asked = run
@@ -326,7 +354,7 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
     let stop = CancellationToken::new();
     let stopping = ScriptedHarness {
         stop_at: Some(("T002".into(), stop.clone())),
-        ..Default::default()
+        ..ScriptedHarness::every_recovery()
     };
     let clock = Arc::new(FastClock::new(100));
     let paused = deps(&project, vcs.clone(), Arc::new(stopping), clock.clone());
@@ -340,7 +368,7 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
     assert_eq!(attempts.as_deref(), Some("0"), "paused attempt was counted");
     assert!(project.load_ledger().unwrap().paused_at.is_some());
 
-    let harness = Arc::new(ScriptedHarness::default());
+    let harness = Arc::new(ScriptedHarness::every_recovery());
     run(
         &project,
         deps(&project, vcs, harness, clock),
@@ -365,7 +393,7 @@ async fn a_stop_during_the_preflight_pauses_the_run() {
     let work = tempfile::tempdir().unwrap();
     let (project, vcs) = fake_project(work.path(), &[]);
     let clock = Arc::new(FastClock::new(100));
-    let harness = || Arc::new(ScriptedHarness::default());
+    let harness = || Arc::new(ScriptedHarness::every_recovery());
     let stop = CancellationToken::new();
     stop.cancel();
     run(
@@ -400,7 +428,7 @@ async fn run_outgrowing(context_split: bool) -> Played {
     let split = format!("contextSplit={context_split}");
     let harness = ScriptedHarness {
         outgrow_task: Some("T003".into()),
-        ..Default::default()
+        ..ScriptedHarness::every_recovery()
     };
     Played::play(&["contextContinuations=1", &split], harness).await
 }

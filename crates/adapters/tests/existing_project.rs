@@ -97,7 +97,7 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
     }
     let harness = ScriptedHarness {
         verify_path: Some(".tenaz/verify".into()),
-        ..Default::default()
+        ..ScriptedHarness::every_recovery()
     };
     let options = InitOptions {
         brief: Some(brief),
