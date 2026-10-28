@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -117,6 +117,10 @@ pub struct ScriptedHarness {
     /// that never ends until the turn is aborted.
     pub hang_task: Option<String>,
     pub hang_times: u32,
+    /// The first builder session of this task writes its file in one reply
+    /// that crosses the context stop, in Pi's order: the reply ends, then
+    /// its write runs, unless the turn was aborted by then.
+    pub big_write_task: Option<String>,
 }
 
 impl ScriptedHarness {
@@ -145,6 +149,7 @@ impl Harness for ScriptedHarness {
             tx,
             rx,
             aborted: Arc::new(AtomicBool::new(false)),
+            pace: Arc::default(),
             prompts: 0,
             first: String::new(),
             role: String::new(),
@@ -162,6 +167,7 @@ struct ScriptedSession {
     tx: mpsc::UnboundedSender<SessionEvent>,
     rx: mpsc::UnboundedReceiver<SessionEvent>,
     aborted: Arc<AtomicBool>,
+    pace: Arc<Pace>,
     prompts: u32,
     /// The first prompt, which a prompt after a stopped tool call continues.
     first: String,
@@ -195,6 +201,7 @@ impl Session for ScriptedSession {
             stderr_log: self.stderr_log.clone(),
             tx: self.tx.clone(),
             aborted: self.aborted.clone(),
+            pace: self.pace.clone(),
             prompts: self.prompts,
             call: 0,
             script: self.script.clone(),
@@ -205,6 +212,7 @@ impl Session for ScriptedSession {
     }
 
     async fn next_event(&mut self) -> Option<SessionEvent> {
+        self.pace.asked.fetch_add(1, Ordering::SeqCst);
         let event = self.rx.recv().await?;
         if let SessionEvent::Exited { code } = event {
             self.exit_code = code;
@@ -259,11 +267,20 @@ impl Session for ScriptedSession {
     }
 }
 
+/// How far the runner has read a session's events: it asks for the next
+/// one only after handling the last.
+#[derive(Debug, Default)]
+struct Pace {
+    sent: AtomicU64,
+    asked: AtomicU64,
+}
+
 struct Player {
     cwd: PathBuf,
     stderr_log: Option<PathBuf>,
     tx: mpsc::UnboundedSender<SessionEvent>,
     aborted: Arc<AtomicBool>,
+    pace: Arc<Pace>,
     prompts: u32,
     call: u32,
     script: ScriptedHarness,
@@ -305,7 +322,17 @@ fn card(id: &str, requires: &[&str], depends: &[&str], parent: Option<&str>) -> 
 
 impl Player {
     fn emit(&self, event: SessionEvent) {
-        let _ = self.tx.send(event);
+        if self.tx.send(event).is_ok() {
+            self.pace.sent.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Waits until the runner has handled every event sent so far, so a
+    /// steer or abort it sends in reply has arrived.
+    async fn handled(&self) {
+        while self.pace.asked.load(Ordering::SeqCst) <= self.pace.sent.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
     }
 
     fn aborted(&self) -> bool {
@@ -553,6 +580,25 @@ impl Player {
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
+    /// The scripted sessions of `task` that the runner has to stop: a shell
+    /// call that hangs, or a reply that crosses the context stop with a
+    /// write. True when one played.
+    async fn stopped_session(&mut self, task: &str) -> bool {
+        if self.script.hang_task.as_deref() == Some(task)
+            && self.bump(&format!("hang-{task}")) <= self.script.hang_times
+        {
+            self.hang().await;
+            return true;
+        }
+        if self.script.big_write_task.as_deref() == Some(task)
+            && self.bump(&format!("big-write-{task}")) == 1
+        {
+            self.big_write(task).await;
+            return true;
+        }
+        false
+    }
+
     /// A shell call that runs until the turn is aborted, as a script in an
     /// endless loop would.
     async fn hang(&mut self) {
@@ -573,6 +619,55 @@ impl Player {
             result_text: "Command aborted".to_owned(),
             is_error: true,
         });
+        self.finish("Stopped.");
+    }
+
+    /// One reply whose context crosses the stop and whose tool call writes
+    /// the task's file; the write runs after the reply ends, as in Pi, and
+    /// is cancelled if the turn was aborted by then. The next turn waits
+    /// for the stop.
+    async fn big_write(&mut self, task: &str) {
+        self.call += 1;
+        let id = format!("call_{}", self.call);
+        let path = format!("src/{task}.txt");
+        self.emit(SessionEvent::TurnStart);
+        self.emit(SessionEvent::MessageEnd {
+            server: None,
+            sent: None,
+            usage: Usage {
+                input: 120_000,
+                output: 12_000,
+                ..Default::default()
+            },
+            stop_reason: StopReason::ToolUse,
+            error_message: None,
+            thinking_chars: 4,
+            text: String::new(),
+        });
+        // An abort sent at the reply's end arrives before the write runs.
+        self.handled().await;
+        self.emit(SessionEvent::ToolCallStart {
+            id: id.clone(),
+            name: "write".to_owned(),
+            args: serde_json::json!({ "path": path }),
+        });
+        let (result_text, is_error) = if self.aborted() {
+            ("Operation aborted", true)
+        } else {
+            self.write(&path, &format!("{task}\n"), false);
+            ("ok", false)
+        };
+        self.emit(SessionEvent::ToolCallEnd {
+            id,
+            name: "write".to_owned(),
+            result_text: result_text.to_owned(),
+            is_error,
+        });
+        self.emit(SessionEvent::TurnEnd);
+        self.emit(SessionEvent::TurnStart);
+        while !self.aborted() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         self.finish("Stopped.");
     }
 
@@ -772,10 +867,8 @@ impl Player {
         if self.script.outgrow_task.as_deref() == Some(task) {
             return self.outgrow().await;
         }
-        if self.script.hang_task.as_deref() == Some(task)
-            && self.bump(&format!("hang-{task}")) <= self.script.hang_times
-        {
-            return self.hang().await;
+        if self.stopped_session(task).await {
+            return;
         }
         if self.script.long_task.as_deref() == Some(task) && self.bump(&format!("long-{task}")) == 1
         {

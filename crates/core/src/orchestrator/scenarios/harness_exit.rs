@@ -668,3 +668,57 @@ async fn a_second_tool_call_over_its_time_ends_the_session() {
         "the next attempt does the task: {sessions:?}"
     );
 }
+
+/// A reply that crosses the context stop with the task's whole file in its
+/// write, as in the Digger 3D run of 2026-10-27, where the stop cancelled
+/// the write three times: the write lands, then the session stops.
+#[tokio::test]
+async fn the_write_in_the_reply_that_crosses_the_context_stop_lands() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            big_write_task: Some("T001".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    let first = project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-builder-T001") => Some(s.clone()),
+            _ => None,
+        })
+        .expect("T001 has a builder session");
+    assert!(
+        first
+            .abort_reason
+            .as_deref()
+            .is_some_and(|r| r.starts_with("context budget exceeded")),
+        "{first:?}"
+    );
+    let raw = project
+        .read(&format!(".tenaz/private/{}.rpc.jsonl", first.label))
+        .unwrap();
+    let write = raw
+        .lines()
+        .filter_map(|l| serde_json::from_str::<crate::session::SessionEvent>(l).ok())
+        .find_map(|e| match e {
+            crate::session::SessionEvent::ToolCallEnd {
+                name,
+                result_text,
+                is_error,
+                ..
+            } if name == "write" => Some((result_text, is_error)),
+            _ => None,
+        });
+    assert_eq!(
+        write,
+        Some(("ok".to_owned(), false)),
+        "the write ran before the stop"
+    );
+    assert!(
+        log.contains("stopped at its context budget; a fresh session continues"),
+        "{log}"
+    );
+}

@@ -27,6 +27,29 @@ pub struct WatchConfig {
     pub wrap_up: &'static str,
 }
 
+/// A context stop held back for the tool calls of the reply that crossed
+/// it, which may carry the session's work (a whole file to write).
+#[derive(Debug)]
+struct HeldStop {
+    reason: String,
+    /// The reply's tool calls ran and all ended.
+    calls_ended: bool,
+}
+
+impl HeldStop {
+    /// Whether `event` starts the next reply, where the stop applies. Pi
+    /// starts a turn after the tool calls; fx before them, so there the
+    /// stop waits for the reply's first token or its end. A session that
+    /// ends instead ends on the stop.
+    fn applies_at(&self, event: &SessionEvent) -> bool {
+        match event {
+            SessionEvent::TurnStart => self.calls_ended,
+            SessionEvent::FirstToken | SessionEvent::Settled { .. } => true,
+            _ => false,
+        }
+    }
+}
+
 /// What the session runner must do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -61,6 +84,9 @@ pub struct Watchdog {
     tool_timeouts: u32,
     /// A tool call was stopped; the aborted turn is not the session's end.
     interrupting: bool,
+    /// The context stop, held back while the tool calls of the reply that
+    /// crossed it run.
+    held_stop: Option<HeldStop>,
     /// Arguments of every read so far: a read of something new is progress.
     reads: HashSet<String>,
     fingerprint: Option<String>,
@@ -82,6 +108,7 @@ impl Watchdog {
             call_started: HashMap::new(),
             tool_timeouts: 0,
             interrupting: false,
+            held_stop: None,
             reads: HashSet::new(),
             fingerprint: None,
         }
@@ -207,7 +234,7 @@ impl Watchdog {
         elapsed_ms: u64,
         fingerprint: impl FnOnce() -> String,
     ) -> Vec<Action> {
-        let mut actions = Vec::new();
+        let mut actions = self.release_held_stop(event, elapsed_ms);
         match event {
             SessionEvent::PromptRejected { reason } => self.abort(
                 &format!("prompt rejected: {reason}"),
@@ -282,6 +309,25 @@ impl Watchdog {
             | SessionEvent::Exited { .. } => {}
         }
         actions
+    }
+
+    /// A held context stop, applied once the next reply starts.
+    fn release_held_stop(&mut self, event: &SessionEvent, elapsed_ms: u64) -> Vec<Action> {
+        let mut actions = Vec::new();
+        if self.held_stop.as_ref().is_some_and(|h| h.applies_at(event))
+            && let Some(held) = self.held_stop.take()
+        {
+            self.abort(&held.reason, elapsed_ms, &mut actions);
+        }
+        actions
+    }
+
+    /// A tool call ended: a held stop waits for no more calls.
+    fn call_ended(&mut self, id: &str) {
+        self.call_started.remove(id);
+        if let Some(held) = self.held_stop.as_mut() {
+            held.calls_ended = self.call_started.is_empty();
+        }
     }
 
     fn event(&mut self, kind: &str, detail: Option<&str>, elapsed_ms: u64) {
@@ -371,7 +417,7 @@ impl Watchdog {
         elapsed_ms: u64,
         actions: &mut Vec<Action>,
     ) {
-        self.call_started.remove(id);
+        self.call_ended(id);
         let args = self
             .call_args
             .remove(id)
@@ -482,38 +528,58 @@ impl Watchdog {
                 );
             }
         }
-        if let Some(watch) = self.watch {
-            #[expect(
-                clippy::cast_precision_loss,
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "a context window times a fraction is far below 2^53 and truncates to a positive u64"
-            )]
-            let hard = (watch.context_tokens as f64 * self.params.context_abort) as u64;
-            if self.metrics.context_peak > hard {
-                self.abort(
-                    &format!(
-                        "context budget exceeded ({}/{} tokens)",
-                        self.metrics.context_peak, watch.context_tokens
-                    ),
-                    elapsed_ms,
-                    actions,
-                );
-            } else if self.metrics.context_peak > watch.context_tokens {
-                let message = format!(
-                    "This session has used {} tokens of context, over its budget of {}. {}",
-                    self.metrics.context_peak, watch.context_tokens, watch.wrap_up
-                );
-                self.steer("context", &message, elapsed_ms, actions);
-            } else if let Some(turns) = self.turns_to_stop(hard)
-                && turns <= u64::from(self.params.context_steer_turns)
-            {
-                let message = format!(
-                    "This session has used {} tokens of context. At its pace so far it reaches the stop at {hard} tokens in about {turns} turns, and a stopped session's work is lost. {}",
-                    self.metrics.context_peak, watch.wrap_up
-                );
-                self.steer("context-pace", &message, elapsed_ms, actions);
+        self.context_rules(stop_reason, elapsed_ms, actions);
+    }
+
+    /// The context stop and the steers before it, after each reply.
+    fn context_rules(
+        &mut self,
+        stop_reason: &StopReason,
+        elapsed_ms: u64,
+        actions: &mut Vec<Action>,
+    ) {
+        let Some(watch) = self.watch else {
+            return;
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a context window times a fraction is far below 2^53 and truncates to a positive u64"
+        )]
+        let hard = (watch.context_tokens as f64 * self.params.context_abort) as u64;
+        if self.metrics.context_peak > hard {
+            let reason = format!(
+                "context budget exceeded ({}/{} tokens)",
+                self.metrics.context_peak, watch.context_tokens
+            );
+            // The reply that crossed the stop may carry the session's
+            // work in its tool calls, such as a whole file to write;
+            // stopping now would cancel them. They run first, and the
+            // session stops before its next reply.
+            if *stop_reason == StopReason::ToolUse && self.held_stop.is_none() {
+                self.held_stop = Some(HeldStop {
+                    reason,
+                    calls_ended: false,
+                });
+            } else {
+                self.held_stop = None;
+                self.abort(&reason, elapsed_ms, actions);
             }
+        } else if self.metrics.context_peak > watch.context_tokens {
+            let message = format!(
+                "This session has used {} tokens of context, over its budget of {}. {}",
+                self.metrics.context_peak, watch.context_tokens, watch.wrap_up
+            );
+            self.steer("context", &message, elapsed_ms, actions);
+        } else if let Some(turns) = self.turns_to_stop(hard)
+            && turns <= u64::from(self.params.context_steer_turns)
+        {
+            let message = format!(
+                "This session has used {} tokens of context. At its pace so far it reaches the stop at {hard} tokens in about {turns} turns, and a stopped session's work is lost. {}",
+                self.metrics.context_peak, watch.wrap_up
+            );
+            self.steer("context-pace", &message, elapsed_ms, actions);
         }
     }
 
@@ -766,7 +832,7 @@ mod tests {
         let over = message(&mut w, 61_000, StopReason::ToolUse, None);
         assert!(is_steer(&over, "context"));
         assert!(message(&mut w, 70_000, StopReason::ToolUse, None).is_empty());
-        let stop = message(&mut w, 80_000, StopReason::ToolUse, None);
+        let stop = message(&mut w, 80_000, StopReason::Stop, None);
         assert_eq!(
             stop,
             vec![Action::Abort {
@@ -776,6 +842,77 @@ mod tests {
         assert!(w.metrics().context_stopped());
         assert_eq!(w.metrics().reasoning_chars, 28);
         assert_eq!(w.metrics().texts.len(), 4);
+    }
+
+    /// The context stop for a reply of 80,000 input and the helper's 10
+    /// output tokens.
+    fn context_stop() -> Vec<Action> {
+        vec![Action::Abort {
+            reason: "context budget exceeded (80010/60000 tokens)".into(),
+        }]
+    }
+
+    /// A watched session whose reply crossed the context stop with tool
+    /// calls (a whole file to write, in the Digger 3D run of 2026-10-27).
+    fn crossed_with_tool_calls() -> Watchdog {
+        let mut w = watched();
+        assert!(message(&mut w, 80_000, StopReason::ToolUse, None).is_empty());
+        w
+    }
+
+    fn write_file(w: &mut Watchdog) -> Vec<Action> {
+        call(
+            w,
+            9,
+            "write",
+            &serde_json::json!({ "path": "src/core/simulation.ts" }),
+            "ok",
+        )
+    }
+
+    /// Pi runs the reply's calls, then starts the next turn.
+    #[test]
+    fn the_context_stop_waits_for_the_reply_s_calls_in_pi_s_order() {
+        let mut w = crossed_with_tool_calls();
+        assert!(write_file(&mut w).is_empty(), "the write runs");
+        assert!(w.handle(&SessionEvent::TurnEnd, 6, String::new).is_empty());
+        assert_eq!(
+            w.handle(&SessionEvent::TurnStart, 7, String::new),
+            context_stop()
+        );
+    }
+
+    /// fx starts the next turn, then runs the calls.
+    #[test]
+    fn the_context_stop_waits_for_the_reply_s_calls_in_fx_s_order() {
+        let mut w = crossed_with_tool_calls();
+        assert!(
+            w.handle(&SessionEvent::TurnStart, 6, String::new)
+                .is_empty()
+        );
+        assert!(write_file(&mut w).is_empty(), "the write runs");
+        assert_eq!(
+            w.handle(&SessionEvent::FirstToken, 7, String::new),
+            context_stop()
+        );
+    }
+
+    #[test]
+    fn a_session_that_ends_after_crossing_the_stop_ends_on_it() {
+        let mut w = crossed_with_tool_calls();
+        let ended = w.handle(&SessionEvent::Settled { aborted: false }, 7, String::new);
+        assert_eq!(ended, context_stop());
+        assert!(w.metrics().aborted && w.metrics().context_stopped());
+    }
+
+    /// The stop is held once: a second reply over it stops at once.
+    #[test]
+    fn a_second_reply_over_the_stop_is_not_held() {
+        let mut w = crossed_with_tool_calls();
+        assert_eq!(
+            message(&mut w, 80_000, StopReason::ToolUse, None),
+            context_stop()
+        );
     }
 
     #[test]

@@ -23,6 +23,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A session stopped at its context budget keeps the work of the reply that
+  crossed it. The stop came at the reply's end, before its tool calls ran,
+  so a model that wrote a whole file in that reply lost it: three files in
+  the Digger 3D run of 2026-10-27, and each continuation wrote it again
+  into the same stop. The reply's tool calls now run first, and the session
+  stops before its next reply.
+
 - The engine proxy no longer garbles a character that the network splits
   across two chunks of a streamed reply. It decoded each chunk on its own,
   so an accented letter or emoji cut in half reached the harness as `�`
