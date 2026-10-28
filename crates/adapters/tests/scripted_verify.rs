@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use tenaz_adapters::testing::write_executable;
 use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::ports::VerifyRunner;
 use tenaz_core::testing::{ScriptedVerify, VERIFY};
@@ -27,7 +28,7 @@ async fn same_answers(root: &std::path::Path, cases: &[&[&str]]) {
 #[tokio::test]
 async fn without_checks_both_fail_on_the_bare_glob() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("verify"), VERIFY).unwrap();
+    write_executable(&dir.path().join("verify"), VERIFY);
     same_answers(dir.path(), &[&["--all"], &["--task", "T001"]]).await;
 }
 
@@ -35,7 +36,7 @@ async fn without_checks_both_fail_on_the_bare_glob() {
 async fn the_fake_reports_what_the_real_verify_reports() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    std::fs::write(root.join("verify"), VERIFY).unwrap();
+    write_executable(&root.join("verify"), VERIFY);
     std::fs::create_dir_all(root.join("checks")).unwrap();
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/T001.txt"), "").unwrap();

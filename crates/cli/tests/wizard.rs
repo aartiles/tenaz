@@ -138,16 +138,10 @@ fn the_wizard_pins_everything_run_needs() {
 /// A stand-in for the pi executable: only `--version` is needed at init.
 fn stand_in_pi(dir: &std::path::Path) -> std::path::PathBuf {
     let pi = dir.join("pi");
-    std::fs::write(
+    tenaz_adapters::testing::write_executable(
         &pi,
         "#!/bin/sh\n[ \"$1\" = --version ] && echo 9.9.9-test && exit 0\nexit 1\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    );
     pi
 }
 

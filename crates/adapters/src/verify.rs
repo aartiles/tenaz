@@ -148,10 +148,11 @@ async fn kill_group(group: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::write_executable;
 
     fn project(script: &str) -> (tempfile::TempDir, VerifyProcess) {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("verify"), script).unwrap();
+        write_executable(&dir.path().join("verify"), script);
         let verify = VerifyProcess::new(dir.path());
         (dir, verify)
     }
@@ -178,11 +179,10 @@ mod tests {
     async fn runs_verify_under_a_relative_root() {
         let here = std::env::current_dir().unwrap();
         let dir = tempfile::tempdir_in(&here).unwrap();
-        std::fs::write(
-            dir.path().join("verify"),
+        write_executable(
+            &dir.path().join("verify"),
             "#!/bin/sh\necho '{\"ok\":true,\"passed\":0,\"failed\":[]}'\n",
-        )
-        .unwrap();
+        );
         let relative = dir.path().strip_prefix(&here).unwrap();
         assert!(relative.is_relative());
         let raw = VerifyProcess::new(relative)
