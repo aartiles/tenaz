@@ -10,7 +10,7 @@ use crate::project::BRIEF;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::spec::{self, coverage};
-use crate::task::{TaskCard, TaskId};
+use crate::task::TaskId;
 use crate::verify::{VerifyOutcome, interpret, retarget};
 
 use super::bootstrap;
@@ -18,26 +18,8 @@ use super::session::SessionCtx;
 use super::{RunError, Runner};
 
 mod planner;
+mod review;
 mod task;
-
-/// What a review session is given.
-struct ReviewInput<'a> {
-    card: &'a TaskCard,
-    card_text: &'a str,
-    base: &'a str,
-    attempt: u32,
-    all: &'a VerifyOutcome,
-    own: &'a VerifyOutcome,
-    /// Why the orchestrator stopped the builder, when its work still passed.
-    stopped: Option<&'a str>,
-}
-
-/// The reviewer's verdict.
-enum Review {
-    Accept,
-    Changes(String),
-    NoVerdict,
-}
 
 /// Replan sessions in a row that may fix invalid task cards before the run blocks.
 const CARD_REPAIRS: u32 = 2;
@@ -343,132 +325,6 @@ impl Runner {
             "{}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right.",
             stat.trim()
         )))
-    }
-
-    /// Fresh-context review of a task's diff. A reviewer that ends without
-    /// a verdict (for example, stuck repeating itself in its reasoning) gets
-    /// one fresh retry before `verify` alone decides.
-    async fn review_task(&mut self, input: &ReviewInput<'_>) -> Result<Review, RunError> {
-        let task = &input.card.id;
-        let mut diff = self.deps.vcs.diff(input.base, "HEAD", true)?;
-        let images = briefing::changed_images(&diff);
-        if diff.len() > self.params.diff_limit_bytes {
-            let stat = self.deps.vcs.diff_stat(input.base, Some("HEAD"), false)?;
-            let cut = diff.floor_char_boundary(self.params.diff_limit_bytes);
-            diff = format!(
-                "{}\n\n[Diff of {} bytes clipped. Read the changed files directly.]\n\n{}",
-                stat.trim(),
-                diff.len(),
-                &diff[..cut]
-            );
-        }
-        let review_path = format!(".tenaz/reviews/{task}.md");
-        self.project.remove(&review_path)?;
-        let mut verdict: Option<Verdict> = None;
-        let mut text: Option<String> = None;
-        for review in 1..=2 {
-            if verdict.is_some() {
-                break;
-            }
-            if review > 1 {
-                self.log(&format!(
-                    "  reviewer left no verdict for {task}; retrying the review"
-                ));
-            }
-            let mut extra = Vec::new();
-            if let Some(stopped) = input.stopped {
-                extra.push(("Builder session".to_owned(), format!("The orchestrator stopped the builder session ({stopped}). The checks pass, but look for unfinished work.")));
-            }
-            extra.push((
-                "Builder notes".to_owned(),
-                self.project.note(task.as_str()).unwrap_or_default(),
-            ));
-            if !images.is_empty() {
-                extra.push((
-                    "Images this change adds or replaces".to_owned(),
-                    format!(
-                        "{}\n\nLook at each one before you judge the task (see the role prompt).",
-                        images
-                            .iter()
-                            .map(|path| format!("- {path}"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    ),
-                ));
-            }
-            extra.push((
-                "Diff since the task started".to_owned(),
-                format!("```diff\n{diff}\n```"),
-            ));
-            extra.push((
-                "Verify results".to_owned(),
-                format!("{}\n\n{}", input.all.summary, input.own.summary),
-            ));
-            let fields = vec![
-                ("Task".to_owned(), task.to_string()),
-                ("Review file".to_owned(), review_path.clone()),
-            ];
-            let prompt = self.briefing(
-                Role::Reviewer,
-                fields,
-                Some((&input.card.file, input.card_text)),
-                extra,
-                &[],
-            )?;
-            let s = self
-                .session(
-                    Role::Reviewer,
-                    &prompt,
-                    &SessionCtx {
-                        task: Some(task.clone()),
-                        attempt: Some(input.attempt),
-                        turns: Some(25),
-                        context_tokens: None,
-                    },
-                )
-                .await?;
-            let (mut v, mut t) = self.project.verdict(&review_path);
-            // A reviewer that gave its verdict in its last message but did
-            // not write it (or wrote it to the wrong path) is taken at its word.
-            if v.is_none()
-                && let Some(said) = s
-                    .metrics
-                    .texts
-                    .iter()
-                    .rev()
-                    .find(|text| crate::project::verdict_in(text).is_some())
-            {
-                self.project.write(&review_path, said)?;
-                self.log(&format!(
-                    "  {task}: the reviewer wrote no review file; its verdict is taken from its last message"
-                ));
-                v = crate::project::verdict_in(said);
-                t = Some(said.clone());
-            }
-            verdict = v;
-            text = t;
-            self.journal(JournalRecord::Review {
-                task: task.clone(),
-                attempt: input.attempt,
-                review,
-                verdict,
-            });
-        }
-        Ok(match verdict {
-            Some(Verdict::Accept) => Review::Accept,
-            Some(Verdict::Changes)
-                if text
-                    .as_deref()
-                    .is_some_and(crate::project::only_minor_findings) =>
-            {
-                self.log(&format!(
-                    "  {task}: the review asks for changes with MINOR findings only; accepted"
-                ));
-                Review::Accept
-            }
-            Some(Verdict::Changes) => Review::Changes(text.unwrap_or_default()),
-            None => Review::NoVerdict,
-        })
     }
 
     pub(crate) async fn loop_phase(&mut self) -> Result<(), RunError> {

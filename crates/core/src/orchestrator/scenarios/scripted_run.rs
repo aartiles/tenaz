@@ -248,6 +248,15 @@ async fn reviews_without_a_verdict_are_retried_and_rejections_recorded() {
         run.has(|r| matches!(r, JournalRecord::Task { task, outcome: TaskOutcome::Done, attempts: Some(1), stopped_sessions: Some(stopped), .. } if task.as_str() == "T004" && !stopped.is_empty())),
         "stopped T004 session not recorded on the task"
     );
+    // Its reviewer is told the builder was stopped; T001's is not.
+    let note = "The orchestrator stopped the builder session";
+    let reviews = run.prompts("reviewer-T004");
+    assert_eq!(reviews.len(), 2, "T004 has a review and its retry");
+    assert!(
+        reviews.iter().all(|p| p.contains(note)),
+        "T004's reviewer not told its builder was stopped"
+    );
+    assert!(!run.prompts("reviewer-T001").concat().contains(note));
 }
 
 #[tokio::test]

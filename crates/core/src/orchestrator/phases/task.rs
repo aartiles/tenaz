@@ -11,7 +11,7 @@ use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
 use crate::verify::{VerifyOutcome, judge_attempt, with_stop_reason};
 
-use super::{Review, ReviewInput};
+use super::review::{Review, ReviewInput};
 
 /// A task card as an attempt loads it: parsed, and its text.
 struct LoadedCard {
