@@ -193,7 +193,11 @@ impl Player {
             usage: Usage {
                 input: 1200,
                 output: 10,
-                cache_read: if self.prompts > 1 { 900 } else { 0 },
+                cache_read: if self.prompts > 1 && !self.script.uncached {
+                    900
+                } else {
+                    0
+                },
                 ..Default::default()
             },
             stop_reason: if aborted {

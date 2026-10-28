@@ -277,7 +277,8 @@ interface the skill relies on:
   gaps, 4 when it is blocked and 5 when it pauses; 1 is an error.
 - `tenaz status --json` prints the phase, the state (`running`, `paused`,
   `blocked`, `interrupted`, `complete`, `complete_with_gaps`), the block
-  reason and the tasks as one JSON object.
+  reason, the tasks and the prompt cache share (`null` when the engine does
+  not report it) as one JSON object.
 
 ## Reference
 

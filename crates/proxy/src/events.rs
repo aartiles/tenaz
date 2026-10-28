@@ -9,7 +9,9 @@ use tenaz_core::session::{capacity_limit, is_image_refusal};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyUsage {
     pub prompt_tokens: u64,
-    pub cached_tokens: u64,
+    /// `None` when the usage did not name its cached tokens (LM Studio 0.4
+    /// leaves them out), which is not the same as 0.
+    pub cached_tokens: Option<u64>,
     pub completion_tokens: u64,
     pub reasoning_tokens: u64,
 }
@@ -83,13 +85,22 @@ pub fn usage_from_json(value: &serde_json::Value) -> Option<ProxyUsage> {
     let prompt_tokens = num(usage.get("prompt_tokens")).max(num(usage.get("input_tokens")));
     let completion_tokens =
         num(usage.get("completion_tokens")).max(num(usage.get("output_tokens")));
-    let cached_tokens = num(usage
-        .get("prompt_tokens_details")
-        .and_then(|d| d.get("cached_tokens")))
-    .max(num(usage.get("cached_tokens")))
-    .max(num(usage
-        .get("input_tokens_details")
-        .and_then(|d| d.get("cached_tokens"))));
+    let cached_in = |details: &str| {
+        usage
+            .get(details)
+            .and_then(|d| d.get("cached_tokens"))
+            .and_then(serde_json::Value::as_u64)
+    };
+    let cached_tokens = [
+        cached_in("prompt_tokens_details"),
+        usage
+            .get("cached_tokens")
+            .and_then(serde_json::Value::as_u64),
+        cached_in("input_tokens_details"),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
     let reasoning_tokens = num(usage
         .get("completion_tokens_details")
         .and_then(|d| d.get("reasoning_tokens")))
@@ -213,7 +224,7 @@ mod tests {
             usage_from_json(&chat),
             Some(ProxyUsage {
                 prompt_tokens: 100,
-                cached_tokens: 90,
+                cached_tokens: Some(90),
                 completion_tokens: 7,
                 reasoning_tokens: 3
             })
@@ -240,11 +251,15 @@ mod tests {
             usage_from_json(&responses),
             Some(ProxyUsage {
                 prompt_tokens: 5,
-                cached_tokens: 4,
+                cached_tokens: Some(4),
                 completion_tokens: 2,
                 reasoning_tokens: 0
             })
         );
+        let lm_studio = serde_json::json!({"usage": {"prompt_tokens": 2796, "completion_tokens": 9, "total_tokens": 2805}});
+        assert_eq!(usage_from_json(&lm_studio).unwrap().cached_tokens, None);
+        let zero = serde_json::json!({"usage": {"prompt_tokens": 9, "prompt_tokens_details": {"cached_tokens": 0}}});
+        assert_eq!(usage_from_json(&zero).unwrap().cached_tokens, Some(0));
         assert_eq!(usage_from_json(&serde_json::json!({"usage": null})), None);
         assert_eq!(usage_from_json(&serde_json::json!({})), None);
     }

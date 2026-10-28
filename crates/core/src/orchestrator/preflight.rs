@@ -4,7 +4,8 @@
 
 use std::path::Path;
 
-use crate::ledger::{HarnessKind, Preflight};
+use crate::cache_report::CacheReport;
+use crate::ledger::{CacheCheck, HarnessKind, Preflight};
 use crate::metrics::{RequestRecord, engine_summary};
 use crate::session::{AssistantTurn, SessionMetrics, StopReason};
 
@@ -41,16 +42,26 @@ impl Runner {
                 own_checks: None,
             })
             .await?;
-        Ok(read_preflight(self.now(), &m, &requests, vision))
+        let cache_reported = self
+            .deps
+            .cache_report
+            .as_ref()
+            .and_then(CacheReport::reported);
+        Ok(Preflight {
+            at: self.now(),
+            ..read_preflight(&m, &requests, vision, cache_reported)
+        })
     }
 }
 
-/// What a preflight session at `at` (`m`, its `requests`) shows.
+/// What a preflight session (`m`, its `requests`) shows, with `vision`
+/// asked about and what the engine proxy saw of cached tokens; the caller
+/// sets `at`.
 fn read_preflight(
-    at: String,
     m: &SessionMetrics,
     requests: &[RequestRecord],
     vision: bool,
+    cache_reported: Option<bool>,
 ) -> Preflight {
     let second = second_answer(m);
     let last_text = m.texts.last().cloned().unwrap_or_default();
@@ -58,12 +69,13 @@ fn read_preflight(
     let reasoning = m.reasoning_chars > 0 || m.usage.reasoning > 0;
     let cache = second.is_some_and(|a| a.usage.cache_read > 0);
     let tools = m.texts.iter().any(|t| t.contains(TOOL_PROBE_WORD));
-    Preflight {
-        at,
-        ok: m.settled && reasoning && cache && tools && vision_ok != Some(false),
+    let mut p = Preflight {
+        at: String::new(),
+        ok: false,
         settled: m.settled,
         reasoning,
         cache,
+        cache_reported,
         tools: Some(tools),
         vision: vision_ok,
         vision_answer: vision.then(|| last_text.trim().chars().take(80).collect()),
@@ -73,7 +85,9 @@ fn read_preflight(
         engine_metrics: requests.iter().any(|r| r.engine_matched),
         engine: engine_summary(requests),
         accepted_weak: false,
-    }
+    };
+    p.ok = p.settled && p.reasoning && p.cache_check().passes() && tools && p.vision != Some(false);
+    p
 }
 
 /// The second prompt's answer: the first message after one that ended
@@ -118,6 +132,15 @@ fn preflight_prompts(cwd: &Path, vision: bool) -> Vec<String> {
     prompts
 }
 
+/// What the preflight could not check, in words, for the run's log.
+pub(crate) fn warnings(preflight: &Preflight) -> Option<&'static str> {
+    (preflight.cache_check() == CacheCheck::NotReported).then_some(
+        "WARNING: the engine does not report cached prompt tokens, so the preflight cannot \
+         check its prefix cache; it passes. Without a cache every turn processes the whole \
+         prompt again. Check the engine's own log for prefix reuse.",
+    )
+}
+
 /// What failed in `preflight`, in words, for the error that stops the run.
 pub(crate) fn failures(harness: HarnessKind, preflight: Option<&Preflight>) -> String {
     let Some(p) = preflight else {
@@ -130,7 +153,7 @@ pub(crate) fn failures(harness: HarnessKind, preflight: Option<&Preflight>) -> S
     if !p.reasoning {
         failed.push("no reasoning at the configured level".to_owned());
     }
-    if !p.cache {
+    if p.cache_check() == CacheCheck::NotReused {
         failed.push("the engine did not reuse the cached prompt prefix".to_owned());
     }
     if p.tools == Some(false) {
@@ -236,6 +259,7 @@ mod tests {
             settled: true,
             reasoning: true,
             cache: true,
+            cache_reported: Some(true),
             tools: Some(false),
             vision: None,
             vision_answer: None,
@@ -313,16 +337,67 @@ mod tests {
 
     #[test]
     fn a_wrong_image_answer_fails_the_preflight() {
-        let p = read_preflight(String::new(), &with_image_answer("blue, red"), &[], true);
+        let m = with_image_answer("blue, red");
+        let p = read_preflight(&m, &[], true, None);
         assert_eq!(p.vision, Some(false));
         assert!(!p.ok);
     }
 
     #[test]
     fn without_vision_the_image_answer_is_not_checked() {
-        let p = read_preflight(String::new(), &with_image_answer("blue, red"), &[], false);
+        let m = with_image_answer("blue, red");
+        let p = read_preflight(&m, &[], false, None);
         assert_eq!(p.vision, None);
         assert!(p.ok);
+    }
+
+    /// A preflight whose second answer read nothing from the cache, with
+    /// `cache_reported` from the engine proxy.
+    fn second_answer_uncached(cache_reported: Option<bool>) -> Preflight {
+        let mut m = with_image_answer("");
+        // The second answer, the one after the first that stopped.
+        m.assistant[1] = turn(StopReason::Stop, 0);
+        read_preflight(&m, &[], false, cache_reported)
+    }
+
+    #[test]
+    fn an_engine_that_reports_zero_cached_tokens_fails_the_cache_check() {
+        let p = second_answer_uncached(Some(true));
+        assert!(!p.ok);
+        assert_eq!(p.cache_check(), CacheCheck::NotReused);
+        let text = failures(HarnessKind::Pi, Some(&p));
+        assert!(
+            text.contains("did not reuse the cached prompt prefix"),
+            "{text}"
+        );
+        assert_eq!(warnings(&p), None);
+    }
+
+    #[test]
+    fn an_engine_that_does_not_report_cached_tokens_passes_with_a_warning() {
+        let p = second_answer_uncached(Some(false));
+        assert!(p.ok);
+        assert!(!p.cache);
+        assert_eq!(p.cache_check().to_string(), "not reported");
+        assert_eq!(failures(HarnessKind::Pi, Some(&p)), "no check failed");
+        assert!(warnings(&p).is_some_and(|w| w.contains("does not report cached prompt tokens")));
+    }
+
+    #[test]
+    fn without_the_engine_proxy_no_cached_tokens_is_still_a_failure() {
+        let p = second_answer_uncached(None);
+        assert!(!p.ok);
+        assert_eq!(p.cache_check().to_string(), "false");
+    }
+
+    #[test]
+    fn a_preflight_saved_before_the_report_loads_without_it() {
+        let mut json = serde_json::to_value(second_answer_uncached(None)).unwrap();
+        assert!(json.get("cache_reported").is_none(), "{json}");
+        json["cache"] = true.into();
+        let old: Preflight = serde_json::from_value(json).unwrap();
+        assert_eq!(old.cache_reported, None);
+        assert_eq!(old.cache_check(), CacheCheck::Reused);
     }
 
     #[test]

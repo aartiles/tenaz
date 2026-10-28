@@ -20,6 +20,7 @@ use tenaz_adapters::notify::DesktopNotifier;
 use tenaz_adapters::probe_macos::MacMemoryProbe;
 use tenaz_adapters::sandbox::{Guard, GuardedHarness, GuardedVerify, Policy};
 use tenaz_adapters::verify::VerifyProcess;
+use tenaz_core::cache_report::CacheReport;
 use tenaz_core::effort::EffortDial;
 use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
 use tenaz_core::ledger::{HarnessKind, JournalRecord, SkillPin};
@@ -262,19 +263,16 @@ pub async fn wire(
     // The proxy sits between the harness and the engine; the harness is pointed at it.
     let (feed, _) = tokio::sync::broadcast::channel::<EngineObservation>(256);
     let effort = engine.proxy.then(EffortDial::new);
-    let harness_base_url = if engine.proxy {
+    let cache_report = engine.proxy.then(CacheReport::new);
+    let harness_base_url = if let Some(report) = &cache_report {
         let handle = start_proxy(
             &base_url,
             gate.clone(),
             feed.clone(),
-            config.thinking.as_deref(),
-            ledger.params.temperature,
+            report.clone(),
             effort.clone(),
-            ledger.params.repair_tool_args.then(|| {
-                project
-                    .private_dir()
-                    .join(tenaz_core::orchestrator::TOOL_REPAIRS)
-            }),
+            project,
+            &ledger,
         )
         .await?;
         let url = handle.base_url();
@@ -332,6 +330,7 @@ pub async fn wire(
             Arc::new(MacMemoryProbe::new(port)) as Arc<dyn tenaz_core::ports::MemoryProbe>
         }),
         effort,
+        cache_report,
     };
     Ok(Wired { deps, services })
 }
@@ -404,23 +403,43 @@ fn log_repair(log: &Path, request: u64, tool: &str, fields: &[String]) {
     }
 }
 
+/// The engine's usage as the harness sees it; cached tokens the engine
+/// did not name count as 0.
+fn harness_usage(u: &tenaz_proxy::ProxyUsage) -> Usage {
+    let cached = u.cached_tokens.unwrap_or(0);
+    Usage {
+        input: u.prompt_tokens.saturating_sub(cached),
+        output: u.completion_tokens,
+        cache_read: cached,
+        cache_write: 0,
+        reasoning: u.reasoning_tokens,
+    }
+}
+
 /// The output limit fx is configured with, and what the proxy takes as the
 /// limit of a request that does not say.
 const HARNESS_MAX_OUTPUT_TOKENS: u64 = 16_384;
 
-/// The engine proxy: per-request usage and errors go to `feed`, requests
-/// are given the `reasoning_effort` the thinking level asks for and the
-/// run's pinned temperature (see [`request_defaults`]), and with a
-/// `repairs` log, tool-call arguments sent as text are repaired and logged.
+/// The engine proxy for `project`'s run (`ledger`): per-request usage and
+/// errors go to `feed`, whether the usage names cached tokens to
+/// `cache_report`, requests are given the `reasoning_effort` the thinking
+/// level asks for and the run's pinned temperature (see
+/// [`request_defaults`]), and with `repairToolArgs`, tool-call arguments
+/// sent as text are repaired and logged.
 async fn start_proxy(
     base_url: &str,
     gate: Gate,
     feed: tokio::sync::broadcast::Sender<EngineObservation>,
-    thinking: Option<&str>,
-    temperature: Option<f64>,
+    cache_report: CacheReport,
     effort: Option<EffortDial>,
-    repairs: Option<PathBuf>,
+    project: &Project,
+    ledger: &tenaz_core::ledger::Ledger,
 ) -> anyhow::Result<tenaz_proxy::ProxyHandle> {
+    let repairs = ledger.params.repair_tool_args.then(|| {
+        project
+            .private_dir()
+            .join(tenaz_core::orchestrator::TOOL_REPAIRS)
+    });
     let repair_log = repairs.clone();
     let first_repair = std::sync::atomic::AtomicBool::new(true);
     let mut proxy = Proxy::new(
@@ -434,14 +453,9 @@ async fn start_proxy(
                 sent,
                 ..
             } => {
+                cache_report.note(u.cached_tokens.is_some());
                 let _ = feed.send(EngineObservation::Completed {
-                    usage: Usage {
-                        input: u.prompt_tokens.saturating_sub(u.cached_tokens),
-                        output: u.completion_tokens,
-                        cache_read: u.cached_tokens,
-                        cache_write: 0,
-                        reasoning: u.reasoning_tokens,
-                    },
+                    usage: harness_usage(&u),
                     stop_reason: stop_reason_for_finish(finish_reason.as_deref()),
                     server: timings,
                     sent,
@@ -472,7 +486,8 @@ async fn start_proxy(
     proxy.repair_tool_args = repairs.is_some();
     proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
     proxy.effort = effort;
-    proxy.request_defaults = request_defaults(thinking, temperature);
+    proxy.request_defaults =
+        request_defaults(ledger.config.thinking.as_deref(), ledger.params.temperature);
     let handle = Arc::new(proxy)
         .start("127.0.0.1:0".parse()?)
         .await
@@ -635,8 +650,24 @@ fn link_fx_skills(project: &Project, home: &Path, skills: &[SkillPin]) -> anyhow
 #[cfg(test)]
 mod tests {
     use super::{
-        BTreeMap, Duration, MediaOptions, media_adapter, reasoning_effort, request_defaults,
+        BTreeMap, Duration, MediaOptions, harness_usage, media_adapter, reasoning_effort,
+        request_defaults,
     };
+
+    #[test]
+    fn cached_tokens_the_engine_did_not_name_count_as_zero() {
+        let usage = |cached_tokens| tenaz_proxy::ProxyUsage {
+            prompt_tokens: 2796,
+            cached_tokens,
+            completion_tokens: 9,
+            reasoning_tokens: 0,
+        };
+        let unnamed = harness_usage(&usage(None));
+        assert_eq!((unnamed.input, unnamed.cache_read), (2796, 0));
+        let named = harness_usage(&usage(Some(2135)));
+        assert_eq!((named.input, named.cache_read), (661, 2135));
+        assert_eq!(named.output, 9);
+    }
 
     fn images(url: &str, model: Option<&str>) -> MediaOptions {
         MediaOptions {

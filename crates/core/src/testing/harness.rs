@@ -104,6 +104,9 @@ pub struct ScriptedHarness {
     /// that crosses the context stop, in Pi's order: the reply ends, then
     /// its write runs, unless the turn was aborted by then.
     pub big_write_task: Option<String>,
+    /// No reply reads anything from the prompt cache, as Pi reports an
+    /// engine that leaves cached tokens out of its usage.
+    pub uncached: bool,
 }
 
 impl ScriptedHarness {
