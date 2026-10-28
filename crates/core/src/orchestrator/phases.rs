@@ -5,18 +5,18 @@ use std::time::Duration;
 
 use crate::backlog::Backlog;
 use crate::briefing::{self, Briefing};
-use crate::ledger::{BootstrapStep, JournalRecord, Phase, Verdict};
+use crate::ledger::{BootstrapStep, JournalRecord, Phase};
 use crate::project::BRIEF;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::spec::{self, coverage};
-use crate::task::TaskId;
 use crate::verify::{VerifyOutcome, interpret, retarget};
 
 use super::bootstrap;
 use super::session::SessionCtx;
 use super::{RunError, Runner};
 
+mod final_review;
 mod planner;
 mod review;
 mod task;
@@ -323,81 +323,5 @@ impl Runner {
             "{}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right.",
             stat.trim()
         )))
-    }
-
-    pub(crate) async fn final_phase(&mut self) -> Result<(), RunError> {
-        let tasks = self.project.load_backlog().backlog;
-        let all = self.run_verify(&["--all"]).await;
-        let cov = coverage(&self.project.requirements(), tasks.cards(), true);
-        let report = format!(
-            "Requirements: {}. Manual: {}. Not covered by a done task: {}.",
-            cov.total,
-            if cov.manual.is_empty() {
-                "none".to_owned()
-            } else {
-                cov.manual.join(", ")
-            },
-            if cov.missing.is_empty() {
-                "none".to_owned()
-            } else {
-                cov.missing.join(", ")
-            }
-        );
-        let review_path = ".tenaz/reviews/FINAL.md";
-        self.project.remove(review_path)?;
-        let fields = vec![(
-            "Cycle".to_owned(),
-            (self.ledger.final_cycles + 1).to_string(),
-        )];
-        let extra = vec![
-            ("Task list".to_owned(), tasks.table()),
-            ("Coverage".to_owned(), report),
-            ("./verify --all".to_owned(), all.summary.clone()),
-        ];
-        let prompt = self.briefing(Role::FinalReviewer, fields, None, extra, &[])?;
-        self.session(
-            Role::FinalReviewer,
-            &prompt,
-            &SessionCtx {
-                turns: Some(60),
-                ..Default::default()
-            },
-        )
-        .await?;
-        let (verdict, _) = self.project.verdict(review_path);
-        let after = self.project.load_backlog().backlog;
-        let added: Vec<TaskId> = after
-            .ids()
-            .filter(|id| !tasks.contains(id))
-            .cloned()
-            .collect();
-        for id in &added {
-            self.project.reset_card(id)?;
-        }
-        self.ledger.final_cycles += 1;
-        self.deps
-            .vcs
-            .commit_all(&format!("tenaz: final review {}", self.ledger.final_cycles))?;
-        self.journal(JournalRecord::FinalReview {
-            cycle: self.ledger.final_cycles,
-            verdict,
-            verify_ok: all.ok,
-            coverage: cov.clone(),
-            added: added.clone(),
-        });
-        if verdict == Some(Verdict::Accept) && all.ok && cov.missing.is_empty() {
-            return self.finish(Phase::Complete);
-        }
-        if !added.is_empty() && self.ledger.final_cycles < self.params.max_final_cycles {
-            self.ledger.phase = Phase::Loop;
-            self.save()?;
-            self.log(&format!("Final review added {} task(s)", added.len()));
-            return Ok(());
-        }
-        if self.ledger.final_cycles >= self.params.max_final_cycles {
-            return self.finish(Phase::CompleteWithGaps);
-        }
-        self.log("Final review did not produce a verdict or new tasks; retrying");
-        Ok(())
     }
 }
