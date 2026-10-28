@@ -68,6 +68,16 @@ impl Runner {
         Ok(())
     }
 
+    /// The section that sizes the cards a planner writes to the builders'
+    /// configured context budget. A cap after a memory failure is lifted
+    /// again; cards outlive it.
+    fn card_sizing(&self) -> (String, String) {
+        (
+            briefing::CARD_SIZING_TITLE.to_owned(),
+            briefing::card_sizing(self.ledger.configured_budget_tokens()),
+        )
+    }
+
     /// Composes a prompt from the project's role prompt, spec and map, and
     /// what `parts` adds for this session.
     fn briefing(&self, role: Role, parts: PromptParts<'_>) -> Result<String, RunError> {

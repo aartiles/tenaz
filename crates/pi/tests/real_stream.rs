@@ -3,7 +3,7 @@
 //! --no-mcp --no-extensions --no-skills --approve --offline`) answering one
 //! prompt through Sushi, replayed through the translator.
 
-use tenaz_core::session::{SessionEvent, StopReason, Usage};
+use tenaz_core::session::{SECOND_COMPACTION, SessionEvent, StopReason, Usage};
 use tenaz_pi::Translator;
 
 #[test]
@@ -72,9 +72,9 @@ fn a_request_pi_cancels_for_an_abort_is_not_an_engine_failure() {
         }
     }
     assert!(
-        actions.iter().any(
-            |a| matches!(a, Action::Abort { reason } if reason == "second context compaction")
-        ),
+        actions
+            .iter()
+            .any(|a| matches!(a, Action::Abort { reason } if reason == SECOND_COMPACTION)),
         "{actions:?}"
     );
     let metrics = watchdog.into_metrics();

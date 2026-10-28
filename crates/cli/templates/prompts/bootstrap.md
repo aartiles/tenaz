@@ -52,6 +52,7 @@ Task sizing:
 
 - Each task changes about 1–4 files and roughly 50–300 lines. If its
   acceptance does not fit in 3 bullets, split it.
+- Each card fits the builder context budget below.
 - T001 builds the project skeleton the map describes, with a check that
   it runs. Reach a minimal end-to-end version early, then extend it task
   by task.

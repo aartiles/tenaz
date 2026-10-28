@@ -49,9 +49,15 @@ pub struct ScriptedHarness {
     /// The first builder session of this task that does the work then
     /// reads past its context stop, so a fresh session continues it.
     pub context_stop_task: Option<String>,
+    /// The first builder session of this task writes its file, then the
+    /// harness compacts its context twice, as Pi does near the window.
+    pub compact_task: Option<String>,
     /// When a builder session for this task starts, it cancels this token
     /// (a test's Ctrl-C) and waits until its turn is aborted.
     pub stop_at: Option<(String, tokio_util::sync::CancellationToken)>,
+    /// When a review of this task starts, it cancels this token and waits
+    /// until its turn is aborted.
+    pub stop_at_review: Option<(String, tokio_util::sync::CancellationToken)>,
     /// The first builder session for this task dies mid-turn between tool
     /// calls: it writes to stderr and exits with code 1.
     pub crash_task: Option<String>,

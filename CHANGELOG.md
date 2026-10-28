@@ -26,7 +26,31 @@ uses [Semantic Versioning](https://semver.org/).
   workflow. Check one with
   `gh attestation verify <archive> --repo aartiles/tenaz`.
 
+### Changed
+
+- The sessions that write task cards (the bootstrap's task-cards step,
+  split and replan) are told the builders' context budget in tokens, with
+  a rule: what a builder reads and writes for a card fits in about two
+  thirds of it, at roughly 4 characters per token, and a card over that is
+  split before it is written. The prompts only said "context-limited
+  sessions": in the Digger 3D run of 2026-10-27 a card that needed eight
+  modules read was split twice, and builders ended past the budget.
+
 ### Fixed
+
+- A run paused during the review of an attempt that passed `verify` (or
+  stopped there because the engine gave out) runs `verify` on that
+  attempt again when it resumes and, if it still passes, reviews it
+  again. It counted the attempt and built the task again, and a pause in
+  the review of the last allowed attempt split the task. The Digger 3D run of 2026-10-27 was paused this
+  way during the review of T012ba's attempt 2.
+
+- A session stopped at its second context compaction is continued by a
+  fresh session, like one stopped at its context budget, and no longer
+  counts as a failed attempt. Both mean the context ran out; in the Digger
+  3D run of 2026-10-27 the compaction stop charged T012ba an attempt.
+  An attempt that uses up its continuations this way is split, as one
+  stopped at its budget is (`contextSplit`).
 
 - A session stopped at its context budget keeps the work of the reply that
   crossed it. The stop came at the reply's end, before its tool calls ran,

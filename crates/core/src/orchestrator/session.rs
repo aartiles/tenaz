@@ -105,7 +105,11 @@ impl Runner {
                     context_budget: result.record.context_budget,
                     continuation: count,
                 });
-                "stopped at its context budget"
+                if result.metrics.compaction_stopped() {
+                    "stopped at its second context compaction"
+                } else {
+                    "stopped at its context budget"
+                }
             }
             Continuation::Image(refusal) => {
                 self.journal(JournalRecord::ImageContinuation {

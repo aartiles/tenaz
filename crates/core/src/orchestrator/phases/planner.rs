@@ -73,8 +73,8 @@ impl Runner {
     }
 
     /// The planner's prompt: `extra` (the task list and why), the failure
-    /// history of a task to split, the recent journal and the planner's
-    /// notes.
+    /// history of a task to split, the builders' context budget, the recent
+    /// journal and the planner's notes.
     fn planner_prompt(
         &self,
         role: Role,
@@ -84,6 +84,7 @@ impl Runner {
         if let (Role::Split, Some(task)) = (role, task) {
             extra.push(("Failure history".to_owned(), task.history.join("\n\n")));
         }
+        extra.push(self.card_sizing());
         extra.push((
             "Recent orchestrator journal".to_owned(),
             self.recent_journal(),

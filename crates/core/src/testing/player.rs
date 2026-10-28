@@ -273,6 +273,12 @@ impl Player {
         let file = field(prompt, "Review file")
             .unwrap_or(".tenaz/reviews/unknown.md")
             .to_owned();
+        if let Some((at, stop)) = &self.script.stop_at_review
+            && at == task
+        {
+            stop.cancel();
+            return self.hang().await;
+        }
         let first_review = self.bump(&format!("review-{task}")) == 1;
         let first_of =
             |script_field: &Option<String>| first_review && names(script_field.as_deref(), task);
@@ -421,6 +427,21 @@ impl Player {
         });
         self.emit(SessionEvent::TurnEnd);
         self.emit(SessionEvent::TurnStart);
+        self.until_no_more_read().await;
+        self.finish("Stopped.");
+    }
+
+    /// Writes the task's file but not its check, then the context is
+    /// compacted twice; the turn waits for the stop.
+    async fn compact_twice(&mut self, task: &str) {
+        self.write_tool(&format!("src/{task}.txt"), &format!("{task}\n"), false)
+            .await;
+        for _ in 0..2 {
+            self.emit(SessionEvent::CompactionStart {
+                reason: "threshold".to_owned(),
+            });
+            self.events.handled().await;
+        }
         self.until_no_more_read().await;
         self.finish("Stopped.");
     }
@@ -667,6 +688,8 @@ impl Player {
             self.big_write(task).await;
         } else if self.first(self.script.long_task.as_deref(), "long", task) {
             self.long_session(task).await;
+        } else if self.first(self.script.compact_task.as_deref(), "compact", task) {
+            self.compact_twice(task).await;
         } else {
             return false;
         }

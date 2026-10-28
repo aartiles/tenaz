@@ -235,6 +235,12 @@ async fn a_session_past_its_budget_is_continued_without_the_map() {
         .find(|t| t.contains("## Continuation"))
         .expect("continuation note missing from the next prompt");
     assert!(!continued.contains("## Repository map"), "kept the map");
+    assert!(
+        run.log
+            .contains("stopped at its context budget; a fresh session continues"),
+        "{}",
+        run.log
+    );
     assert!(prompts.iter().any(|t| t.contains("## Repository map")));
     let cut = |t: &String| t.contains("- R1: one") && !t.contains("- R2: two");
     assert!(prompts.iter().all(cut), "spec not cut to the card");
@@ -244,6 +250,35 @@ async fn a_session_past_its_budget_is_continued_without_the_map() {
         .filter(|r| matches!(r, JournalRecord::Verify { task, attempt: 1, .. } if task.as_str() == "T001"))
         .count();
     assert_eq!(first_attempts, 1, "context stop counted as an attempt");
+}
+
+/// A builder stopped at its second compaction ran out of context, like one
+/// stopped at its budget: a fresh session continues the same attempt. In
+/// the Digger 3D run of 2026-10-27 it was charged as a failed attempt.
+#[tokio::test(start_paused = true)]
+async fn a_session_stopped_at_its_second_compaction_is_continued() {
+    let run = Played::with(ScriptedHarness {
+        compact_task: Some("T002".into()),
+        ..Default::default()
+    })
+    .await;
+    assert!(run.aborted_with(crate::session::SECOND_COMPACTION));
+    assert!(run.has(|r| matches!(
+        r,
+        JournalRecord::ContextContinuation { label, continuation: 1, .. }
+            if label.ends_with("-builder-T002")
+    )));
+    assert_eq!(run.verifies("T002"), vec![1], "{}", run.log);
+    let prompts = run.prompts("builder-T002");
+    assert!(prompts.iter().any(|t| t.contains("## Continuation")));
+    assert_eq!(run.card_field("T002", "attempts").as_deref(), Some("1"));
+    assert!(
+        run.log
+            .contains("stopped at its second context compaction; a fresh session continues"),
+        "{}",
+        run.log
+    );
+    assert!(run.has(completed), "{}", run.log);
 }
 
 #[tokio::test(start_paused = true)]
@@ -336,6 +371,34 @@ async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
         !run.project.exists("checks/T003.exists.sh"),
         "failed T003 work was not reverted"
     );
+}
+
+/// Every session that writes cards is told the builders' context budget:
+/// the bootstrap's task-cards step, the split and the replan.
+#[tokio::test(start_paused = true)]
+async fn the_sessions_that_write_cards_are_told_the_builder_budget() {
+    let run = Played::with(ScriptedHarness {
+        stepwise_bootstrap: true,
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    })
+    .await;
+    // 65% of the fake model's 131,072-token window.
+    let sizing = crate::briefing::card_sizing(85_196);
+    let bootstraps = run.prompts("bootstrap");
+    let (cards, others): (Vec<_>, Vec<_>) = bootstraps.iter().partition(|p| p.contains("Step: 3"));
+    assert!(!cards.is_empty() && !others.is_empty(), "{}", run.log);
+    let told = |p: &&String| p.contains(&sizing);
+    assert!(cards.iter().all(told), "a task-cards step lacks the budget");
+    assert!(!others.iter().any(told), "an earlier step has the budget");
+    for planner in ["split-T003", "replan"] {
+        let prompts = run.prompts(planner);
+        assert!(!prompts.is_empty(), "no {planner} session:\n{}", run.log);
+        assert!(
+            prompts.iter().all(|p| told(&p)),
+            "{planner} lacks the budget"
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -440,6 +503,80 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
     assert!(run.has(completed), "{}", run.log);
 }
 
+/// Ctrl-C during the review of an attempt that passed `verify` pauses the
+/// run; the next run reviews that same attempt again instead of charging
+/// it and building another, as in the Digger 3D run of 2026-10-27. With
+/// one attempt allowed, a charged pause would split the task.
+#[tokio::test(start_paused = true)]
+async fn a_pause_during_a_review_is_resumed_by_reviewing_the_same_attempt() {
+    let run = resumed_after_a_review_pause(|_| {}).await;
+    assert!(run.has(
+        |r| matches!(r, JournalRecord::Paused { label: Some(l), .. } if l.ends_with("-reviewer-T002"))
+    ));
+    assert!(run.has(|r| matches!(r, JournalRecord::Resumed { .. })));
+    assert!(run.has(completed), "{}", run.log);
+    assert_eq!(run.card_field("T002", "attempts").as_deref(), Some("1"));
+    let builders = run
+        .sessions()
+        .filter(|s| s.label.ends_with("-builder-T002"))
+        .count();
+    assert_eq!(builders, 1, "the paused review was charged:\n{}", run.log);
+    assert_eq!(run.card_field("T002", "status").as_deref(), Some("done"));
+    let reviews = run.prompts("reviewer-T002");
+    assert_eq!(reviews.len(), 2, "{}", run.log);
+    assert!(
+        reviews.iter().all(|p| !p.contains("## Continuation")),
+        "a review is redone, not continued:\n{}",
+        run.log
+    );
+    assert!(run.has(|r| matches!(
+        r,
+        JournalRecord::Review { task, attempt: 1, verdict: Some(Verdict::Accept), .. }
+            if task.as_str() == "T002"
+    )));
+}
+
+/// After a pause in its review, the attempt's work no longer passes
+/// `verify`: it fails once, and with no attempt left the task is split.
+#[tokio::test(start_paused = true)]
+async fn a_paused_review_whose_work_now_fails_is_not_judged_again_and_again() {
+    let run = resumed_after_a_review_pause(|project| {
+        std::fs::write(project.root().join("checks/T002.exists.sh"), "exit 1\n").unwrap();
+    })
+    .await;
+    assert_eq!(run.verifies("T002"), vec![1, 1], "{}", run.log);
+    assert_eq!(run.card_field("T002", "status").as_deref(), Some("split"));
+}
+
+/// Plays T002 with one attempt until Ctrl-C during its review, applies
+/// `between` to the paused project, and plays the run again to its end.
+async fn resumed_after_a_review_pause(between: impl FnOnce(&Project)) -> Played {
+    let work = tempfile::tempdir().unwrap();
+    let (project, vcs) = fake_project(work.path(), &["maxAttempts=1", "replanEvery=2"]);
+    let stop = CancellationToken::new();
+    let stopping = ScriptedHarness {
+        stop_at_review: Some(("T002".into(), stop.clone())),
+        ..Default::default()
+    };
+    let clock = Arc::new(VirtualClock::new());
+    let paused = deps(&project, vcs.clone(), Arc::new(stopping), clock.clone());
+    run(&project, paused, stop).await;
+    assert!(project.load_ledger().unwrap().paused_at.is_some());
+    assert_eq!(
+        card_field(&project, "T002", "attempts").as_deref(),
+        Some("1")
+    );
+    between(&project);
+    let harness = Arc::new(ScriptedHarness::default());
+    run(
+        &project,
+        deps(&project, vcs, harness, clock),
+        CancellationToken::new(),
+    )
+    .await;
+    Played::read(work, project)
+}
+
 /// Ctrl-C during the preflight pauses the run instead of failing it, and
 /// the next run measures the engine again.
 #[tokio::test(start_paused = true)]
@@ -495,13 +632,13 @@ async fn an_attempt_that_outgrows_its_context_is_split_at_once() {
     let log = &run.log;
     assert!(run.has(completed), "{log}");
     assert_eq!(run.verifies("T003"), vec![1], "T003 was retried:\n{log}");
-    assert!(log.contains("T003 outgrew its context budget"), "{log}");
+    assert!(log.contains("T003 ran out of context"), "{log}");
     assert!(run.has(
         |r| matches!(r, JournalRecord::Task { task, outcome: TaskOutcome::Split, .. } if task.as_str() == "T003")
     ));
     let split_prompt = run.prompts("split-T003").concat();
     assert!(
-        split_prompt.contains("outgrew its context budget"),
+        split_prompt.contains("ran out of context"),
         "{split_prompt}"
     );
 }
