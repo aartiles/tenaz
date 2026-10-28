@@ -1,24 +1,23 @@
-//! One session, start to journal record (the harness run itself is in
-//! `harness`), and the wrapper that reruns a session after engine
+//! A session with its recovery: the wrapper that reruns it after engine
 //! failures, capacity caps and context stops without charging the task an
-//! attempt, or pauses it.
+//! attempt, or pauses it. One session, start to journal record, is in
+//! `record`; the harness run itself in `harness`; its requests in
+//! `requests`.
 
 use std::time::Duration;
 
 use crate::briefing::without_map;
-use crate::ledger::{Inflight, JournalRecord, SessionRecord};
+use crate::ledger::{JournalRecord, SessionRecord};
 use crate::memory::MemoryWindow;
-use crate::metrics::engine_summary;
-use crate::ownership;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
-use crate::watchdog::WatchConfig;
 
 use super::recovery::{Continuation, FailureCause, GiveUp, Recovery, Step};
 use super::{RunError, Runner};
 
 mod harness;
+mod record;
 mod requests;
 
 pub(crate) use harness::HarnessRun;
@@ -53,138 +52,6 @@ impl SessionResult {
 }
 
 impl Runner {
-    /// Reverts the changes a session left where its role may not write.
-    fn enforce_ownership(
-        &self,
-        role: Role,
-        task: Option<&TaskId>,
-    ) -> Result<Vec<String>, RunError> {
-        let vcs = self.deps.vcs.as_ref();
-        let changed = vcs.changed_paths()?;
-        let reverted = ownership::partition(
-            role,
-            changed.iter().map(String::as_str),
-            task,
-            &RepoView(vcs),
-        );
-        for path in &reverted {
-            vcs.revert_path(path)?;
-        }
-        Ok(reverted)
-    }
-
-    /// One session, start to journal record.
-    pub(crate) async fn session_once(
-        &mut self,
-        role: Role,
-        prompt: &str,
-        ctx: &SessionCtx,
-    ) -> Result<SessionResult, RunError> {
-        if !self.deps.vcs.changed_paths()?.is_empty() {
-            self.deps
-                .vcs
-                .commit_all(&format!("tenaz: bookkeeping before {role}"))?;
-        }
-        let label = self.ledger.next_label(role, ctx.task.as_ref());
-        self.ledger.inflight = Some(Inflight {
-            label: label.clone(),
-            role,
-            task: ctx.task.clone(),
-            started_at: self.now(),
-        });
-        self.save()?;
-        self.project
-            .write(&format!(".tenaz/private/{label}.prompt.md"), prompt)?;
-        self.log(&format!("Session {label} started"));
-        let watch = WatchConfig {
-            turns: ctx.turns.unwrap_or(self.params.turn_budget),
-            context_tokens: self.ledger.context_budget_tokens(ctx.context_tokens),
-            idle: role.edits_code(),
-            wrap_up: role.wrap_up(),
-        };
-        if let Some(dial) = &self.deps.effort {
-            dial.set_lowered(self.ledger.lower_effort);
-            if self.ledger.lower_effort {
-                self.log(&format!(
-                    "  {label}: the last reply stopped at the output limit; this session reasons at a lower effort"
-                ));
-            }
-        }
-        if let Some(sampler) = &self.sampler {
-            sampler.begin(&label).await;
-        }
-        let (metrics, requests) = self
-            .run_harness(HarnessRun {
-                label: &label,
-                prompts: &[prompt.to_owned()],
-                cwd: self.project.root().to_path_buf(),
-                watch: Some(watch),
-                persist: true,
-                own_checks: ctx.task.as_ref().filter(|_| role == Role::Builder),
-            })
-            .await?;
-        let memory = match &self.sampler {
-            Some(sampler) => sampler.end().await,
-            None => None,
-        };
-        let reverted = self.enforce_ownership(role, ctx.task.as_ref())?;
-        self.check_skills()?;
-        if !reverted.is_empty() {
-            self.log(&format!(
-                "  {label}: reverted out-of-role changes: {}",
-                reverted.join(", ")
-            ));
-        }
-        let ok = metrics.ok();
-        let record = SessionRecord {
-            label: label.clone(),
-            role,
-            task: ctx.task.clone(),
-            attempt: ctx.attempt,
-            ok,
-            abort_reason: metrics.abort_reason.clone(),
-            exit_code: metrics.exit_code,
-            last_stop_reason: metrics.last_stop_reason.clone(),
-            turns: metrics.turns,
-            tool_calls: metrics.tool_calls,
-            writes: metrics.writes,
-            usage: metrics.usage,
-            reasoning_chars: metrics.reasoning_chars,
-            context_peak: metrics.context_peak,
-            context_budget: watch.context_tokens,
-            compactions: metrics.compactions,
-            provider_errors: metrics.provider_errors,
-            capacity_limits: metrics.capacity_limits.clone(),
-            image_refusal: metrics.image_refusal.clone(),
-            big_outputs: metrics.big_outputs,
-            watchdog: metrics.events.clone(),
-            reverted,
-            prompt_chars: prompt.len(),
-            duration_ms: metrics.duration_ms,
-            engine: engine_summary(&requests),
-            memory,
-            harness_exit: metrics.harness_exit.clone(),
-        };
-        self.journal(JournalRecord::Session(record.clone()));
-        self.ledger.inflight = None;
-        self.ledger.lower_effort = metrics.output_truncated();
-        self.save()?;
-        let outcome = if ok {
-            "settled".to_owned()
-        } else {
-            let why = metrics
-                .stop_cause()
-                .or_else(|| metrics.exit_code.map(|c| c.to_string()))
-                .unwrap_or_default();
-            format!("failed ({why})")
-        };
-        self.log(&format!(
-            "Session {label} {outcome} after {} turns, peak context {}",
-            metrics.turns, metrics.context_peak
-        ));
-        Ok(SessionResult { record, metrics })
-    }
-
     /// A session with the task loop's recovery around it: continuations
     /// after context stops and refused images, capacity caps, and engine
     /// retries with backoff. None of these charge an attempt.
@@ -447,18 +314,6 @@ fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
         raised
     };
     Some(raised)
-}
-
-/// The repository facts the ownership rules need, read from git.
-struct RepoView<'a>(&'a dyn crate::ports::Vcs);
-
-impl ownership::RepoFacts for RepoView<'_> {
-    fn in_head(&self, path: &str) -> bool {
-        self.0.in_head(path)
-    }
-    fn head_content(&self, path: &str) -> Option<String> {
-        self.0.head_content(path)
-    }
 }
 
 #[cfg(test)]
