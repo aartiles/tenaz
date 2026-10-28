@@ -122,7 +122,7 @@ impl Runner {
             step,
             attempt: self.ledger.bootstrap_attempts,
             errors: errors.clone(),
-            session_ok: s.ok(),
+            session_ok: s.metrics.ok(),
         });
         if errors.is_empty() {
             return self.bootstrap_step_done(step, &backlog);

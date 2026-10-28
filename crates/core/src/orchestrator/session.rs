@@ -45,12 +45,6 @@ pub(crate) struct SessionResult {
     pub metrics: SessionMetrics,
 }
 
-impl SessionResult {
-    pub fn ok(&self) -> bool {
-        self.record.ok
-    }
-}
-
 impl Runner {
     /// A session with the task loop's recovery around it: continuations
     /// after context stops and refused images, capacity caps, and engine
