@@ -744,13 +744,17 @@ fn show<R: BufRead, W: Write>(
         "  Model     {}/{}, {} tokens{}",
         plan.provider,
         plan.model,
-        plan.context_window.unwrap_or_default(),
-        if plan.vision { ", reads images" } else { "" }
+        plan.args.context_window.unwrap_or_default(),
+        if plan.args.vision {
+            ", reads images"
+        } else {
+            ""
+        }
     ))?;
-    if let Some(url) = &plan.comfyui {
+    if let Some(url) = &plan.args.comfyui {
         p.say(&format!("  Images    ComfyUI at {url}"))?;
     }
-    if let (Some(url), Some(model)) = (&plan.images, &plan.image_model) {
+    if let (Some(url), Some(model)) = (&plan.args.images, &plan.args.image_model) {
         p.say(&format!("  Images    {model} at {url}"))?;
     }
     let flags = InitArgs {

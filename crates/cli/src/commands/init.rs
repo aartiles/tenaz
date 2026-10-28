@@ -227,28 +227,20 @@ fn flag_words<'a>(
     })
 }
 
-/// Everything `init` needs, from flags or from the wizard.
+/// Everything `init` needs, from flags or from the wizard: the answers,
+/// and what is resolved from them where they say nothing.
 pub(crate) struct InitPlan {
     pub(crate) project: PathBuf,
-    pub(crate) brief: Option<PathBuf>,
     pub(crate) harness: HarnessKind,
     pub(crate) harness_bin: Option<PathBuf>,
     pub(crate) model: String,
     pub(crate) provider: String,
-    pub(crate) base_url: Option<String>,
-    pub(crate) context_window: Option<u64>,
-    pub(crate) vision: bool,
     pub(crate) api: EngineApi,
-    pub(crate) engine_start: Option<String>,
-    pub(crate) engine_stop: Option<String>,
-    pub(crate) comfyui: Option<String>,
-    pub(crate) workflows: Vec<String>,
-    pub(crate) images: Option<String>,
-    pub(crate) image_model: Option<String>,
     /// The goal typed in the wizard, written as the brief.
     pub(crate) brief_text: Option<String>,
-    /// For what neither path changes: thinking, params, skills, proxy,
-    /// timeout, where the run goes.
+    /// The answers, as flags: brief, base URL, context window, vision,
+    /// engine start and stop commands, media, and what neither path changes (thinking, params, skills,
+    /// proxy, timeout, where the run goes).
     pub(crate) args: InitArgs,
 }
 
@@ -278,21 +270,11 @@ impl InitPlan {
             .unwrap_or_else(|| default_provider(engine, args.base_url.as_deref()));
         Ok(Self {
             project,
-            brief: args.brief.clone(),
             harness,
             harness_bin: args.harness_bin(harness),
             model,
             provider,
-            base_url: args.base_url.clone(),
-            context_window: args.context_window,
-            vision: args.vision,
             api: engine_api(&args, engine),
-            engine_start: args.engine_start.clone(),
-            engine_stop: args.engine_stop.clone(),
-            comfyui: args.comfyui.clone(),
-            workflows: args.workflows.clone(),
-            images: args.images.clone(),
-            image_model: args.image_model.clone(),
             brief_text,
             args,
         })
@@ -348,7 +330,7 @@ pub(crate) async fn execute(args: Box<InitArgs>) -> anyhow::Result<()> {
 /// The brief's text and the file `init` copies it from: `--brief`, the
 /// wizard's goal (through a scratch file), or none (the brief in place).
 fn brief_source(plan: &InitPlan) -> anyhow::Result<(Option<String>, Option<PathBuf>)> {
-    if let Some(path) = &plan.brief {
+    if let Some(path) = &plan.args.brief {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("cannot read the brief {}", path.display()))?;
         return Ok((Some(text), Some(path.clone())));
@@ -371,7 +353,7 @@ pub(super) fn init_from_plan(plan: InitPlan) -> anyhow::Result<()> {
         name: plan.args.name.clone(),
     };
     let placement = worktree::place(&given, &request, brief_text.as_deref(), brief.as_deref())?;
-    let scratch = plan.brief.is_none().then(|| brief.clone()).flatten();
+    let scratch = plan.args.brief.is_none().then(|| brief.clone()).flatten();
     let result = init_at(plan, &given, &placement, brief);
     if let Some(path) = scratch {
         let _ = std::fs::remove_file(path);
@@ -443,9 +425,9 @@ fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
     )?;
     let (input, base_url, context_window) = resolve_model(
         entry.as_ref(),
-        plan.vision,
-        plan.base_url.clone(),
-        plan.context_window,
+        plan.args.vision,
+        plan.args.base_url.clone(),
+        plan.args.context_window,
     );
     Ok(ModelConfig {
         harness: plan.harness,
@@ -464,15 +446,15 @@ fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
 fn launch(plan: &InitPlan) -> anyhow::Result<Launch> {
     Ok(Launch {
         engine: plan.api,
-        engine_start: plan.engine_start.clone(),
-        engine_stop: plan.engine_stop.clone(),
+        engine_start: plan.args.engine_start.clone(),
+        engine_stop: plan.args.engine_stop.clone(),
         no_proxy: plan.args.no_proxy,
         harness_bin: plan.harness_bin.as_deref().map(pinned_path),
         fx_args: None,
-        comfyui: plan.comfyui.clone(),
-        workflows: pinned_workflows(&plan.workflows)?,
-        images_url: plan.images.clone(),
-        image_model: plan.image_model.clone(),
+        comfyui: plan.args.comfyui.clone(),
+        workflows: pinned_workflows(&plan.args.workflows)?,
+        images_url: plan.args.images.clone(),
+        image_model: plan.args.image_model.clone(),
         media_timeout_sec: plan.args.media_timeout,
     })
 }
