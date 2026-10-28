@@ -173,6 +173,11 @@ above), so a 32k context is the practical floor (`contextFloor`).
   and a Pi session against a local model. The Landlock version for Linux
   compiles and its rules are unit-tested, but it has not run on a Linux
   kernel yet; neither has fx in the sandbox.
+- **Writes outside the project** without the sandbox (ADR 0008). Only the
+  write tools' own path argument is checked (`path`, `file_path`); a shell
+  command that writes elsewhere is not seen. Symbolic links are not
+  followed. Tested with the scripted harness; not yet seen against Pi or fx
+  with a real model.
 - **fx and output that is not UTF-8.** fx 0.0.14 exits with "stream did
   not contain valid UTF-8" when a shell command prints such bytes (`head -c`
   cutting a character in half, for example). Tenaz charges the attempt and

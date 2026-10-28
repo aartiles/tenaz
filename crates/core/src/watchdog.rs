@@ -9,6 +9,7 @@ use crate::session::{
     is_image_refusal, is_read_tool, is_write_tool,
 };
 use crate::util::{approx_tokens, sha256_hex};
+use crate::write_scope::WriteScope;
 
 /// Requests the context pace is measured over.
 const PACE_WINDOW: usize = 6;
@@ -90,6 +91,8 @@ pub struct Watchdog {
     /// Arguments of every read so far: a read of something new is progress.
     reads: HashSet<String>,
     fingerprint: Option<String>,
+    /// Where writes belong; `None` checks none (a sandboxed run).
+    write_scope: Option<WriteScope>,
 }
 
 impl Watchdog {
@@ -111,6 +114,7 @@ impl Watchdog {
             held_stop: None,
             reads: HashSet::new(),
             fingerprint: None,
+            write_scope: None,
         }
     }
 
@@ -130,6 +134,11 @@ impl Watchdog {
     /// provides the first fingerprint before the session starts.
     pub fn set_fingerprint(&mut self, fingerprint: Option<String>) {
         self.fingerprint = fingerprint;
+    }
+
+    /// Checks the files the write tools name against `scope`.
+    pub fn set_write_scope(&mut self, scope: Option<WriteScope>) {
+        self.write_scope = scope;
     }
 
     /// Records something the runner did outside the rules (the wall-clock
@@ -404,8 +413,38 @@ impl Watchdog {
         if is_write_tool(name) {
             self.metrics.writes += 1;
             self.idle_turns = -1;
+            self.check_write_target(args, elapsed_ms, actions);
         } else if is_read_tool(name) && self.reads.insert(args.to_string()) {
             self.idle_turns = -1;
+        }
+    }
+
+    /// A write tool named a file outside the project: noted once per
+    /// file, and the session told once where its files belong. The write
+    /// itself is not stopped (ADR 0008).
+    fn check_write_target(
+        &mut self,
+        args: &serde_json::Value,
+        elapsed_ms: u64,
+        actions: &mut Vec<Action>,
+    ) {
+        let Some(scope) = &self.write_scope else {
+            return;
+        };
+        let Some(path) = scope.outside(args) else {
+            return;
+        };
+        if self.metrics.outside_writes.contains(&path) {
+            return;
+        }
+        let root = scope.root().display().to_string();
+        self.event("outside-write", Some(&path), elapsed_ms);
+        self.metrics.outside_writes.push(path.clone());
+        if self.watch.is_some() {
+            let message = format!(
+                "You wrote `{path}`, which is outside the project, where the orchestrator does not look for it. Every file of your task belongs in the project, at {root}: name files by paths relative to it, such as `.tenaz/spec.md`, never with `../`, `~` or another absolute path. Write that file again there."
+            );
+            self.steer("outside-write", &message, elapsed_ms, actions);
         }
     }
 
@@ -1244,5 +1283,87 @@ mod tests {
             w.metrics().abort_reason.as_deref(),
             Some("prompt rejected: handled")
         );
+    }
+
+    fn scoped(mut w: Watchdog) -> Watchdog {
+        w.set_write_scope(Some(WriteScope::new(
+            std::path::Path::new("/work/app"),
+            None,
+            Vec::new(),
+        )));
+        w
+    }
+
+    fn write(w: &mut Watchdog, n: u32, path: &str) -> Vec<Action> {
+        call(w, n, "write", &serde_json::json!({ "path": path }), "ok")
+    }
+
+    fn steer_message(actions: &[Action]) -> Option<&str> {
+        actions.iter().find_map(|a| match a {
+            Action::Steer { key, message } if key == "outside-write" => Some(message.as_str()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_write_in_the_project_is_not_noted() {
+        let mut w = scoped(watched());
+        assert!(write(&mut w, 1, ".tenaz/spec.md").is_empty());
+        assert!(w.metrics().outside_writes.is_empty());
+    }
+
+    #[test]
+    fn a_write_outside_the_project_is_steered_with_the_file_and_the_project() {
+        let mut w = scoped(watched());
+        let actions = write(&mut w, 1, "../.tenaz/spec.md");
+        let message = steer_message(&actions).expect("an outside-write steer");
+        assert!(message.contains("`/work/.tenaz/spec.md`"), "{message}");
+        assert!(message.contains("/work/app"), "{message}");
+    }
+
+    #[test]
+    fn a_session_is_steered_once_for_its_outside_writes() {
+        let mut w = scoped(watched());
+        write(&mut w, 1, "../.tenaz/spec.md");
+        assert!(write(&mut w, 2, "/elsewhere/map.md").is_empty());
+    }
+
+    #[test]
+    fn each_file_outside_is_noted_once_with_its_event() {
+        let mut w = scoped(watched());
+        for (n, path) in [(1, "../a"), (2, "/elsewhere/b"), (3, "../a")] {
+            write(&mut w, n, path);
+        }
+        let m = w.metrics();
+        assert_eq!(m.outside_writes, ["/work/a", "/elsewhere/b"]);
+        let noted: Vec<_> = m
+            .events
+            .iter()
+            .filter(|e| e.kind == "outside-write")
+            .filter_map(|e| e.detail.as_deref())
+            .collect();
+        assert_eq!(noted, ["/work/a", "/elsewhere/b"]);
+    }
+
+    #[test]
+    fn a_write_outside_still_counts_as_a_write() {
+        let mut w = scoped(watched());
+        write(&mut w, 1, "/elsewhere/x");
+        assert_eq!(w.metrics().writes, 1);
+    }
+
+    #[test]
+    fn without_a_scope_no_write_is_judged() {
+        let mut w = watched();
+        assert!(write(&mut w, 1, "/elsewhere/x").is_empty());
+        assert!(w.metrics().outside_writes.is_empty());
+    }
+
+    #[test]
+    fn a_shell_command_that_writes_elsewhere_is_not_seen() {
+        let mut w = scoped(watched());
+        let shell = serde_json::json!({ "command": "echo x > ../.tenaz/spec.md" });
+        assert!(call(&mut w, 1, "bash", &shell, "").is_empty());
+        assert!(w.metrics().outside_writes.is_empty());
     }
 }

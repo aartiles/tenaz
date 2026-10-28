@@ -30,6 +30,7 @@ use tenaz_core::ports::{EngineAdapter, Harness, MediaAdapter};
 use tenaz_core::project::Project;
 use tenaz_core::session::Usage;
 use tenaz_core::testing::ScriptedHarness;
+use tenaz_core::write_scope::WriteScope;
 use tenaz_mcp::workflow::WorkflowTemplate;
 use tenaz_mcp::{MediaTools, serve};
 use tenaz_pi::PiLaunch;
@@ -314,14 +315,7 @@ pub async fn wire(
         vcs: Arc::new(GitRepo::new(project.root())),
         verify,
         clock: Arc::new(SystemClock::new()),
-        notifier: Arc::new(DesktopNotifier::new(
-            project
-                .root()
-                .parent()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        )),
+        notifier: Arc::new(notifier(project)),
         engine: (config.harness != HarnessKind::Fake).then_some(engine_adapter),
         lease: (config.harness != HarnessKind::Fake).then_some(lease),
         engine_metrics: PrometheusMetrics::from_base_url(&base_url)
@@ -331,8 +325,32 @@ pub async fn wire(
         }),
         effort,
         cache_report,
+        write_scope: outside_write_scope(project, &ledger.params),
     };
     Ok(Wired { deps, services })
+}
+
+/// The desktop notifier, titled with the folder that holds the project.
+fn notifier(project: &Project) -> DesktopNotifier {
+    DesktopNotifier::new(
+        project
+            .root()
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    )
+}
+
+/// Where the sessions of a run without the sandbox may write; `None` in a
+/// sandboxed run, which refuses the other writes itself (ADR 0008).
+fn outside_write_scope(project: &Project, params: &RunParams) -> Option<WriteScope> {
+    if params.sandbox {
+        return None;
+    }
+    tenaz_adapters::sandbox::write_scope(project.root(), &params.sandbox_allow_write)
+        .inspect_err(|e| tracing::warn!("writes outside the project will not be noted: {e}"))
+        .ok()
 }
 
 /// A sandboxed run's launcher prefix and the guard of its protected paths.

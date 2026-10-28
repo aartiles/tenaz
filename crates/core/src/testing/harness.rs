@@ -80,6 +80,10 @@ pub struct ScriptedHarness {
     /// The first bootstrap session writes the spec and a new file, then
     /// ends without the rest.
     pub partial_bootstrap: bool,
+    /// The first bootstrap session writes the spec and map outside the
+    /// project, to [`super::OUTSIDE`]'s `.tenaz/`, then ends. The files are not
+    /// written: only the calls are.
+    pub outside_bootstrap: bool,
     /// Each bootstrap session writes only the files of the step its prompt
     /// names. Otherwise the first one writes them all.
     pub stepwise_bootstrap: bool,
