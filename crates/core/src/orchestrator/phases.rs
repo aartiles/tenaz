@@ -5,18 +5,19 @@ use std::time::Duration;
 
 use crate::backlog::Backlog;
 use crate::briefing::{self, Briefing};
-use crate::ledger::{BootstrapStep, JournalRecord, Phase, TaskOutcome, Verdict};
+use crate::ledger::{BootstrapStep, JournalRecord, Phase, Verdict};
 use crate::project::BRIEF;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::spec::{self, coverage};
-use crate::task::{TaskCard, TaskId, TaskStatus};
+use crate::task::{TaskCard, TaskId};
 use crate::verify::{VerifyOutcome, interpret, retarget};
 
 use super::bootstrap;
 use super::session::SessionCtx;
 use super::{RunError, Runner};
 
+mod planner;
 mod task;
 
 /// What a review session is given.
@@ -36,13 +37,6 @@ enum Review {
     Accept,
     Changes(String),
     NoVerdict,
-}
-
-/// A planner session about one task (split).
-struct PlannerTask {
-    id: TaskId,
-    card_text: String,
-    history: Vec<String>,
 }
 
 /// Replan sessions in a row that may fix invalid task cards before the run blocks.
@@ -349,203 +343,6 @@ impl Runner {
             "{}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right.",
             stat.trim()
         )))
-    }
-
-    /// A split or replan session; the cards it leaves are validated and
-    /// either committed or thrown away.
-    async fn planner_session(
-        &mut self,
-        role: Role,
-        task: Option<&PlannerTask>,
-        reason: &str,
-    ) -> Result<bool, RunError> {
-        let before = self
-            .deps
-            .vcs
-            .commit_all(&format!("tenaz: bookkeeping before {role}"))?;
-        let tasks = self.project.load_backlog().backlog;
-        let mut extra = vec![
-            ("Task list".to_owned(), tasks.table()),
-            ("Why this session".to_owned(), reason.to_owned()),
-        ];
-        if let (Role::Split, Some(task)) = (role, task) {
-            extra.push(("Failure history".to_owned(), task.history.join("\n\n")));
-        }
-        let journal = self.project.journal();
-        let recent: Vec<String> = journal
-            .iter()
-            .rev()
-            .take(12)
-            .map(super::super::ledger::JournalEntry::summary)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        extra.push(("Recent orchestrator journal".to_owned(), recent.join("\n")));
-        if let Some(planner) = self.project.note("PLANNER") {
-            extra.push(("Previous planner notes".to_owned(), planner));
-        }
-        let fields = task
-            .map(|t| vec![("Task".to_owned(), t.id.to_string())])
-            .unwrap_or_default();
-        let card = task.map(|t| (t.id.card_path(), t.card_text.clone()));
-        let prompt = self.briefing(
-            role,
-            fields,
-            card.as_ref().map(|(p, t)| (p.as_str(), t.as_str())),
-            extra,
-            &[],
-        )?;
-        self.session(
-            role,
-            &prompt,
-            &SessionCtx {
-                task: task.map(|t| t.id.clone()),
-                ..Default::default()
-            },
-        )
-        .await?;
-        let loaded = self.project.load_backlog();
-        let after = loaded.backlog;
-        let mut errors = loaded.errors;
-        let cov = coverage(&self.project.requirements(), after.cards(), false);
-        if !cov.missing.is_empty() {
-            errors.push(format!(
-                "requirements left uncovered: {}",
-                cov.missing.join(", ")
-            ));
-        }
-        for t in after.cards() {
-            match tasks.get(&t.id) {
-                None if t.status != TaskStatus::Todo => self.project.reset_card(&t.id)?,
-                Some(old)
-                    if old.status != t.status
-                        && !(t.status == TaskStatus::Dropped
-                            && matches!(old.status, TaskStatus::Todo | TaskStatus::Blocked)) =>
-                {
-                    self.project.set_status(&t.id, old.status)?;
-                }
-                _ => {}
-            }
-        }
-        for id in tasks.ids() {
-            if !after.contains(id) {
-                errors.push(format!("card {id} was deleted"));
-            }
-        }
-        let task_id = task.map(|t| t.id.clone());
-        if !errors.is_empty() {
-            self.deps.vcs.restore_paths(&before, &[".tenaz/tasks"])?;
-            self.journal(match role {
-                Role::Split => JournalRecord::SplitRejected {
-                    task: task_id,
-                    errors: errors.clone(),
-                },
-                _ => JournalRecord::ReplanRejected {
-                    task: task_id,
-                    errors: errors.clone(),
-                },
-            });
-            self.log(&format!("{role} rejected: {}", errors.join("; ")));
-            return Ok(false);
-        }
-        let suffix = task.map(|t| format!(" {}", t.id)).unwrap_or_default();
-        self.deps
-            .vcs
-            .commit_all(&format!("tenaz: {role}{suffix}"))?;
-        let added: Vec<TaskId> = after
-            .ids()
-            .filter(|id| !tasks.contains(id))
-            .cloned()
-            .collect();
-        self.journal(match role {
-            Role::Split => JournalRecord::SplitAccepted {
-                task: task_id,
-                added,
-            },
-            _ => JournalRecord::ReplanAccepted {
-                task: task_id,
-                added,
-            },
-        });
-        Ok(true)
-    }
-
-    /// A task out of attempts, or too big for its context budget: split it, or block it.
-    async fn escalate(
-        &mut self,
-        task: &TaskCard,
-        history: Vec<String>,
-        why: &str,
-    ) -> Result<(), RunError> {
-        let base = self
-            .ledger
-            .current
-            .as_ref()
-            .map(|c| c.base.clone())
-            .unwrap_or_default();
-        self.deps.vcs.reset_hard(&base)?;
-        if task.id.split_depth() < self.params.max_split_depth {
-            let planner = PlannerTask {
-                id: task.id.clone(),
-                card_text: self.project.card_text(&task.id)?,
-                history: history.clone(),
-            };
-            let ok = self
-                .planner_session(Role::Split, Some(&planner), why)
-                .await?;
-            let children: Vec<TaskId> = self
-                .project
-                .load_backlog()
-                .backlog
-                .children(&task.id)
-                .iter()
-                .map(|c| c.id.clone())
-                .collect();
-            if ok && children.len() >= 2 {
-                self.project.set_status(&task.id, TaskStatus::Split)?;
-                let names = children
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                self.ledger.checkpoint = Some(
-                    self.deps
-                        .vcs
-                        .commit_all(&format!("tenaz: {} split into {names}", task.id))?,
-                );
-                self.journal(JournalRecord::Task {
-                    task: task.id.clone(),
-                    outcome: TaskOutcome::Split,
-                    children: Some(children),
-                    history: None,
-                    attempts: None,
-                    reviewed: None,
-                    stopped_sessions: None,
-                });
-                return Ok(());
-            }
-            if ok {
-                self.deps.vcs.reset_hard(&base)?;
-            }
-        }
-        self.project.set_status(&task.id, TaskStatus::Blocked)?;
-        self.ledger.checkpoint = Some(
-            self.deps
-                .vcs
-                .commit_all(&format!("tenaz: {} blocked", task.id))?,
-        );
-        self.journal(JournalRecord::Task {
-            task: task.id.clone(),
-            outcome: TaskOutcome::Blocked,
-            children: None,
-            history: Some(history),
-            attempts: None,
-            reviewed: None,
-            stopped_sessions: None,
-        });
-        self.log(&format!("{} blocked", task.id));
-        Ok(())
     }
 
     /// Fresh-context review of a task's diff. A reviewer that ends without

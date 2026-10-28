@@ -131,7 +131,7 @@ impl Runner {
     }
 
     /// The commit the current task started from.
-    fn current_base(&self) -> String {
+    pub(super) fn current_base(&self) -> String {
         self.ledger
             .current
             .as_ref()
