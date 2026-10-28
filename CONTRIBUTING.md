@@ -43,7 +43,7 @@ macOS memory probe test is ignored on other platforms.
 | `tenaz-acp` | `crates/acp` | Harness adapter over ACP (fx and any ACP agent). |
 | `tenaz-pi` | `crates/pi` | Harness adapter over Pi's `--mode rpc`. |
 | `tenaz-mcp` | `crates/mcp` | MCP server exposing media tools that take the lease. |
-| `tenaz` | `crates/cli` | The `tenaz` binary: one module per command under `src/commands/` (`init`, `run`, `status`, `watch`, `finish`, `demo`, `doctor`, `params`, `guide`); `main.rs` parses and dispatches. |
+| `tenaz` | `crates/cli` | The `tenaz` binary: one module per command under `src/commands/` (`init`, `run`, `status`, `watch`, `finish`, `demo`, `doctor`; `info` for `params` and `guide`, `shims` for the hidden `fx-shim` and `sandbox-exec`); `main.rs` parses and dispatches. |
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) has the details. New logic
 belongs in `tenaz-core` when it can be pure; side effects belong in an adapter
