@@ -6,6 +6,9 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+/// The abort reason of a session whose context the harness compacted twice.
+pub const SECOND_COMPACTION: &str = "second context compaction";
+
 /// Token usage of one assistant message, as the harness reports it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -326,11 +329,20 @@ impl SessionMetrics {
         self.tool_calls > 0 && self.tool_errors >= self.tool_calls
     }
 
-    /// The session was stopped at its context budget.
+    /// The session ran out of context: stopped at its context budget, or
+    /// at its second compaction.
     pub fn context_stopped(&self) -> bool {
-        self.abort_reason
-            .as_deref()
-            .is_some_and(|r| r.starts_with("context budget exceeded"))
+        self.compaction_stopped()
+            || self
+                .abort_reason
+                .as_deref()
+                .is_some_and(|r| r.starts_with("context budget exceeded"))
+    }
+
+    /// The session was stopped when the harness compacted its context a
+    /// second time.
+    pub fn compaction_stopped(&self) -> bool {
+        self.abort_reason.as_deref() == Some(SECOND_COMPACTION)
     }
 
     /// The session was stopped at one and a half times its turn budget.
@@ -540,13 +552,16 @@ mod tests {
             }
             .engine_failed()
         );
-        assert!(
-            SessionMetrics {
-                abort_reason: Some("context budget exceeded (90/60 tokens)".into()),
-                ..good
-            }
-            .context_stopped()
-        );
+        let budget = SessionMetrics {
+            abort_reason: Some("context budget exceeded (90/60 tokens)".into()),
+            ..good.clone()
+        };
+        assert!(budget.context_stopped() && !budget.compaction_stopped());
+        let compacted = SessionMetrics {
+            abort_reason: Some(SECOND_COMPACTION.into()),
+            ..good
+        };
+        assert!(compacted.context_stopped() && compacted.compaction_stopped());
     }
 
     #[test]
@@ -591,15 +606,12 @@ mod tests {
     fn an_aborted_session_gives_its_abort_reason() {
         let metrics = SessionMetrics {
             aborted: true,
-            abort_reason: Some("second context compaction".to_owned()),
+            abort_reason: Some(SECOND_COMPACTION.to_owned()),
             last_stop_reason: Some(StopReason::Aborted),
             exit_code: Some(0),
             ..SessionMetrics::default()
         };
-        assert_eq!(
-            metrics.stopped().as_deref(),
-            Some("second context compaction")
-        );
+        assert_eq!(metrics.stopped().as_deref(), Some(SECOND_COMPACTION));
     }
 
     #[test]

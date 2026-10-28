@@ -38,6 +38,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A session stopped at its second context compaction is continued by a
+  fresh session, like one stopped at its context budget, and no longer
+  counts as a failed attempt. Both mean the context ran out; in the Digger
+  3D run of 2026-10-27 the compaction stop charged T012ba an attempt.
+  An attempt that uses up its continuations this way is split, as one
+  stopped at its budget is (`contextSplit`).
+
 - A session stopped at its context budget keeps the work of the reply that
   crossed it. The stop came at the reply's end, before its tool calls ran,
   so a model that wrote a whole file in that reply lost it: three files in

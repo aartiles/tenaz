@@ -74,7 +74,7 @@ impl Runner {
                     // Another attempt would meet the same budget: the task is too big for it.
                     if outgrown && self.splits_when_outgrown(&task.id) {
                         let why = format!(
-                            "{} outgrew its context budget: attempt {attempt} used all {} context continuations and still fails verify.",
+                            "{} ran out of context: attempt {attempt} used all {} context continuations and still fails verify.",
                             task.id, self.params.context_continuations
                         );
                         self.log(&format!("  {why} Splitting it instead of retrying."));

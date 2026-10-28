@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::params::RunParams;
 use crate::session::{
-    SessionEvent, SessionMetrics, StopReason, WatchdogEvent, capacity_limit, is_image_refusal,
-    is_read_tool, is_write_tool,
+    SECOND_COMPACTION, SessionEvent, SessionMetrics, StopReason, WatchdogEvent, capacity_limit,
+    is_image_refusal, is_read_tool, is_write_tool,
 };
 use crate::util::{approx_tokens, sha256_hex};
 
@@ -283,7 +283,7 @@ impl Watchdog {
                 self.event("compaction", Some(reason), elapsed_ms);
                 if self.watch.is_some() {
                     if self.metrics.compactions >= 2 {
-                        self.abort("second context compaction", elapsed_ms, &mut actions);
+                        self.abort(SECOND_COMPACTION, elapsed_ms, &mut actions);
                     } else {
                         let wrap_up = self.watch.map_or("", |w| w.wrap_up);
                         let message =
@@ -1167,7 +1167,7 @@ mod tests {
                 String::new
             ),
             vec![Action::Abort {
-                reason: "second context compaction".into()
+                reason: SECOND_COMPACTION.into()
             }]
         );
         w.handle(&SessionEvent::Settled { aborted: true }, 0, String::new);

@@ -425,6 +425,21 @@ impl Player {
         self.finish("Stopped.");
     }
 
+    /// Writes the task's file but not its check, then the context is
+    /// compacted twice; the turn waits for the stop.
+    async fn compact_twice(&mut self, task: &str) {
+        self.write_tool(&format!("src/{task}.txt"), &format!("{task}\n"), false)
+            .await;
+        for _ in 0..2 {
+            self.emit(SessionEvent::CompactionStart {
+                reason: "threshold".to_owned(),
+            });
+            self.events.handled().await;
+        }
+        self.until_no_more_read().await;
+        self.finish("Stopped.");
+    }
+
     /// One reply that reasons until it is cut at the output limit, then the
     /// harness exits with code 1, as fx does on `OutputTruncated`.
     async fn truncate(&mut self) {
@@ -667,6 +682,8 @@ impl Player {
             self.big_write(task).await;
         } else if self.first(self.script.long_task.as_deref(), "long", task) {
             self.long_session(task).await;
+        } else if self.first(self.script.compact_task.as_deref(), "compact", task) {
+            self.compact_twice(task).await;
         } else {
             return false;
         }
