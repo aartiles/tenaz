@@ -145,8 +145,24 @@ impl Runner {
     }
 
     /// Records a pause during `label` and returns the error that unwinds the run.
-    fn pause(&mut self, label: &str, role: Role, ctx: &SessionCtx) -> Result<RunError, RunError> {
+    pub(super) fn pause(
+        &mut self,
+        label: &str,
+        role: Role,
+        ctx: &SessionCtx,
+    ) -> Result<RunError, RunError> {
         self.ledger.pending_continuation = true;
+        self.record_pause(label, role, ctx)
+    }
+
+    /// Saves and journals a pause at `label`, without telling the next
+    /// session it continues a stopped one.
+    pub(super) fn record_pause(
+        &mut self,
+        label: &str,
+        role: Role,
+        ctx: &SessionCtx,
+    ) -> Result<RunError, RunError> {
         self.ledger.paused_at = Some(self.now());
         self.save()?;
         self.journal(JournalRecord::Paused {

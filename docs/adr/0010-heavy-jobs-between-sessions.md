@@ -1,7 +1,7 @@
 # ADR 0010: Heavy jobs between sessions
 
-Status: accepted (option D), 2026-10-29. Being implemented: the job runner
-and the lease's cycle are in place; nothing runs a declared job yet.
+Status: accepted (option D), 2026-10-29. Implemented, but for the note
+to a session rerun after an engine out-of-memory error; see "Decisions".
 
 ## Context
 
@@ -62,6 +62,8 @@ and the memory the engine holds.
 
 ### D. A job the builder declares, run between sessions
 
+(As proposed; "Decisions" says what was built.)
+
 - The builder writes `.tenaz/jobs/<name>.json`: the command, why it is
   heavy, and its time limit. It stops.
 - Tenaz validates it (the command runs from the project, under the sandbox
@@ -101,12 +103,43 @@ heavy work in the background, declare a job.
   writes and asks for it, as with a tool call. Runs that use jobs should
   say so in their report.
 
-## Consequences if D is taken
+## Decisions
 
-- New file and role scope (`.tenaz/jobs/<TASK>-<name>.json`, writable by
-  the builder of its task), a validator, a lease method for a command job,
+Taken while implementing D, on the open questions above:
+
+- **One job file per task**, `.tenaz/jobs/<TASK>.json`, with `command`,
+  `minutes` and `why`, and no other field. Only the builder of that task
+  may write it. A file that is not valid is removed, runs nothing, and the
+  next session is told why.
+- **Engines that cannot unload**: the job runs next to the LLM with the
+  gate closed, as a media job does. The report says what went wrong with
+  the engine around it.
+- **`jobMinutes`**, 60 by default, is the most a job may ask for, and
+  **`jobsPerAttempt`**, 3, the most job files one attempt may have,
+  valid or not; one past them is removed unread and the attempt is judged
+  by `verify`.
+- **`verify` stays outside the lease.** It is left open, under "Known
+  gaps" in COMPATIBILITY.
+- **The journal** records `job-started` (task, attempt, command, minutes)
+  and `job-finished` (exit code, timed out, error, engine, duration). Run
+  reports can tell from them which runs used jobs. A job a stop cut short
+  has a `job-started` and no `job-finished`; a `paused` record follows it.
+- **A stop during a job** pauses the run with the job file kept and the
+  attempt not charged; on resume the job runs again before any session,
+  and the next session is not told it continues a stopped one.
+- **The report and the job count live in `run.json`** (`current.jobs`)
+  until a session has read the report, so a pause after the job neither
+  loses the report nor runs the job again, and a resumed attempt does not
+  get more job files. The report is saved before the job file is removed:
+  a crash between the two runs the job again rather than losing it.
+
+## Consequences
+
+- New file and role scope (`.tenaz/jobs/<TASK>.json`, writable by the
+  builder of its task), a validator, a lease method for a command job,
   journal records (`job-started`, `job-finished` with exit code and
-  duration), the rerun note, and the protocol, builder prompt, SKILL.md,
-  README and COMPATIBILITY updated.
+  duration), the protocol, builder prompt, SKILL.md, README and
+  COMPATIBILITY updated. Still to come: the note to a session rerun after
+  an engine out-of-memory error.
 - Tested with the scripted harness and a fake engine adapter; whether a
   small model declares jobs at the right times is unknown until a run.

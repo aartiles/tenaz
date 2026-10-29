@@ -3,6 +3,7 @@
 
 mod conflict;
 mod harness_exit;
+mod job;
 mod scripted_run;
 mod stop_grace;
 

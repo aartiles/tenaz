@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::abort::Abort;
 use super::paced::PacedSender;
-use super::{ScriptedConflict, ScriptedHarness};
+use super::{ScriptedConflict, ScriptedHarness, ScriptedJob};
 use crate::session::{SessionEvent, StopReason, Usage};
 
 /// One tool call of the scripted model: the tool, its arguments, what it
@@ -712,6 +712,32 @@ impl Player {
             || self.stopped(task).await
             || self.failing(task).await
             || self.conflicting(task).await
+            || self.declaring_job(task).await
+    }
+
+    /// The first session of the script's job task, or every one, declares
+    /// its job and stops.
+    async fn declaring_job(&mut self, task: &str) -> bool {
+        let Some(ScriptedJob {
+            task: at,
+            text,
+            every_session,
+        }) = self.script.job.clone()
+        else {
+            return false;
+        };
+        let declares = if every_session {
+            names(Some(&at), task)
+        } else {
+            self.first(Some(&at), "job", task)
+        };
+        if !declares {
+            return false;
+        }
+        self.write_tool(&format!(".tenaz/jobs/{task}.json"), &text, false)
+            .await;
+        self.finish("Declared a job.");
+        true
     }
 
     /// The first session of the script's conflict task declares its

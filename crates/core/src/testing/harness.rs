@@ -79,6 +79,8 @@ pub struct ScriptedHarness {
     pub crash_on_checks_task: Option<String>,
     /// A builder that declares a conflict, and the replan that resolves it.
     pub conflict: Option<ScriptedConflict>,
+    /// A builder that declares a heavy job.
+    pub job: Option<ScriptedJob>,
     /// The first builder session for this task reasons until its reply is
     /// cut at the output limit, and the harness exits, as fx does.
     pub truncate_task: Option<String>,
@@ -289,6 +291,15 @@ impl Session for ScriptedSession {
 pub struct ScriptedConflict {
     pub task: String,
     pub check: String,
+}
+
+/// The first builder session of `task`, or every one, writes its job
+/// file with `text` and stops, as a builder declaring a heavy job does.
+#[derive(Clone, Debug)]
+pub struct ScriptedJob {
+    pub task: String,
+    pub text: String,
+    pub every_session: bool,
 }
 
 #[cfg(test)]

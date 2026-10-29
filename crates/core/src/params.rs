@@ -81,6 +81,12 @@ pub struct RunParams {
     pub tool_minutes: u64,
     /// Time limit of one `verify` run.
     pub verify_timeout_sec: u64,
+    /// The most a heavy job a builder declares may ask for (ADR 0010);
+    /// 0 turns jobs off.
+    pub job_minutes: u64,
+    /// Job files one attempt may have, valid or not; one past them is
+    /// removed unread and the attempt is judged.
+    pub jobs_per_attempt: u32,
     /// Bootstrap sessions per step before the run blocks.
     pub max_bootstrap_attempts: u32,
     /// Final review cycles before the run completes with gaps.
@@ -162,6 +168,8 @@ impl Default for RunParams {
             session_minutes: 90,
             tool_minutes: 10,
             verify_timeout_sec: 120,
+            job_minutes: 60,
+            jobs_per_attempt: 3,
             max_bootstrap_attempts: 3,
             max_final_cycles: 2,
             diff_limit_bytes: 40000,

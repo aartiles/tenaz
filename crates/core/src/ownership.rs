@@ -69,12 +69,13 @@ fn agent_rule(role: Role, agent_path: &str, task: Option<&TaskId>, repo: &dyn Re
 }
 
 /// Whether a builder of `task_id` may write `.tenaz/<agent_path>`: `verify`,
-/// the map, and its task's notes and conflict.
+/// the map, and its task's notes, conflict and heavy job.
 fn builder_owns(agent_path: &str, task_id: &str) -> bool {
     ["verify", "map.md"].contains(&agent_path)
         || [
             format!("notes/{task_id}.md"),
             format!("conflicts/{task_id}.md"),
+            format!("jobs/{task_id}.json"),
         ]
         .iter()
         .any(|own| own == agent_path)
@@ -164,6 +165,17 @@ mod tests {
         assert!(allowed(Role::Builder, &conflict("T007"), Some(&t), &r));
         assert!(!allowed(Role::Builder, &conflict("T008"), Some(&t), &r));
         assert!(!allowed(Role::Replan, &conflict("T007"), None, &r));
+    }
+
+    /// A builder declares a heavy job for its own task only (ADR 0010).
+    #[test]
+    fn a_builder_declares_only_its_own_task_s_job() {
+        let r = repo();
+        let t = TaskId::parse("T007").unwrap();
+        let job = |task| format!(".tenaz/jobs/{task}.json");
+        assert!(allowed(Role::Builder, &job("T007"), Some(&t), &r));
+        assert!(!allowed(Role::Builder, &job("T008"), Some(&t), &r));
+        assert!(!allowed(Role::Reviewer, &job("T007"), Some(&t), &r));
     }
 
     #[test]

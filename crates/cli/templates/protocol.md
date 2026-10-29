@@ -122,3 +122,26 @@ that stood. The builder of that card may change those checks, and no
 others, as long as each still tests its requirement as the spec states it:
 the spec decides, not the old number. Its reviewer judges each change
 against the spec.
+
+## Heavy jobs
+
+Some work does not fit in a session: a render, a long build, a model run
+that needs most of the machine's memory for many minutes. Running it in
+the background while the session goes on makes it fight the model's
+engine for memory, and both fail. Instead, its builder writes
+`.tenaz/jobs/<TASK>.json` and stops:
+
+```json
+{"command": "sh render/loop.sh", "minutes": 40, "why": "180 Cycles frames take 25 minutes"}
+```
+
+The orchestrator then runs the command with `sh -c` from the project
+root, with the engine's memory to itself, for at most `minutes` (1 to 60
+by default). A fresh session of the same attempt starts with how it
+ended, how long it took, and the end of its log; the job does not cost an
+attempt. A file that is not valid runs nothing, and the next session is
+told why. An attempt has at most 3 job files by default (`jobsPerAttempt`);
+one past them is removed unread, and the attempt is judged by `verify` as
+it stands. If the run is stopped during a job, the job runs again when it
+resumes, so write it to be safe to run twice: skip the frames already
+made, overwrite rather than append.

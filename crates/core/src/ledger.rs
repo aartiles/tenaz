@@ -15,7 +15,7 @@ use crate::spec::Coverage;
 use crate::task::TaskId;
 
 mod current;
-pub use current::{CurrentTask, StoppedAttempt, VerifyFailure};
+pub use current::{AttemptJobs, CurrentTask, StoppedAttempt, VerifyFailure};
 
 /// Where the run is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -648,6 +648,30 @@ pub enum JournalRecord {
         reviewed: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stopped_sessions: Option<Vec<StoppedAttempt>>,
+    },
+    /// A heavy job a builder declared starts, between its attempt's
+    /// sessions (ADR 0010).
+    JobStarted {
+        task: TaskId,
+        attempt: u32,
+        command: String,
+        minutes: u64,
+    },
+    /// The heavy job ended.
+    JobFinished {
+        task: TaskId,
+        attempt: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        timed_out: bool,
+        /// Why it could not run, or what failed around it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        /// What went wrong with the engine's unload or reload around it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        engine: Option<String>,
+        duration_ms: u64,
     },
     /// A builder declared that its task cannot pass without changing
     /// these checks of done tasks (ADR 0009).

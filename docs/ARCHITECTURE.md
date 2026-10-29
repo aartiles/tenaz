@@ -30,6 +30,7 @@ Pure modules, each unit-tested without I/O:
 | `spec` | Requirement lines (`- R1: ...`, `manual:`) and coverage. |
 | `backlog` | Card validation, dependency DAG, resolved and ready tasks. |
 | `conflict` | A builder's declared conflict with checks of done tasks, and which checks a card's `amends` may name (ADR 0009). |
+| `job` | A heavy job a builder declares, and the report of how it ran (ADR 0010). |
 | `verify` | The `verify` contract: last-line JSON, exit code, clipping; whether a builder attempt passed. |
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time, provider-error and outside-write rules; emits steer, abort or interrupt (stop the turn, prompt again). |
 | `write_scope` | Where a session may write without the sandbox, and whether a write tool's target is outside it (ADR 0008). |

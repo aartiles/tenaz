@@ -17,6 +17,7 @@ use super::{RunError, Runner};
 
 mod bootstrap;
 mod final_review;
+mod job;
 mod planner;
 mod review;
 mod task;

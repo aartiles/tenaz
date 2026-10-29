@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::util::{clip, strip_ansi};
+use crate::util::{clip, strip_ansi, tail};
 
 /// One failed check in the report.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,14 +193,6 @@ pub fn interpret(
 
 fn exit_text(status: Option<i32>) -> String {
     status.map_or_else(|| "null".to_owned(), |s| s.to_string())
-}
-
-fn tail(text: &str, bytes: usize) -> String {
-    if text.len() <= bytes {
-        return text.to_owned();
-    }
-    let start = text.ceil_char_boundary(text.len() - bytes);
-    text[start..].to_owned()
 }
 
 /// Text for a session, with `./verify` and `` `verify` `` pointing at `path`.
