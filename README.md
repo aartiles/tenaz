@@ -86,7 +86,7 @@ project's own tests.
 - **Watchdogs.** Loops, repeated calls, idle turns and huge outputs get a
   steering message first, then the session is stopped. A file written
   outside the project is logged and the session told so.
-- **One resident model.** When the agent asks for an image, Tenaz unloads
+- **Resident models.** When the agent asks for an image, Tenaz unloads
   the LLM, runs the image model, frees it and reloads the LLM. With
   `--model-for`, every model named must be loaded at once: Tenaz checks
   before the first session (loading what it can, as for `--model`), does
@@ -297,8 +297,8 @@ interface the skill relies on:
 - `init` creates the project (or uses the directory you point it at),
   writes the goal to `.tenaz/brief.md`, adds the working protocol
   (`.tenaz/protocol.md`) and role prompts (`.tenaz/prompts/`), pins the
-  model, the agent, how to start the engine and the run parameters in
-  `.tenaz/run.json`, and makes the first commit. Everything it writes is
+  model (and any `--model-for` role models), the agent, how to start the
+  engine and the run parameters in `.tenaz/run.json`, and makes the first commit. Everything it writes is
   under `.tenaz/`, with its own `.tenaz/.gitignore`; the project's
   `AGENTS.md`, `CLAUDE.md` and `.gitignore` are left as they are. The
   wizard looks for engines on Sushi's port 12345, mlx-serve's 11234,

@@ -15,7 +15,7 @@ below; this page is about the real ones.
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 in RPC mode | Tested end to end to a COMPLETE run with the user's own `models.json`. The generated configuration, through the proxy, is tested against a mock engine only. No media tools (see below). |
 | | Other ACP agents | Should work through the same adapter; fx-specific settings are only applied to fx. Untested. |
 | Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve's load and unload through the API are tested against a mock only. |
-| | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run. The servers named here are untried. |
+| | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run, before the start was skipped for an engine that still serves the model (see Known gaps). The servers named here are untried. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
 | Media | ComfyUI images (`generate_image` over MCP) | Tested against a mock, and in real runs with FLUX models next to TensorFold and Sushi (8 and 10 images). Needs an API-format workflow with `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}` and `{{height}}` placeholders. |
@@ -115,7 +115,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   that every model is loaded, and the lease freeing and reloading them
   around an image, are tested with fake engines and a stand-in server for
   the generic engine's commands, not against Kapitsa, mlx-serve or a
-  generic engine holding two models. Not with
+  generic engine holding two models. TensorFold's scripts have not been
+  run again since a generic engine that still serves its model after an
+  image is no longer started. Not with
   Pi: `init` refuses the map, and Pi refuses a session on another model
   than the one it was set up for.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with

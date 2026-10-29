@@ -22,16 +22,12 @@ uses [Semantic Versioning](https://semver.org/).
   budget is the `contextBudget` share of that model's window; the
   session's journal record has `model`. Planners size cards for the
   builder's model. After the engine runs out of memory, the lowered budget
-  is raised toward the largest model's budget, and a session whose budget
-  was already under the lowered one does not count toward that raise. See
-  ADR 0010.
+  is raised toward the largest model's budget. See ADR 0010.
 - With `--model-for`, every model of the run must be loaded before the
-  first session. Tenaz loads those that are not, as it does the run's model
-  (a load API, or a generic engine's start command), and `tenaz run` stops
-  and names any it could not load. Around an image job the lease frees
-  every model and loads them all back.
-- A generic engine's stop and start commands run once around an image job,
-  however many models it serves, and Tenaz waits for every one of them. An
+  first session. Tenaz loads those that are not, as it does the run's
+  model, and `tenaz run` stops and names any it could not load. Around an
+  image job the lease frees every model and loads them all back; a generic
+  engine's stop and start commands run once for all of them. A generic
   engine that serves only some of the run's models is not started a second
   time: `tenaz run` stops and names the others.
 - A builder whose task cannot pass without changing a check of a done task
@@ -60,6 +56,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- These apply to every run, with or without `--model-for`:
+  - A session whose context budget is already under the cap a memory
+    failure set (a card that asks for a small budget, for example) no
+    longer counts toward raising the cap: it did not test it.
+  - After an image job, a generic engine's start command is skipped when
+    the engine still serves the model.
+  - When the run's model is not served before the first session,
+    `tenaz run` says `Model <id> is not being served at <url>`, with why
+    loading it failed, instead of `the LLM could not be loaded: ...`.
 - In the failure history a split is shown, an attempt whose `verify`
   failure repeats the one before word for word says so and names the
   attempt that has the text, instead of repeating it. In the Lotion Pump
