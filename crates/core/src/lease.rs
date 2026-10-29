@@ -210,10 +210,11 @@ impl LeaseManager {
             .timed(Holder::Llm, "unload", self.llm.unload_all(&self.llm_models))
             .await;
         if let Err(error) = unloaded {
-            // Some LLMs may be freed already: load them back. If that fails
-            // too, requests meet the engine retry like any engine failure
-            // instead of waiting here.
-            if !matches!(self.llms_ready().await, Ok(true)) {
+            // Some LLMs may be freed already: load them back while the
+            // engine answers. One that does not answer is not started here,
+            // where it may only be slow; requests meet the engine retry like
+            // any engine failure instead of waiting here.
+            if let Ok(false) = self.llms_ready().await {
                 let _ = self.load_llms().await;
             }
             self.gate.open();
@@ -668,6 +669,24 @@ mod tests {
             "{error}"
         );
         assert!(log.lines().is_empty(), "{:?}", log.lines());
+    }
+
+    /// A stop that fails and leaves the engine silent is not answered with
+    /// a start: that could launch a second engine.
+    #[tokio::test]
+    async fn a_failed_unload_does_not_start_an_engine_that_does_not_answer() {
+        let llm = Arc::new(FakeLlm {
+            down: true,
+            ..two(&["m"], Unload::Fails, None)
+        });
+        let (manager, log, _) = setup_engine(llm, false, false);
+        let error = manager.run_media("comfyui", job()).await.unwrap_err();
+        assert!(
+            matches!(error, LeaseError::Engine(EngineError::Refused(_))),
+            "{error}"
+        );
+        assert!(log.lines().is_empty(), "{:?}", log.lines());
+        assert!(manager.gate().is_open());
     }
 
     #[tokio::test]
