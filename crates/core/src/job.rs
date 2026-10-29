@@ -64,7 +64,7 @@ impl JobRun<'_> {
     /// The report: how it ended, how long it took, and the end of its log.
     pub fn report(&self) -> String {
         let ended = match (self.outcome.status, &self.outcome.error) {
-            (_, Some(why)) => format!("did not run: {why}"),
+            (_, Some(why)) => format!("failed: {why}"),
             _ if self.outcome.timed_out => {
                 format!("was stopped at its limit of {} minutes", self.job.minutes)
             }
@@ -188,7 +188,7 @@ mod tests {
                     error: error.clone(),
                     ..JobOutcome::default()
                 },
-                "did not run: cannot run the job: no sh",
+                "failed: cannot run the job: no sh",
             ),
             (
                 JobOutcome {
@@ -196,7 +196,7 @@ mod tests {
                     timed_out: true,
                     ..JobOutcome::default()
                 },
-                "did not run: cannot run the job: no sh",
+                "failed: cannot run the job: no sh",
             ),
             (
                 JobOutcome::default(),

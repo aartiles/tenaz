@@ -152,7 +152,7 @@ pub struct JobOutcome {
     pub timed_out: bool,
     /// The run was stopping and it was killed.
     pub stopped: bool,
-    /// Why the job could not run, or what failed around it.
+    /// Why the job could not run or be waited for.
     pub error: Option<String>,
 }
 

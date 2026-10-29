@@ -249,7 +249,7 @@ fn leased_outcome(ran: JobLease<(JobOutcome, u64)>) -> (JobOutcome, Option<Strin
     let engine = ran.lease.err().map(|e| e.to_string());
     let (outcome, ms) = ran.output.unwrap_or_else(|| {
         let never = JobOutcome {
-            error: Some("the engine could not free its memory, so it did not run".to_owned()),
+            error: Some("the engine could not free its memory for it".to_owned()),
             ..JobOutcome::default()
         };
         (never, 0)
@@ -308,7 +308,7 @@ mod tests {
         let (outcome, engine, ms) = leased_outcome(ran);
         assert_eq!(
             outcome.error.as_deref(),
-            Some("the engine could not free its memory, so it did not run")
+            Some("the engine could not free its memory for it")
         );
         assert_eq!(engine.as_deref(), Some("engine timed out: unload"));
         assert_eq!(ms, 0);

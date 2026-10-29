@@ -665,7 +665,7 @@ pub enum JournalRecord {
         exit_code: Option<i32>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         timed_out: bool,
-        /// Why it could not run, or what failed around it.
+        /// Why the job could not run or be waited for.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
         /// What went wrong with the engine's unload or reload around it.
