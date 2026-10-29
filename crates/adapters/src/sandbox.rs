@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -304,13 +304,16 @@ fn user_cache_dir() -> Option<PathBuf> {
 /// The cache directory `getconf` printed, when it has the shape macOS gives
 /// it: `/var/folders/<xx>/<user>/C`, with plain names only (no `..`).
 /// Anything else is not trusted as a write root.
+#[cfg(any(target_os = "macos", test))]
 fn cache_dir_from(stdout: &[u8]) -> Option<PathBuf> {
     let dir = PathBuf::from(std::str::from_utf8(stdout).ok()?.trim());
     let rest = ["/var/folders", "/private/var/folders"]
         .iter()
         .find_map(|base| dir.strip_prefix(base).ok())?;
     let names: Vec<_> = rest.components().collect();
-    let plain = names.iter().all(|c| matches!(c, Component::Normal(_)));
+    let plain = names
+        .iter()
+        .all(|c| matches!(c, std::path::Component::Normal(_)));
     (plain && names.len() == 3 && rest.ends_with("C")).then_some(dir)
 }
 
