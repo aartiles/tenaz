@@ -282,6 +282,15 @@ impl Session for ScriptedSession {
     }
 }
 
+/// The first builder session of `task` declares a conflict with `check`
+/// and stops. The first replan shown it adds `T005` (for R3, after T001,
+/// as the fake goal's T003 is), which amends the check, and drops `task`.
+#[derive(Clone, Debug)]
+pub struct ScriptedConflict {
+    pub task: String,
+    pub check: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,13 +387,4 @@ mod tests {
         session.close(Duration::ZERO).await;
         assert!(!dir.path().join("src/T001.txt").exists());
     }
-}
-
-/// The first builder session of `task` declares a conflict with `check`
-/// and stops. The first replan shown it adds `T005` (for R3, after T001,
-/// as the fake goal's T003 is), which amends the check, and drops `task`.
-#[derive(Clone, Debug)]
-pub struct ScriptedConflict {
-    pub task: String,
-    pub check: String,
 }

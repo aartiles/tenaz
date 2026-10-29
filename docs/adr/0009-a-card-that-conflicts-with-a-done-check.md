@@ -7,9 +7,9 @@ Status: accepted, 2026-10-29.
 In the Lotion Pump run (2026-10-28, Qwen3.8-Flash-Next 2.6bpw, fx) the
 final review found the backdrop too dark for the brief and added T016.
 T016 was split. T016a reworked the look checks, with an edge-gradient
-floor (`look_edge_grad_min` 0.015). T016b had to make the wall light gray to white, with thresholds its
-card set: at most 10 % of the wall below 0.55, at least 2 % above 0.90,
-and a gradient floor.
+floor (`look_edge_grad_min` 0.015). T016b had to make the wall light
+gray to white, with thresholds its card set: at most 10 % of the wall
+below 0.55, at least 2 % above 0.90, and a gradient floor.
 
 The three builders of T016b measured that these cannot hold
 together. The 0.55 low stop keeps the 5th percentile at or
@@ -59,8 +59,8 @@ act on them.
 - The replan may write cards with `amends: [<check IDs>]`. Their builders
   may change those checks, and only those, as long as each still tests its
   requirement. The reviewer is told which checks may be amended and
-  judges every change against the spec, not against the old number. The count of
-  passed checks may not drop.
+  judges every change against the spec, not against the old number. The
+  count of passed checks may not drop.
 - This keeps "never weaken a check" for everyone else. The spec decides
   between two invented thresholds, and a session that cites the spec
   decides, not the builder that is stuck.
@@ -94,8 +94,10 @@ The conflict file has front matter `checks: [<check IDs>]` and a free
 body. It stands when every check belongs to a done task other than the
 builder's own; a task's own checks are its card to fix. It is read after
 an attempt fails `verify`. One that does not stand is logged, the next
-builder is told why, the file is removed, and the attempt counts as usual;
-a task that passes has its conflict file removed too. One that stands: the
+builder is told why, the file is removed, and the attempt counts as usual.
+A conflict belongs to the attempt that declares it: the file is removed
+when an attempt starts and when a task is done. A builder with a conflict
+file is not asked for a passing check of its task. One that stands: the
 task's work is reverted with its notes and conflict kept, the task is
 blocked, the conflict is journaled (`conflict`: task, attempt, checks), and
 a replan runs. Every replan is shown the conflicts that stood, those of

@@ -16,15 +16,27 @@ use crate::testing::{ScriptedConflict, ScriptedHarness, VirtualClock};
 /// Plays the fake goal with T003's first builder declaring a conflict with
 /// `check`; the project, its log and the work directory.
 async fn declaring(check: &str) -> (tempfile::TempDir, Project, String) {
+    play(
+        ScriptedHarness {
+            conflict: Some(ScriptedConflict {
+                task: "T003".into(),
+                check: check.into(),
+            }),
+            ..Default::default()
+        },
+        |_| {},
+    )
+    .await
+}
+
+/// Plays the fake goal with `harness`, after `before` prepares the project.
+async fn play(
+    harness: ScriptedHarness,
+    before: impl FnOnce(&Project),
+) -> (tempfile::TempDir, Project, String) {
     let work = tempfile::tempdir().unwrap();
     let (project, vcs) = fake_project(work.path(), &["maxAttempts=3"]);
-    let harness = ScriptedHarness {
-        conflict: Some(ScriptedConflict {
-            task: "T003".into(),
-            check: check.into(),
-        }),
-        ..Default::default()
-    };
+    before(&project);
     let clock = Arc::new(VirtualClock::new());
     run(
         &project,
@@ -76,12 +88,47 @@ async fn a_declared_conflict_blocks_the_task_and_a_replan_routes_it_to_an_amendi
         .filter(|e| matches!(&e.record, JournalRecord::Session(s) if s.label.ends_with("-builder-T003")))
         .count();
     assert_eq!(builders, 1, "T003 was retried after its conflict:\n{log}");
-    assert!(
-        !log.contains("no passing T003 check; asking for one"),
-        "the builder that declared a conflict was asked for a check:\n{log}"
-    );
     assert_eq!(status(&project, "T003"), "dropped");
     assert_eq!(status(&project, "T005"), "done");
+}
+
+/// A builder that declared a conflict stopped as told: it is not asked
+/// for a passing check, which would talk it out of the conflict.
+#[tokio::test(start_paused = true)]
+async fn a_builder_that_declared_a_conflict_is_not_asked_for_a_check() {
+    let (_work, _project, log) = declaring("T001.exists").await;
+    assert!(
+        !log.contains("no passing T003 check; asking for one"),
+        "{log}"
+    );
+}
+
+/// A conflict file left from before the attempt, here written before the
+/// run as one left when a blocked task is reopened, is not the attempt's:
+/// T003's attempts fail and it is split, with no conflict declared.
+#[tokio::test(start_paused = true)]
+async fn a_conflict_left_from_before_the_attempt_is_not_inherited() {
+    let harness = ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    };
+    let (_work, project, log) = play(harness, |project| {
+        project
+            .write(
+                ".tenaz/conflicts/T003.md",
+                "---\nchecks: [T001.exists]\n---\nOld.\n",
+            )
+            .unwrap();
+    })
+    .await;
+    assert!(
+        !project
+            .journal()
+            .iter()
+            .any(|e| matches!(e.record, JournalRecord::Conflict { .. })),
+        "{log}"
+    );
+    assert_eq!(status(&project, "T003"), "split", "{log}");
 }
 
 /// The conflict outlives the revert of the blocked task's work: later

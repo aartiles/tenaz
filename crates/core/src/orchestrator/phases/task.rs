@@ -281,9 +281,6 @@ impl Runner {
         if let Some(current) = &mut self.ledger.current {
             current.request_changes(attempt, text);
         }
-        // The attempt passed `verify`: a conflict it left was in nobody's way,
-        // and a later attempt must not inherit it.
-        self.project.remove(&conflict_path(task.id.as_str()))?;
         self.deps
             .vcs
             .commit_all(&format!("tenaz: review {} attempt {attempt}", task.id))?;
@@ -297,6 +294,9 @@ impl Runner {
         task: &TaskCard,
         attempt: u32,
     ) -> Result<Attempt, RunError> {
+        // A conflict belongs to the attempt that declares it: none is
+        // inherited from an earlier one, or from before the task was reopened.
+        self.project.remove(&conflict_path(task.id.as_str()))?;
         self.project.set_attempts(&task.id, attempt)?;
         let card = self.load_card(&task.id)?;
         let prompt = self.builder_prompt(backlog, &card, attempt).await?;

@@ -18,7 +18,8 @@ uses [Semantic Versioning](https://semver.org/).
   task's own checks, or with a task that is not done, does not stand: the
   attempt fails as before and the next builder is told why. A builder that
   declared a conflict is not asked for a passing check, and a conflict
-  left by an attempt that passed `verify` is removed. In the Lotion
+  belongs to the attempt that declares it: the file is removed when an
+  attempt starts. In the Lotion
   Pump run the builders of T016b measured that their card and a check of
   T016a could not both pass, and no session was allowed to change the
   check. The builder prompt no longer promises a replan for any other
