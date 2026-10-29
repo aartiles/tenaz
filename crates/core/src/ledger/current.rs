@@ -95,6 +95,14 @@ impl CurrentTask {
         self.failure = Some(with_stop_reason(&told, stopped));
     }
 
+    /// Adds `note` to what the next attempt is told of the last failure.
+    pub fn add_to_failure(&mut self, note: &str) {
+        if let Some(failure) = &mut self.failure {
+            failure.push_str("\n\n");
+            failure.push_str(note);
+        }
+    }
+
     /// Records that the reviewer of `attempt` asked for changes in `text`.
     pub fn request_changes(&mut self, attempt: u32, text: &str) {
         self.failure = Some(format!(

@@ -12,7 +12,8 @@ Name them `<TASK>a`, `<TASK>b`, and so on, with `parent: <TASK>` and
 `status: todo`. Each new card must fit the builder context budget below.
 If the history shows a wrong approach, choose a different one and say so in
 the card's Context. Do not contradict a measurement in the notes without
-saying why. A child may depend on the original card's dependencies
+saying why. A child that does the amending of a card with `amends` keeps
+that field. A child may depend on the original card's dependencies
 and on its siblings.
 
 You may also adjust other `todo` cards if the split changes their

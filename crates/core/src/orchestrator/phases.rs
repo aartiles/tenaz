@@ -5,9 +5,11 @@
 use std::time::Duration;
 
 use crate::briefing::{self, Briefing};
+use crate::conflict::Conflict;
+use crate::project::conflict_path;
 use crate::role::Role;
 use crate::spec;
-use crate::task::{TaskId, TaskStatus};
+use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
 use crate::verify::{VerifyOutcome, interpret, retarget};
 
@@ -32,6 +34,22 @@ struct PromptParts<'a> {
     /// The requirements to keep from the spec (`spec::cited`); the whole
     /// spec when empty.
     cites: &'a [String],
+}
+
+/// The briefing section that lists the checks a card may amend; the
+/// builder and reviewer prompts refer to it by this title.
+const AMENDS_TITLE: &str = "Checks this card may amend";
+
+/// The briefing section that shows a replan the conflicts that stood.
+pub const CONFLICTS_TITLE: &str = "Declared conflicts";
+
+/// A conflict as a briefing shows it: its path, then what its builder wrote.
+fn conflict_text(conflict: &Conflict) -> String {
+    format!(
+        "{}:\n\n{}",
+        conflict_path(conflict.task.as_str()),
+        conflict.text.trim()
+    )
 }
 
 impl Runner {
@@ -84,6 +102,55 @@ impl Runner {
         self.project
             .note(id)
             .map(|note| clip(note.trim(), self.params.note_clip_bytes))
+    }
+
+    /// The section that lists the checks of done tasks `card` may amend,
+    /// with the conflicts that named them (ADR 0009); `None` when it amends
+    /// none. The role prompts say what the builder and reviewer do with it.
+    fn amends_section(&self, card: &TaskCard) -> Option<(String, String)> {
+        if card.amends.is_empty() {
+            return None;
+        }
+        let checks = card
+            .amends
+            .iter()
+            .map(|check| format!("- `{check}`"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let backlog = self.project.load_backlog().backlog;
+        let conflicts = self
+            .project
+            .conflicts(&backlog)
+            .iter()
+            .filter(|conflict| {
+                card.amends
+                    .iter()
+                    .any(|check| conflict.checks.contains(check))
+            })
+            .map(conflict_text)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        Some((
+            AMENDS_TITLE.to_owned(),
+            format!("{checks}\n\nThe conflicts that named them:\n\n{conflicts}"),
+        ))
+    }
+
+    /// The section that shows a replan the conflicts that stood, so one
+    /// that did not see it happen still does (ADR 0009); `None` without any.
+    fn conflicts_section(&self) -> Option<(String, String)> {
+        let backlog = self.project.load_backlog().backlog;
+        let conflicts = self.project.conflicts(&backlog);
+        (!conflicts.is_empty()).then(|| {
+            (
+                CONFLICTS_TITLE.to_owned(),
+                conflicts
+                    .iter()
+                    .map(conflict_text)
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            )
+        })
     }
 
     /// Composes a prompt from the project's role prompt, spec and map, and

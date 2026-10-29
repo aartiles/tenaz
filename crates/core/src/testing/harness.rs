@@ -77,6 +77,11 @@ pub struct ScriptedHarness {
     /// first time the orchestrator asks it for its checks; with
     /// `forget_checks_task` naming the same task, so that it is asked.
     pub crash_on_checks_task: Option<String>,
+    /// The first builder session of this task (the first of the pair)
+    /// declares a conflict with this check (the second) and stops; the
+    /// first replan shown it adds `T005` (for R3, after T001, as T003 is),
+    /// which amends the check, and drops the task.
+    pub conflict: Option<(String, String)>,
     /// The first builder session for this task reasons until its reply is
     /// cut at the output limit, and the harness exits, as fx does.
     pub truncate_task: Option<String>,

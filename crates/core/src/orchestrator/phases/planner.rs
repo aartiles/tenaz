@@ -3,9 +3,11 @@
 //! blocked.
 
 use crate::backlog::Backlog;
+use crate::conflict::Conflict;
 use crate::ledger::{JournalEntry, JournalRecord, TaskOutcome};
 use crate::orchestrator::session::SessionCtx;
 use crate::orchestrator::{RunError, Runner};
+use crate::project::{conflict_path, note_path};
 use crate::role::Role;
 use crate::spec::coverage;
 use crate::task::{TaskCard, TaskId, TaskStatus};
@@ -92,6 +94,9 @@ impl Runner {
             "Recent orchestrator journal".to_owned(),
             self.recent_journal(),
         ));
+        if role == Role::Replan {
+            extra.extend(self.conflicts_section());
+        }
         if let Some(planner) = self.project.note("PLANNER") {
             extra.push(("Previous planner notes".to_owned(), planner));
         }
@@ -173,6 +178,46 @@ impl Runner {
         self.block_task(task, history)
     }
 
+    /// `task`'s builder declared at `attempt` that it cannot pass without
+    /// changing checks of done tasks: the task is blocked at once, and a
+    /// replan routes around it and may amend those checks (ADR 0009).
+    pub(super) async fn escalate_conflict(
+        &mut self,
+        task: &TaskCard,
+        attempt: u32,
+        conflict: Conflict,
+    ) -> Result<(), RunError> {
+        let checks = conflict.checks.join(", ");
+        self.log(&format!(
+            "  {} declares a conflict with done checks {checks}; a replan may amend them",
+            task.id
+        ));
+        let mut history = self
+            .ledger
+            .current
+            .as_ref()
+            .map(|c| c.history.clone())
+            .unwrap_or_default();
+        history.push(format!(
+            "Attempt {attempt}: declared a conflict with {checks}"
+        ));
+        self.revert_work(&task.id)?;
+        self.block_task(task, history)?;
+        self.journal(JournalRecord::Conflict {
+            task: task.id.clone(),
+            attempt,
+            checks: conflict.checks,
+        });
+        self.ledger.current = None;
+        self.save()?;
+        let why = format!(
+            "{} declared a conflict with checks of done tasks ({checks}) and is blocked. See \"Declared conflicts\".",
+            task.id
+        );
+        self.planner_session(Role::Replan, None, &why).await?;
+        Ok(())
+    }
+
     /// A split session for `task`. True when it was split into two or more
     /// tasks; a split into fewer is thrown away.
     async fn split_task(
@@ -227,13 +272,16 @@ impl Runner {
     }
 
     /// Reverts the work since the current task started, but keeps the
-    /// task's notes: they say what its attempts measured and ruled out,
-    /// which the split and later readers need.
+    /// task's notes and conflict: they say what its attempts measured and
+    /// ruled out, which the split, the replan and later readers need.
     fn revert_work(&self, id: &TaskId) -> Result<(), RunError> {
-        let notes = self.project.note(id.as_str());
+        let kept: Vec<(String, String)> = [note_path(id.as_str()), conflict_path(id.as_str())]
+            .into_iter()
+            .filter_map(|path| self.project.read_if(&path).map(|text| (path, text)))
+            .collect();
         self.deps.vcs.reset_hard(&self.current_base())?;
-        if let Some(notes) = notes {
-            self.project.write_note(id.as_str(), &notes)?;
+        for (path, text) in kept {
+            self.project.write(&path, &text)?;
         }
         Ok(())
     }

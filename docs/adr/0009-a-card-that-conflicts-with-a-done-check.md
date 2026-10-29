@@ -1,6 +1,6 @@
 # ADR 0009: A card that conflicts with a done check
 
-Status: proposed, 2026-10-29. Not implemented.
+Status: accepted, 2026-10-29.
 
 ## Context
 
@@ -83,21 +83,46 @@ act on them.
   The final review gets two cycles (`maxFinalCycles`). In this run the
   conflict came from a final-review card.
 
-## Recommendation
+## Decision
 
-**B**, with C as its fallback: when the amending card is blocked too, the
-task stays blocked with the conflict as its reason, as in C. A, in any
-case, changes the builder prompt so it does not promise what the
-orchestrator does not do.
+**B**, with C as its fallback: when the amending card is blocked too, it
+stays blocked, and so does the task, with the conflict in its history. The
+builder prompt no longer promises a replan for a task that cannot be done
+for any other reason.
 
-## Consequences if B is taken
+The conflict file has front matter `checks: [<check IDs>]` and a free
+body. It stands when every check belongs to a done task other than the
+builder's own; a task's own checks are its card to fix. It is read after
+an attempt fails `verify`. One that does not stand is logged, the next
+builder is told why, the file is removed, and the attempt counts as usual;
+a task that passes has its conflict file removed too. One that stands: the
+task's work is reverted with its notes and conflict kept, the task is
+blocked, the conflict is journaled (`conflict`: task, attempt, checks), and
+a replan runs. Every replan is shown the conflicts that stood, those of
+blocked or dropped tasks, under "Declared conflicts", so one after a pause
+or a rejected replan still sees them; only those conflicts license an
+`amends`. `amends` is checked whenever the
+backlog is loaded, for cards that are not done: a card naming a check no
+conflict names is an invalid card, which a replan must repair. The builder
+and reviewer of an amending card get a section "Checks this card may
+amend" with the checks and the conflicts that named them.
+
+Nothing stops the amending builder from changing other checks except the
+prompts, its review and the floor on passed checks, as for any builder.
+
+## Consequences
 
 - New file, role scope and validation: `.tenaz/conflicts/`, writable by
   the builder of its task. A card field `amends`, and validation that it
-  names existing checks. A new journal record `conflict` that scripts
-  can read, kept stable like the others.
+  names only checks a conflict names. A new journal record `conflict` that
+  scripts can read, kept stable like the others.
+- Tenaz does not list a project's checks, so it cannot tell that a named
+  check exists: only that it is written like one and belongs to a done
+  task. A conflict with a check that does not exist leads to a replan
+  that finds nothing to amend.
 - `protocol.md`, the builder, replan and reviewer prompts, `SKILL.md` and
   the README change with it.
 - Tested with the scripted harness, a builder that declares a conflict and
-  a replan that amends; not yet seen against a real model. Whether a small
+  a replan that amends, and one whose conflict does not stand; not yet seen
+  against a real model. Whether a small
   model declares conflicts at the right times is unknown until a run.

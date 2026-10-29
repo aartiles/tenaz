@@ -5,6 +5,7 @@
 pub mod backlog;
 pub mod briefing;
 pub mod cache_report;
+pub mod conflict;
 pub mod doctor;
 pub mod effort;
 pub mod lease;

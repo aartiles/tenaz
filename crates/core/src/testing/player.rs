@@ -272,7 +272,11 @@ impl Player {
             "BUILDER" => self.builder(&task, attempt).await,
             "REVIEWER" => self.reviewer(prompt, &task).await,
             "SPLIT" => self.split(&task).await,
-            "REPLAN" => self.replan().await,
+            "REPLAN" => {
+                if !self.amend(prompt).await {
+                    self.replan().await;
+                }
+            }
             "FINAL-REVIEWER" => {
                 self.write_tool(".tenaz/reviews/FINAL.md", "Verdict: ACCEPT\n", false)
                     .await;
@@ -337,6 +341,36 @@ impl Player {
         self.write_tool(".tenaz/notes/PLANNER.md", "Split.\n", false)
             .await;
         self.finish("Done.");
+    }
+
+    /// The first replan shown the conflict adds `T005`, which amends the
+    /// check in the way and does the blocked task's work, and drops the
+    /// blocked task.
+    async fn amend(&mut self, prompt: &str) -> bool {
+        let Some((task, check)) = self.script.conflict.clone() else {
+            return false;
+        };
+        let shown = format!("## {}", crate::orchestrator::CONFLICTS_TITLE);
+        if !prompt.contains(&shown) || self.cwd.join(".tenaz/tasks/T005.md").exists() {
+            return false;
+        }
+        let amending = card("T005", &["R3"], &["T001"], None).replacen(
+            "status: todo\n",
+            &format!("status: todo\namends: [{check}]\n"),
+            1,
+        );
+        self.write_tool(".tenaz/tasks/T005.md", &amending, false)
+            .await;
+        let path = format!(".tenaz/tasks/{task}.md");
+        let blocked = std::fs::read_to_string(self.cwd.join(&path)).unwrap_or_default();
+        self.write_tool(
+            &path,
+            &blocked.replace("status: blocked", "status: dropped"),
+            false,
+        )
+        .await;
+        self.finish("Amended.");
+        true
     }
 
     /// Changes nothing, but may edit a card out of its role.
@@ -677,6 +711,26 @@ impl Player {
             || self.stuck(task, attempt).await
             || self.stopped(task).await
             || self.failing(task).await
+            || self.conflicting(task).await
+    }
+
+    /// The first session of the script's conflict task declares its
+    /// conflict and stops.
+    async fn conflicting(&mut self, task: &str) -> bool {
+        let Some((at, check)) = self.script.conflict.clone() else {
+            return false;
+        };
+        if !self.first(Some(&at), "conflict", task) {
+            return false;
+        }
+        self.write_tool(
+            &format!(".tenaz/conflicts/{task}.md"),
+            &format!("---\nchecks: [{check}]\n---\n{task} and {check} cannot both pass.\n"),
+            false,
+        )
+        .await;
+        self.finish("Declared a conflict.");
+        true
     }
 
     /// A session stopped by a test, crashed, or cut at the output limit.

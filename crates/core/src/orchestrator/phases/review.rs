@@ -150,6 +150,7 @@ impl Runner {
             "Builder notes".to_owned(),
             self.project.note(task.as_str()).unwrap_or_default(),
         ));
+        extra.extend(self.amends_section(input.card));
         if !diff.images.is_empty() {
             extra.push((
                 "Images this change adds or replaces".to_owned(),

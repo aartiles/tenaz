@@ -19,6 +19,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 pub use init::{InitOptions, Templates, init};
+pub use phases::CONFLICTS_TITLE;
 pub use preflight::TOOL_PROBE_FILE;
 pub use sampler::Sampler;
 pub use status::{TOOL_REPAIRS, status_json, status_text};

@@ -647,6 +647,13 @@ pub enum JournalRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stopped_sessions: Option<Vec<StoppedAttempt>>,
     },
+    /// A builder declared that its task cannot pass without changing
+    /// these checks of done tasks (ADR 0009).
+    Conflict {
+        task: TaskId,
+        attempt: u32,
+        checks: Vec<String>,
+    },
     Verify {
         task: TaskId,
         attempt: u32,

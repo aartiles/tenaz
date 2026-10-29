@@ -3,9 +3,11 @@
 
 use crate::backlog::Backlog;
 use crate::briefing;
+use crate::conflict::Conflict;
 use crate::ledger::{CurrentTask, JournalRecord, StoppedAttempt, TaskOutcome};
 use crate::orchestrator::session::{SessionCtx, SessionResult};
 use crate::orchestrator::{RunError, Runner};
+use crate::project::conflict_path;
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::verify::{VerifyOutcome, judge_attempt};
@@ -79,6 +81,9 @@ impl Runner {
                     outgrown,
                 } => {
                     self.record_failure(attempt, &verify_failure, stopped.as_deref())?;
+                    if let Some(conflict) = self.declared_conflict(&task.id)? {
+                        return self.escalate_conflict(task, attempt, conflict).await;
+                    }
                     // Another attempt would meet the same budget: the task is too big for it.
                     if outgrown && self.splits_when_outgrown(&task.id) {
                         let why = format!(
@@ -184,6 +189,30 @@ impl Runner {
             current.fail(attempt, verify_failure, stopped);
         }
         self.save()
+    }
+
+    /// The conflict the task's builder declared, when it stands. One that
+    /// does not is logged and removed, and the next attempt is told why.
+    fn declared_conflict(&mut self, id: &TaskId) -> Result<Option<Conflict>, RunError> {
+        let Some(text) = self.project.conflict_text(id) else {
+            return Ok(None);
+        };
+        let backlog = self.project.load_backlog().backlog;
+        let why = match Conflict::read(id, &text) {
+            Ok(conflict) => match conflict.validate(&backlog) {
+                Ok(()) => return Ok(Some(conflict)),
+                Err(why) => why,
+            },
+            Err(why) => why,
+        };
+        let path = conflict_path(id.as_str());
+        self.log(&format!("  {id}: {path} does not stand: {why}"));
+        self.project.remove(&path)?;
+        if let Some(current) = &mut self.ledger.current {
+            current.add_to_failure(&format!("Your {path} does not stand: {why}."));
+        }
+        self.save()?;
+        Ok(None)
     }
 
     /// Commits a passed attempt and, when the run reviews, has it reviewed.
@@ -406,6 +435,8 @@ impl Runner {
         attempt: u32,
         reviewed: bool,
     ) -> Result<(), RunError> {
+        // A task that passed was in nobody's way.
+        self.project.remove(&conflict_path(task.id.as_str()))?;
         self.checkpoint_task(
             &task.id,
             TaskStatus::Done,
@@ -464,6 +495,7 @@ impl Runner {
     ) -> Result<String, RunError> {
         let card = &loaded.card;
         let mut extra = self.builder_notes(backlog, card);
+        extra.extend(self.amends_section(card));
         extra.extend(self.previous_failure()?);
         extra.push((
             "Latest ./verify --all".to_owned(),

@@ -1,6 +1,7 @@
 //! Whole runs against the scripted harness and the in-memory fakes: no
 //! git, no shell (ADR 0005).
 
+mod conflict;
 mod harness_exit;
 mod scripted_run;
 mod stop_grace;

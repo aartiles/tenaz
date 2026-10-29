@@ -8,6 +8,19 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- A builder whose task cannot pass without changing a check of a done task
+  writes `.tenaz/conflicts/<TASK>.md` naming those checks and stops. Tenaz
+  blocks the task at once, without more attempts or a split, journals a
+  `conflict` record, and starts a replan that is shown the conflict. The
+  replan may add a card with `amends: [<check IDs>]`, naming only checks a
+  conflict names; its builder may change those checks and no others, and
+  its reviewer judges each change against the spec. A conflict with the
+  task's own checks, or with a task that is not done, does not stand: the
+  attempt fails as before and the next builder is told why. In the Lotion
+  Pump run the builders of T016b measured that their card and a check of
+  T016a could not both pass, and no session was allowed to change the
+  check. The builder prompt no longer promises a replan for any other
+  task that cannot be done. See ADR 0009.
 - Without the sandbox, a write tool that names a file outside the project,
   the temporary directories and `sandboxAllowWrite` is noted: a line in
   `orchestrator.log`, `outside_writes` and an `outside-write` watchdog
