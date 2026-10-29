@@ -43,15 +43,6 @@ const AMENDS_TITLE: &str = "Checks this card may amend";
 /// The briefing section that shows a replan the conflicts that stood.
 pub const CONFLICTS_TITLE: &str = "Declared conflicts";
 
-/// A conflict as a briefing shows it: its path, then what its builder wrote.
-fn conflict_text(conflict: &Conflict) -> String {
-    format!(
-        "{}:\n\n{}",
-        conflict_path(conflict.task.as_str()),
-        conflict.text.trim()
-    )
-}
-
 impl Runner {
     /// `./verify` with `args`, judged as its contract says.
     pub(crate) async fn run_verify(&self, args: &[&str]) -> VerifyOutcome {
@@ -127,13 +118,23 @@ impl Runner {
                     .iter()
                     .any(|check| conflict.checks.contains(check))
             })
-            .map(conflict_text)
+            .map(|conflict| self.shown_conflict(conflict))
             .collect::<Vec<_>>()
             .join("\n\n");
         Some((
             AMENDS_TITLE.to_owned(),
             format!("{checks}\n\nThe conflicts that named them:\n\n{conflicts}"),
         ))
+    }
+
+    /// A conflict as a briefing shows it: its path, then what its builder
+    /// wrote, clipped like notes.
+    fn shown_conflict(&self, conflict: &Conflict) -> String {
+        format!(
+            "{}:\n\n{}",
+            conflict_path(conflict.task.as_str()),
+            clip(conflict.text.trim(), self.params.note_clip_bytes)
+        )
     }
 
     /// The section that shows a replan the conflicts that stood, so one
@@ -146,7 +147,7 @@ impl Runner {
                 CONFLICTS_TITLE.to_owned(),
                 conflicts
                     .iter()
-                    .map(conflict_text)
+                    .map(|conflict| self.shown_conflict(conflict))
                     .collect::<Vec<_>>()
                     .join("\n\n"),
             )

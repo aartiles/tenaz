@@ -16,7 +16,9 @@ uses [Semantic Versioning](https://semver.org/).
   conflict names; its builder may change those checks and no others, and
   its reviewer judges each change against the spec. A conflict with the
   task's own checks, or with a task that is not done, does not stand: the
-  attempt fails as before and the next builder is told why. In the Lotion
+  attempt fails as before and the next builder is told why. A builder that
+  declared a conflict is not asked for a passing check, and a conflict
+  left by an attempt that passed `verify` is removed. In the Lotion
   Pump run the builders of T016b measured that their card and a check of
   T016a could not both pass, and no session was allowed to change the
   check. The builder prompt no longer promises a replan for any other

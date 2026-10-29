@@ -277,6 +277,9 @@ impl Runner {
         if let Some(current) = &mut self.ledger.current {
             current.request_changes(attempt, text);
         }
+        // The attempt passed `verify`: a conflict it left was in nobody's way,
+        // and a later attempt must not inherit it.
+        self.project.remove(&conflict_path(task.id.as_str()))?;
         self.deps
             .vcs
             .commit_all(&format!("tenaz: review {} attempt {attempt}", task.id))?;

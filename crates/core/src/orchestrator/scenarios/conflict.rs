@@ -74,6 +74,10 @@ async fn a_declared_conflict_blocks_the_task_and_a_replan_amends_the_check() {
         .filter(|e| matches!(&e.record, JournalRecord::Session(s) if s.label.ends_with("-builder-T003")))
         .count();
     assert_eq!(builders, 1, "T003 was retried after its conflict:\n{log}");
+    assert!(
+        !log.contains("no passing T003 check; asking for one"),
+        "the builder that declared a conflict was asked for a check:\n{log}"
+    );
     assert_eq!(status(&project, "T003"), "dropped");
     assert_eq!(status(&project, "T005"), "done");
     assert!(
