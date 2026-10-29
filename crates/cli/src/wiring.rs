@@ -233,7 +233,7 @@ pub async fn wire(
     });
     let mut lease = LeaseManager::new(
         engine_adapter.clone(),
-        config.id.clone(),
+        config.model_ids(),
         gate.clone(),
         observer,
     );

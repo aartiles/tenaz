@@ -54,6 +54,18 @@ impl ModelConfig {
         }
     }
 
+    /// The ids of the models the run's sessions play, the run's first,
+    /// each once.
+    pub fn model_ids(&self) -> Vec<String> {
+        let mut ids = vec![self.id.clone()];
+        for model in self.role_models.values() {
+            if !ids.contains(&model.id) {
+                ids.push(model.id.clone());
+            }
+        }
+        ids
+    }
+
     /// The largest context window of the run's models.
     pub fn largest_context_window(&self) -> u64 {
         self.role_models
@@ -92,5 +104,24 @@ mod tests {
                 supports_images: true,
             }
         );
+    }
+
+    #[test]
+    fn the_run_s_models_are_listed_once_each_the_run_s_first() {
+        let mut config = config();
+        config
+            .role_models
+            .insert(Role::Reviewer, role_model("r", 65536));
+        config
+            .role_models
+            .insert(Role::FinalReviewer, role_model("r", 65536));
+        config
+            .role_models
+            .insert(Role::Bootstrap, role_model("b", 65536));
+        config
+            .role_models
+            .insert(Role::Split, role_model("m", 65536));
+        // The roles in their order after the run's: bootstrap before reviewer.
+        assert_eq!(config.model_ids(), ["m", "b", "r"]);
     }
 }

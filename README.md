@@ -86,10 +86,13 @@ project's own tests.
 - **Watchdogs.** Loops, repeated calls, idle turns and huge outputs get a
   steering message first, then the session is stopped. A file written
   outside the project is logged and the session told so.
-- **One resident model.** When the agent asks for an image, Tenaz unloads the
-  LLM, runs the image model, frees it and reloads the LLM. The agent's
-  requests wait meanwhile instead of failing. See [Images](#images) for
-  what that needs from your engine.
+- **One resident model.** When the agent asks for an image, Tenaz unloads
+  the LLM, runs the image model, frees it and reloads the LLM. With
+  `--model-for`, every model named must be loaded at once: Tenaz checks
+  before the first session (loading what it can, as for `--model`), does
+  not swap between them, and frees and reloads them all around an image. The
+  agent's requests wait meanwhile instead of failing. See [Images](#images)
+  for what that needs from your engine.
 - **Pause and resume.** Ctrl-C pauses after the current session; run again
   to continue.
 
@@ -397,10 +400,13 @@ depends on the engine:
   - `--engine-stop` frees the memory, for example by stopping the engine's
     process. Tenaz runs it, then waits until the model is no longer listed
     at `/v1/models` (or the engine stops answering).
-  - `--engine-start` brings the engine back with the same model. It must
-    return once the engine is launched, so start a server process in the
-    background. Tenaz then waits up to 20 minutes for the model to be
-    listed again.
+  - `--engine-start` brings the engine back with the same model (with
+    `--model-for`, every model of the run). It must return once the engine
+    is launched, so start a server process in the background. Tenaz runs
+    it once when the engine does not answer or has none of the models
+    loaded, then waits up to 20 minutes for them to be listed again. An
+    engine that has only some of them loaded is running, so it is not
+    started a second time: `tenaz run` names the missing ones.
 
   Both are whole command lines, run as your user. Without both, the LLM
   stays loaded and serving while the image renders, so the memory has to

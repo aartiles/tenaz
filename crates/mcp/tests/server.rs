@@ -2,6 +2,7 @@
 //! against fake engines under a real lease manager.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -18,26 +19,43 @@ use tenaz_mcp::{MediaTools, serve};
 #[derive(Default)]
 struct Log(Mutex<Vec<String>>);
 
-struct FakeLlm(Arc<Log>);
+/// An engine with the one model `m`, loaded until it is unloaded.
+struct FakeLlm {
+    log: Arc<Log>,
+    loaded: AtomicBool,
+}
+
+impl FakeLlm {
+    fn new(log: Arc<Log>) -> Self {
+        Self {
+            log,
+            loaded: AtomicBool::new(true),
+        }
+    }
+}
+
 #[async_trait]
 impl EngineAdapter for FakeLlm {
     fn name(&self) -> &str {
         "fake"
     }
     async fn models(&self) -> Result<Vec<ModelState>, EngineError> {
+        let loaded = self.loaded.load(Ordering::SeqCst);
         Ok(vec![ModelState {
             id: "m".into(),
-            loaded: true,
-            ready: true,
+            loaded,
+            ready: loaded,
             context_length: None,
         }])
     }
     async fn load(&self, _model: &str) -> Result<(), EngineError> {
-        self.0.0.lock().unwrap().push("llm load".into());
+        self.log.0.lock().unwrap().push("llm load".into());
+        self.loaded.store(true, Ordering::SeqCst);
         Ok(())
     }
     async fn unload(&self, _model: &str) -> Result<(), EngineError> {
-        self.0.0.lock().unwrap().push("llm unload".into());
+        self.log.0.lock().unwrap().push("llm unload".into());
+        self.loaded.store(false, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -96,8 +114,8 @@ async fn generate_image_takes_the_lease_and_returns_paths() {
     let log = Arc::new(Log::default());
     let lease = Arc::new(
         LeaseManager::new(
-            Arc::new(FakeLlm(log.clone())),
-            "m",
+            Arc::new(FakeLlm::new(log.clone())),
+            vec!["m".to_owned()],
             Gate::new(),
             Arc::new(|_| {}),
         )
@@ -199,8 +217,8 @@ async fn without_workflows_the_request_goes_to_the_engine_as_it_is() {
     let log = Arc::new(Log::default());
     let lease = Arc::new(
         LeaseManager::new(
-            Arc::new(FakeLlm(log.clone())),
-            "m",
+            Arc::new(FakeLlm::new(log.clone())),
+            vec!["m".to_owned()],
             Gate::new(),
             Arc::new(|_| {}),
         )

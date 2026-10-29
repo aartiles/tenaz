@@ -9,9 +9,14 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, run};
 use crate::briefing;
+use crate::lease::{Gate, LeaseManager};
 use crate::ledger::{JournalRecord, SessionRecord};
+use crate::orchestrator::{RunError, RunOptions, Runner};
 use crate::params::RunParams;
-use crate::ports::{Harness, HarnessError, HarnessInfo, Session, SessionModel, SessionSpec};
+use crate::ports::{
+    EngineAdapter, EngineError, Harness, HarnessError, HarnessInfo, ModelState, Session,
+    SessionModel, SessionSpec,
+};
 use crate::project::Project;
 use crate::role::Role;
 use crate::role_models::RoleModel;
@@ -246,4 +251,189 @@ async fn sessions_under_the_cap_do_not_count_toward_a_raise() {
         run.records[raised]
     );
     assert!(held.contains(&21299), "{held:?}");
+}
+
+/// An engine that lists the run's model `fake` and the critic, each loaded
+/// or not, or does not answer; it loads nothing.
+struct Listing {
+    run_loaded: bool,
+    critic_loaded: bool,
+    down: bool,
+}
+
+#[async_trait]
+impl EngineAdapter for Listing {
+    fn name(&self) -> &str {
+        "listing"
+    }
+
+    async fn models(&self) -> Result<Vec<ModelState>, EngineError> {
+        if self.down {
+            return Err(EngineError::Unreachable("connection refused".into()));
+        }
+        let model = |id: &str, loaded| ModelState {
+            id: id.into(),
+            loaded,
+            ready: loaded,
+            context_length: None,
+        };
+        Ok(vec![
+            model("fake", self.run_loaded),
+            model("critic", self.critic_loaded),
+        ])
+    }
+
+    async fn load(&self, _model: &str) -> Result<(), EngineError> {
+        Err(EngineError::Refused("no load API".into()))
+    }
+
+    async fn unload(&self, _model: &str) -> Result<(), EngineError> {
+        Err(EngineError::Refused("no load API".into()))
+    }
+}
+
+/// How a run meets the `Listing` engine.
+struct OnEngine {
+    /// The reviewer plays the critic.
+    critic: bool,
+    engine: Listing,
+    /// Through a lease, as every run on a real engine does.
+    lease: bool,
+}
+
+impl OnEngine {
+    /// The reviewer on the critic, with the critic loaded or not.
+    fn critic(critic_loaded: bool, lease: bool) -> Self {
+        Self {
+            critic: true,
+            engine: Listing {
+                run_loaded: true,
+                critic_loaded,
+                down: false,
+            },
+            lease,
+        }
+    }
+}
+
+/// Runs a project on the `Listing` engine as `on` says.
+async fn run_on(on: OnEngine) -> (tempfile::TempDir, Project, Result<(), RunError>) {
+    let work = tempfile::tempdir().unwrap();
+    let (project, vcs) = fake_project(work.path(), &[]);
+    let mut ledger = project.load_ledger().unwrap();
+    if on.critic {
+        ledger
+            .config
+            .role_models
+            .insert(Role::Reviewer, role_model("critic", 65536));
+    }
+    project.save_ledger(&ledger).unwrap();
+    let mut deps = deps(
+        &project,
+        vcs,
+        Arc::new(ScriptedHarness::default()),
+        Arc::new(VirtualClock::new()),
+    );
+    let engine = Arc::new(on.engine);
+    if on.lease {
+        let ids = ledger.config.model_ids();
+        let lease = LeaseManager::new(engine.clone(), ids, Gate::new(), Arc::new(|_| {}));
+        deps.lease = Some(Arc::new(lease));
+    }
+    deps.engine = Some(engine);
+    let mut runner = Runner::open(project.clone(), deps, CancellationToken::new()).unwrap();
+    let result = runner
+        .run(RunOptions {
+            runner_version: "test".into(),
+            ..Default::default()
+        })
+        .await;
+    (work, project, result)
+}
+
+fn refusal(result: Result<(), RunError>) -> String {
+    match result {
+        Err(RunError::Precondition(message)) => message,
+        other => panic!("not refused: {other:?}"),
+    }
+}
+
+fn no_session(project: &Project) -> bool {
+    project
+        .journal()
+        .iter()
+        .all(|e| !matches!(e.record, JournalRecord::Session(_)))
+}
+
+/// A role's model the engine has not loaded, and cannot load, stops the
+/// run before its first session, named.
+#[tokio::test(start_paused = true)]
+async fn a_run_does_not_start_until_every_role_s_model_is_loaded() {
+    let (_work, project, result) = run_on(OnEngine::critic(false, true)).await;
+    let message = refusal(result);
+    assert!(
+        message.starts_with("Model critic is not being served at "),
+        "{message}"
+    );
+    assert!(
+        message.contains(" (loading failed: engine refused: critic: no load API). "),
+        "{message}"
+    );
+    assert!(no_session(&project));
+}
+
+/// Without a lease the engine's list is checked, and the message says
+/// every model must be loaded at once.
+#[tokio::test(start_paused = true)]
+async fn the_missing_models_are_named_with_the_engine_s_address() {
+    let (_work, project, result) = run_on(OnEngine::critic(false, false)).await;
+    let message = refusal(result);
+    assert!(
+        message.starts_with("Model critic is not being served at "),
+        "{message}"
+    );
+    assert!(
+        message.ends_with(
+            "Start the inference server first, with every model of the run loaded at once."
+        ),
+        "{message}"
+    );
+    assert!(no_session(&project));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_starts_when_every_role_s_model_is_loaded() {
+    let (_work, project, result) = run_on(OnEngine::critic(true, true)).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert!(!no_session(&project));
+}
+
+/// A run of one model gets no word about loading several at once, and an
+/// engine that does not answer is named as such.
+#[tokio::test(start_paused = true)]
+async fn one_model_s_refusal_says_only_what_is_missing() {
+    let alone = |run_loaded, down| OnEngine {
+        critic: false,
+        engine: Listing {
+            run_loaded,
+            critic_loaded: false,
+            down,
+        },
+        lease: false,
+    };
+    let (_work, _project, result) = run_on(alone(false, false)).await;
+    let message = refusal(result);
+    assert!(
+        message.starts_with("Model fake is not being served at "),
+        "{message}"
+    );
+    assert!(
+        message.ends_with(". Start the inference server first."),
+        "{message}"
+    );
+    let (_work, _project, result) = run_on(alone(true, true)).await;
+    assert_eq!(
+        refusal(result),
+        "Model fake is not being served (engine unreachable: connection refused). Start the inference server first."
+    );
 }

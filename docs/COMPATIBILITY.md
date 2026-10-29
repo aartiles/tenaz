@@ -111,7 +111,11 @@ above), so a 32k context is the practical floor (`contextFloor`).
   each session's model: its `settings.json` is rewritten before the
   session starts. Tested with an in-process ACP agent and the scripted
   harness; not yet run against a real fx with two models served by one
-  engine, nor checked whether fx writes `settings.json` itself. Not with
+  engine, nor checked whether fx writes `settings.json` itself. The check
+  that every model is loaded, and the lease freeing and reloading them
+  around an image, are tested with fake engines and a stand-in server for
+  the generic engine's commands, not against Kapitsa, mlx-serve or a
+  generic engine holding two models. Not with
   Pi: `init` refuses the map, and Pi refuses a session on another model
   than the one it was set up for.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with

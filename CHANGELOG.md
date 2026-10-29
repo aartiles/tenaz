@@ -25,6 +25,15 @@ uses [Semantic Versioning](https://semver.org/).
   is raised toward the largest model's budget, and a session whose budget
   was already under the lowered one does not count toward that raise. See
   ADR 0010.
+- With `--model-for`, every model of the run must be loaded before the
+  first session. Tenaz loads those that are not, as it does the run's model
+  (a load API, or a generic engine's start command), and `tenaz run` stops
+  and names any it could not load. Around an image job the lease frees
+  every model and loads them all back.
+- A generic engine's stop and start commands run once around an image job,
+  however many models it serves, and Tenaz waits for every one of them. An
+  engine that serves only some of the run's models is not started a second
+  time: `tenaz run` stops and names the others.
 - A builder whose task cannot pass without changing a check of a done task
   writes `.tenaz/conflicts/<TASK>.md` naming those checks and stops. Tenaz
   blocks the task at once, without more attempts or a split, journals a

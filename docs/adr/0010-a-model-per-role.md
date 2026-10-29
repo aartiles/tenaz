@@ -39,10 +39,10 @@ model. It cannot give the review to another family.
   model's window.
 - A role's model reads images when the run's does (`--vision`): there is
   no flag per role for it.
-- One engine serves every model in the map. The preflight and `doctor`
-  check that the engine lists each one as loaded, and name the one that
-  is not. Tenaz does not swap between them: the lease still unloads the
-  LLMs only for a media job, and then all of them.
+- One engine serves every model in the map. Before the first session
+  Tenaz checks that the engine lists each one as loaded, and names the
+  ones that are not. Tenaz does not swap between them: the lease still
+  unloads the LLMs only for a media job, and then all of them.
 - fx is the harness covered. `init` refuses a map with `--harness pi`.
 
 ### C. Swap the models through the lease
@@ -64,9 +64,8 @@ B. C is deferred until a machine needs it; the map does not get in its
 way. D is rejected.
 
 B lands in steps: `init` pins the map and `status` shows it; then the
-sessions run their role's model, fx with them; then the preflight,
-`doctor` and the lease handle each model. Until that last step, a media
-job frees and reloads only the run's model.
+sessions run their role's model, fx with them; then the check before the
+first session and the media lease handle every model.
 
 One engine per run, as before. The capacity cap the engine sets after it
 runs out of memory (`context_cap`) stays one for the run, whichever
@@ -82,6 +81,8 @@ model's session hit it.
   flag.
 - Running the preflight's probes (reasoning, cache, a tool call, an image)
   on each role's model. They run on the run's model.
+- `tenaz doctor` checking a run's map: it runs before `init` and knows no
+  run.
 
 ## Consequences
 
