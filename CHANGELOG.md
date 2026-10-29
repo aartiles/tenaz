@@ -41,11 +41,12 @@ uses [Semantic Versioning](https://semver.org/).
   (`attempt`, `text`).
 - A builder whose previous attempt failed `verify` word for word as an
   earlier one is told so. If `verify` reports a measurement, nothing done
-  since moved it: change the approach, or say in the notes why the card
-  cannot be done, and stop. In the Lotion Pump run the three attempts of
-  T016b each left the scene at its starting numbers. The task is not
-  escalated any sooner: a check that only says `exit 1` reads the same
-  while real work goes on.
+  since moved it: change the approach; or, when the card cannot pass
+  without changing a check of a done task, declare the conflict (see
+  "Added"); or say in the notes why the card cannot be done, and stop. In
+  the Lotion Pump run the three attempts of T016b each left the scene at
+  its starting numbers. The task is not escalated any sooner: a check
+  that only says `exit 1` reads the same while real work goes on.
 
 ### Fixed
 

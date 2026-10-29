@@ -124,8 +124,10 @@ fn repeat_note(first: u32) -> String {
     format!(
         "`verify` printed this word for word after attempt {first} too. If it \
          reports a measurement, nothing done since moved it: do not try the same \
-         approach again. Change it, or, if the card cannot be done as written, \
-         say why in your notes with what you measured, and stop."
+         approach again. Change it. If the card cannot pass without changing a \
+         check of a done task, write `.tenaz/conflicts/<TASK>.md` (see the \
+         protocol) and stop; if it cannot be done for another reason, say why \
+         in your notes with what you measured, and stop."
     )
 }
 
