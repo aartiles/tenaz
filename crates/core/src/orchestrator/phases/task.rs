@@ -3,13 +3,14 @@
 
 use crate::backlog::Backlog;
 use crate::briefing;
+use crate::conflict::Conflict;
 use crate::ledger::{CurrentTask, JournalRecord, StoppedAttempt, TaskOutcome};
 use crate::orchestrator::session::{SessionCtx, SessionResult};
 use crate::orchestrator::{RunError, Runner};
+use crate::project::conflict_path;
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId, TaskStatus};
-use crate::util::clip;
-use crate::verify::{VerifyOutcome, judge_attempt, with_stop_reason};
+use crate::verify::{VerifyOutcome, judge_attempt};
 
 use super::PromptParts;
 use super::review::{Review, ReviewInput};
@@ -41,9 +42,12 @@ struct Work {
 /// How a builder attempt ended.
 enum Attempt {
     Passed(Box<Built>),
-    /// `outgrown`: its session used up the context continuations.
     Failed {
-        failure: String,
+        /// What `verify` said.
+        verify_failure: String,
+        /// Why the orchestrator stopped the builder, if it did.
+        stopped: Option<String>,
+        /// Its session used up the context continuations.
         outgrown: bool,
     },
 }
@@ -71,8 +75,15 @@ impl Runner {
                 return self.escalate_current(task, &why).await;
             };
             match outcome {
-                Attempt::Failed { failure, outgrown } => {
-                    self.record_failure(attempt, failure)?;
+                Attempt::Failed {
+                    verify_failure,
+                    stopped,
+                    outgrown,
+                } => {
+                    self.record_failure(attempt, &verify_failure, stopped.as_deref())?;
+                    if let Some(conflict) = self.declared_conflict(&task.id)? {
+                        return self.escalate_conflict(task, attempt, conflict).await;
+                    }
                     // Another attempt would meet the same budget: the task is too big for it.
                     if outgrown && self.splits_when_outgrown(&task.id) {
                         let why = format!(
@@ -143,14 +154,7 @@ impl Runner {
             .deps
             .vcs
             .commit_all(&format!("tenaz: start {}", task.id))?;
-        self.ledger.current = Some(CurrentTask {
-            task: task.id.clone(),
-            base,
-            history: Vec::new(),
-            failure: None,
-            stopped: Vec::new(),
-            in_review: None,
-        });
+        self.ledger.current = Some(CurrentTask::new(task.id.clone(), base));
         self.save()
     }
 
@@ -163,26 +167,56 @@ impl Runner {
     /// Splits or blocks `task` with the history of its attempts, and
     /// leaves it.
     async fn escalate_current(&mut self, task: &TaskCard, why: &str) -> Result<(), RunError> {
-        let history = self
-            .ledger
-            .current
-            .as_ref()
-            .map(|c| c.history.clone())
-            .unwrap_or_default();
+        let history = self.current_history();
         self.escalate(task, history, why).await?;
         self.ledger.current = None;
         self.save()
     }
 
+    /// The history of the current task's attempts.
+    pub(super) fn current_history(&self) -> Vec<String> {
+        self.ledger
+            .current
+            .as_ref()
+            .map(|c| c.history.clone())
+            .unwrap_or_default()
+    }
+
     /// Records a failed attempt: the next one is told its failure.
-    fn record_failure(&mut self, attempt: u32, failure: String) -> Result<(), RunError> {
+    fn record_failure(
+        &mut self,
+        attempt: u32,
+        verify_failure: &str,
+        stopped: Option<&str>,
+    ) -> Result<(), RunError> {
         if let Some(current) = &mut self.ledger.current {
-            current
-                .history
-                .push(format!("Attempt {attempt}: {}", clip(&failure, 1500)));
-            current.failure = Some(failure);
+            current.fail(attempt, verify_failure, stopped);
         }
         self.save()
+    }
+
+    /// The conflict the task's builder declared, when it stands. One that
+    /// does not is logged and removed, and the next attempt is told why.
+    fn declared_conflict(&mut self, id: &TaskId) -> Result<Option<Conflict>, RunError> {
+        let Some(text) = self.project.conflict_text(id.as_str()) else {
+            return Ok(None);
+        };
+        let backlog = self.project.load_backlog().backlog;
+        let why = match Conflict::read(id, &text) {
+            Ok(conflict) => match conflict.validate(&backlog) {
+                Ok(()) => return Ok(Some(conflict)),
+                Err(why) => why,
+            },
+            Err(why) => why,
+        };
+        let path = conflict_path(id.as_str());
+        self.log(&format!("  {id}: {path} does not stand: {why}"));
+        self.project.remove(&path)?;
+        if let Some(current) = &mut self.ledger.current {
+            current.add_to_failure(&format!("Your {path} does not stand: {why}."));
+        }
+        self.save()?;
+        Ok(None)
     }
 
     /// Commits a passed attempt and, when the run reviews, has it reviewed.
@@ -245,14 +279,7 @@ impl Runner {
         text: &str,
     ) -> Result<(), RunError> {
         if let Some(current) = &mut self.ledger.current {
-            current.failure = Some(format!(
-                "The reviewer requested changes:\n{}",
-                clip(text, 3000)
-            ));
-            current.history.push(format!(
-                "Attempt {attempt}: review requested changes:\n{}",
-                clip(text, 1500)
-            ));
+            current.request_changes(attempt, text);
         }
         self.deps
             .vcs
@@ -267,6 +294,9 @@ impl Runner {
         task: &TaskCard,
         attempt: u32,
     ) -> Result<Attempt, RunError> {
+        // A conflict belongs to the attempt that declares it: none is
+        // inherited from an earlier one, or from before the task was reopened.
+        self.project.remove(&conflict_path(task.id.as_str()))?;
         self.project.set_attempts(&task.id, attempt)?;
         let card = self.load_card(&task.id)?;
         let prompt = self.builder_prompt(backlog, &card, attempt).await?;
@@ -330,11 +360,8 @@ impl Runner {
         } = work;
         let all = self.run_verify(&["--all"]).await;
         let own = self.run_verify(&["--task", task.id.as_str()]).await;
-        let failure = with_stop_reason(
-            judge_attempt(task.id.as_str(), &all, &own, self.ledger.passed_checks),
-            stopped.as_deref(),
-        );
-        if let (Some(stopped), None) = (&stopped, &failure) {
+        let verify_failure = judge_attempt(task.id.as_str(), &all, &own, self.ledger.passed_checks);
+        if let (Some(stopped), None) = (&stopped, &verify_failure) {
             self.record_stopped(attempt, stopped);
         }
         self.journal(JournalRecord::Verify {
@@ -346,8 +373,12 @@ impl Runner {
             all: all.json.clone(),
             task_json: own.json.clone(),
         });
-        Ok(match failure {
-            Some(failure) => Attempt::Failed { failure, outgrown },
+        Ok(match verify_failure {
+            Some(verify_failure) => Attempt::Failed {
+                verify_failure,
+                stopped,
+                outgrown,
+            },
             None => Attempt::Passed(Box::new(Built {
                 loaded,
                 all,
@@ -411,6 +442,8 @@ impl Runner {
         attempt: u32,
         reviewed: bool,
     ) -> Result<(), RunError> {
+        // A task that passed was in nobody's way.
+        self.project.remove(&conflict_path(task.id.as_str()))?;
         self.checkpoint_task(
             &task.id,
             TaskStatus::Done,
@@ -469,6 +502,7 @@ impl Runner {
     ) -> Result<String, RunError> {
         let card = &loaded.card;
         let mut extra = self.builder_notes(backlog, card);
+        extra.extend(self.amends_section(card));
         extra.extend(self.previous_failure()?);
         extra.push((
             "Latest ./verify --all".to_owned(),
@@ -519,11 +553,8 @@ impl Runner {
         if !notes.is_empty() && self.params.briefing {
             extra.push(("Notes from earlier tasks".to_owned(), notes));
         }
-        if let Some(own) = self.project.note(card.id.as_str()) {
-            extra.push((
-                "Your notes from earlier attempts".to_owned(),
-                clip(own.trim(), self.params.note_clip_bytes),
-            ));
+        if let Some(own) = self.clipped_note(card.id.as_str()) {
+            extra.push(("Your notes from earlier attempts".to_owned(), own));
         }
         extra
     }

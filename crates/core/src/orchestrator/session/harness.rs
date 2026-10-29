@@ -164,8 +164,13 @@ impl SessionLoop<'_> {
     /// `./verify --task` runs no passing check of its task; `None` when it
     /// does, or after the first time. The attempt would fail on that alone,
     /// and the session still holds what it learned, so it adds them now.
+    /// A builder that declared a conflict stopped as it was told: asking it
+    /// for a passing check would talk it out of the conflict (ADR 0009).
     async fn own_checks_prompt(&mut self) -> Option<String> {
         let task = self.own_checks.take()?;
+        if self.runner.project.conflict_text(task.as_str()).is_some() {
+            return None;
+        }
         let own = self.runner.run_verify(&["--task", task.as_str()]).await;
         if own.passed() > 0 {
             return None;
@@ -184,7 +189,7 @@ impl SessionLoop<'_> {
     /// done, killed, or its stream ends.
     async fn run(&mut self) -> Result<(), RunError> {
         if let Some(first) = self.prompts.first() {
-            self.session.prompt(first).await?;
+            self.send(first).await?;
             self.prompt_index = 1;
         }
         loop {
@@ -305,14 +310,14 @@ impl SessionLoop<'_> {
         if let Some(note) = self.resume.take()
             && !self.ending()
         {
-            self.session.prompt(&note).await?;
+            self.send(&note).await?;
             return Ok(Flow::Go);
         }
         if aborted || self.ending() {
             return Ok(Flow::Stop);
         }
         if let Some(next) = self.prompts.get(self.prompt_index) {
-            self.session.prompt(next).await?;
+            self.send(next).await?;
             self.prompt_index += 1;
             return Ok(Flow::Go);
         }
@@ -323,8 +328,14 @@ impl SessionLoop<'_> {
             "own-checks",
             self.clock.monotonic_ms().saturating_sub(self.started),
         );
-        self.session.prompt(&message).await?;
+        self.send(&message).await?;
         Ok(Flow::Go)
+    }
+
+    /// Sends `text` as the session's next prompt.
+    async fn send(&mut self, text: &str) -> Result<(), RunError> {
+        self.watchdog.prompted();
+        Ok(self.session.prompt(text).await?)
     }
 
     /// The watchdog is aborting the session, or the run is stopping.

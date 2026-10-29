@@ -14,6 +14,9 @@ use crate::session::{StopReason, Usage, WatchdogEvent};
 use crate::spec::Coverage;
 use crate::task::TaskId;
 
+mod current;
+pub use current::{CurrentTask, StoppedAttempt, VerifyFailure};
+
 /// Where the run is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -285,30 +288,6 @@ pub struct SkillPin {
     pub source: String,
     pub sha256: String,
     pub files: usize,
-}
-
-/// A builder attempt the orchestrator stopped whose work still passed `verify`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StoppedAttempt {
-    pub attempt: u32,
-    pub reason: String,
-}
-
-/// The task being built.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CurrentTask {
-    pub task: TaskId,
-    /// The commit the task started from.
-    pub base: String,
-    pub history: Vec<String>,
-    pub failure: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stopped: Vec<StoppedAttempt>,
-    /// The attempt whose passed work is being reviewed. Set until the
-    /// review ends, so a run stopped during it (a pause, an engine that
-    /// gave out) reviews that attempt again.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_review: Option<u32>,
 }
 
 /// The session running right now.
@@ -667,6 +646,13 @@ pub enum JournalRecord {
         reviewed: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stopped_sessions: Option<Vec<StoppedAttempt>>,
+    },
+    /// A builder declared that its task cannot pass without changing
+    /// these checks of done tasks (ADR 0009).
+    Conflict {
+        task: TaskId,
+        attempt: u32,
+        checks: Vec<String>,
     },
     Verify {
         task: TaskId,

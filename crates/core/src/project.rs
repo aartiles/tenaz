@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::backlog::{Backlog, LoadedBacklog};
+use crate::conflict::{self, Conflict};
 use crate::ledger::{JournalEntry, JournalRecord, Ledger, Verdict};
 use crate::role::Role;
 use crate::spec::{Requirement, parse_requirements};
@@ -315,6 +316,7 @@ impl Project {
             return LoadedBacklog {
                 backlog: Backlog::default(),
                 errors: vec![".tenaz/tasks/ does not exist".to_owned()],
+                conflicts: Vec::new(),
             };
         };
         let mut files: Vec<(String, String)> = entries
@@ -326,10 +328,33 @@ impl Project {
             })
             .collect();
         files.sort();
-        Backlog::load(
+        let mut loaded = Backlog::load(
             files.iter().map(|(n, t)| (n.as_str(), t.as_str())),
             &self.requirements(),
-        )
+        );
+        loaded.conflicts = self.conflicts(&loaded.backlog);
+        loaded
+            .errors
+            .extend(conflict::amend_errors(&loaded.backlog, &loaded.conflicts));
+        loaded
+    }
+
+    /// The conflicts that stood (ADR 0009): those of the tasks of `backlog`
+    /// that are blocked, or dropped once a replan routed around them. A
+    /// conflict file of any other task is not one.
+    fn conflicts(&self, backlog: &Backlog) -> Vec<Conflict> {
+        backlog
+            .cards()
+            .filter(|card| matches!(card.status, TaskStatus::Blocked | TaskStatus::Dropped))
+            .filter_map(|card| {
+                Conflict::read(&card.id, &self.conflict_text(card.id.as_str())?).ok()
+            })
+            .collect()
+    }
+
+    /// The conflict `id`'s builder declared, as written (ADR 0009).
+    pub fn conflict_text(&self, id: &str) -> Option<String> {
+        self.read_if(&conflict_path(id))
     }
 
     pub fn card_text(&self, id: &TaskId) -> io::Result<String> {
@@ -363,7 +388,7 @@ impl Project {
     }
 
     pub fn note(&self, id: &str) -> Option<String> {
-        self.read_if(&format!(".tenaz/notes/{id}.md"))
+        self.read_if(&note_path(id))
     }
 
     pub fn role_prompt(&self, role: Role) -> io::Result<String> {
@@ -405,6 +430,16 @@ impl Project {
         text.push('\n');
         self.write(GITIGNORE, &text)
     }
+}
+
+/// Where the notes of `id` (a task, `BOOTSTRAP` or `PLANNER`) are kept.
+pub fn note_path(id: &str) -> String {
+    format!(".tenaz/notes/{id}.md")
+}
+
+/// Where the builder of task `id` declares a conflict.
+pub fn conflict_path(id: &str) -> String {
+    format!(".tenaz/conflicts/{id}.md")
 }
 
 /// A review that asks for changes with MINOR findings only: the reviewer

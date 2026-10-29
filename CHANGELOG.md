@@ -8,6 +8,22 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- A builder whose task cannot pass without changing a check of a done task
+  writes `.tenaz/conflicts/<TASK>.md` naming those checks and stops. Tenaz
+  blocks the task at once, without more attempts or a split, journals a
+  `conflict` record, and starts a replan that is shown the conflict. The
+  replan may add a card with `amends: [<check IDs>]`, naming only checks a
+  conflict names; its builder may change those checks and no others, and
+  its reviewer judges each change against the spec. A conflict with the
+  task's own checks, or with a task that is not done, does not stand: the
+  attempt fails as before and the next builder is told why. A builder that
+  declared a conflict is not asked for a passing check, and a conflict
+  belongs to the attempt that declares it: the file is removed when an
+  attempt starts. In the Lotion
+  Pump run the builders of T016b measured that their card and a check of
+  T016a could not both pass, and no session was allowed to change the
+  check. The builder prompt no longer promises a replan for any other
+  task that cannot be done. See ADR 0009.
 - Without the sandbox, a write tool that names a file outside the project,
   the temporary directories and `sandboxAllowWrite` is noted: a line in
   `orchestrator.log`, `outside_writes` and an `outside-write` watchdog
@@ -16,8 +32,32 @@ uses [Semantic Versioning](https://semver.org/).
   says where the files went. The write is not stopped, and shell commands
   are not checked. See ADR 0008.
 
+### Changed
+
+- In the failure history a split is shown, an attempt whose `verify`
+  failure repeats the one before word for word says so and names the
+  attempt that has the text, instead of repeating it. In the Lotion Pump
+  run the split of T016b read the same 1.5 KB of `verify` output three
+  times. `run.json` keeps that failure as `current.verify_failure`
+  (`attempt`, `text`).
+- A builder whose previous attempt failed `verify` word for word as an
+  earlier one is told so. If `verify` reports a measurement, nothing done
+  since moved it: change the approach; or, when the card cannot pass
+  without changing a check of a done task, declare the conflict (see
+  "Added"); or say in the notes why the card cannot be done, and stop. In
+  the Lotion Pump run the three attempts of T016b each left the scene at
+  its starting numbers. The task is not escalated any sooner: a check
+  that only says `exit 1` reads the same while real work goes on.
+
 ### Fixed
 
+- A harness that dies in a later prompt of its session, such as the one
+  that asks a builder for its task's checks or the note that resumes an
+  interrupted turn, is rerun without charging an attempt, as one that
+  dies in the first prompt is. The session counted as settled from its
+  first answer, so the crash failed the attempt: in the Lotion Pump run
+  fx lost its engine connection while T016b's builder was adding its
+  check, and the task lost attempt 2.
 - The preflight no longer fails an engine that does not report cached
   prompt tokens. LM Studio 0.4 reuses the prompt prefix but leaves
   `cached_tokens` out of its usage, which looked like no cache and needed
@@ -26,6 +66,12 @@ uses [Semantic Versioning](https://semver.org/).
   `run.json` has `preflight.cache_reported` and `tenaz status --json` has
   `prompt_cache_reported` and `prompt_cache_percent`. An engine that
   reports 0 cached tokens still fails. Needs the engine proxy. See ADR 0007.
+- A task out of attempts keeps its notes. Its work was reverted with the
+  notes in it, so the split never saw what the builders had measured and
+  ruled out, and wrote cards that retried it: in the Lotion Pump run the
+  split of T016b blamed a cause its builder had already disproved. The
+  notes now survive the revert, the split's prompt shows them under
+  "Builder notes from the failed attempts", and a blocked task keeps them.
 
 ## [0.2.0] - 2026-10-28
 

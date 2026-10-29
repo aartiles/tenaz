@@ -423,6 +423,94 @@ async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
     );
 }
 
+/// The split is told what the failed attempts' builders wrote in their
+/// notes, and the notes outlive the revert of their work.
+#[tokio::test(start_paused = true)]
+async fn the_split_is_told_the_notes_of_the_failed_attempts_and_they_are_kept() {
+    let run = Played::with(ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    })
+    .await;
+    let note = "T003 cannot pass as written.";
+    let split_prompt = run.prompts("split-T003").concat();
+    assert!(split_prompt.contains(note), "{split_prompt}");
+    assert_eq!(
+        run.project.note("T003"),
+        Some(format!("{note}\n")),
+        "T003's notes did not outlive the revert of its work"
+    );
+}
+
+/// Every attempt of T003 fails `verify` the same way: the split reads that
+/// failure once, and is told the later attempts repeated it.
+#[tokio::test(start_paused = true)]
+async fn the_split_reads_a_repeated_verify_failure_once() {
+    let run = Played::with(ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    })
+    .await;
+    let split_prompt = run.prompts("split-T003").concat();
+    let history = split_prompt
+        .split("## Failure history")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the split prompt has a Failure history section");
+    assert_eq!(
+        history
+            .matches("./verify --all fails after the attempt")
+            .count(),
+        1,
+        "{history}"
+    );
+    assert!(
+        history.contains("Attempt 2: The same verify failure as attempt 1, word for word."),
+        "{history}"
+    );
+}
+
+/// An attempt that fails `verify` as the one before did is followed by one
+/// told so, and to change its approach or say why it cannot.
+#[tokio::test(start_paused = true)]
+async fn the_attempt_after_a_repeated_failure_is_told_it_changed_nothing() {
+    let harness = ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    };
+    let run = Played::play(&["maxAttempts=3"], harness).await;
+    let told = "`verify` printed this word for word after attempt 1 too.";
+    let attempt = |n: u32| {
+        run.prompts("builder-T003")
+            .into_iter()
+            .find(|p| p.contains(&format!("Attempt: {n} of 3")))
+            .unwrap_or_else(|| panic!("no attempt {n}:\n{}", run.log))
+    };
+    assert!(!attempt(2).contains(told), "attempt 1 repeated nothing");
+    assert!(attempt(3).contains(told), "{}", attempt(3));
+}
+
+/// A task blocked instead of split keeps its notes too.
+#[tokio::test(start_paused = true)]
+async fn a_blocked_task_keeps_its_notes() {
+    let harness = ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    };
+    let run = Played::play(&["maxAttempts=2", "maxSplitDepth=0"], harness).await;
+    assert_eq!(
+        run.card_field("T003", "status").as_deref(),
+        Some("blocked"),
+        "{}",
+        run.log
+    );
+    assert_eq!(
+        run.project.note("T003").as_deref(),
+        Some("T003 cannot pass as written.\n"),
+        "T003's notes did not outlive the revert of its work"
+    );
+}
+
 /// Every session that writes cards is told the builders' context budget:
 /// the bootstrap's task-cards step, the split and the replan.
 #[tokio::test(start_paused = true)]

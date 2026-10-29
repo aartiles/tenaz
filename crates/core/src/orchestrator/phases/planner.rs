@@ -3,14 +3,16 @@
 //! blocked.
 
 use crate::backlog::Backlog;
+use crate::conflict::Conflict;
 use crate::ledger::{JournalEntry, JournalRecord, TaskOutcome};
 use crate::orchestrator::session::SessionCtx;
 use crate::orchestrator::{RunError, Runner};
+use crate::project::{conflict_path, note_path};
 use crate::role::Role;
 use crate::spec::coverage;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 
-use super::PromptParts;
+use super::{CONFLICTS_TITLE, PromptParts};
 
 /// A planner session about one task (split).
 pub(super) struct PlannerTask {
@@ -18,6 +20,9 @@ pub(super) struct PlannerTask {
     card_text: String,
     history: Vec<String>,
 }
+
+/// The section of a split's briefing with the failed attempts' notes.
+const SPLIT_NOTES_TITLE: &str = "Builder notes from the failed attempts";
 
 /// The journal entries of the recent orchestrator journal a planner is shown.
 const RECENT_JOURNAL: usize = 12;
@@ -73,8 +78,8 @@ impl Runner {
     }
 
     /// The planner's prompt: `extra` (the task list and why), the failure
-    /// history of a task to split, the builders' context budget, the recent
-    /// journal and the planner's notes.
+    /// history and the builders' notes of a task to split, the builders'
+    /// context budget, the recent journal and the planner's notes.
     fn planner_prompt(
         &self,
         role: Role,
@@ -83,12 +88,18 @@ impl Runner {
     ) -> Result<String, RunError> {
         if let (Role::Split, Some(task)) = (role, task) {
             extra.push(("Failure history".to_owned(), task.history.join("\n\n")));
+            if let Some(notes) = self.clipped_note(task.id.as_str()) {
+                extra.push((SPLIT_NOTES_TITLE.to_owned(), notes));
+            }
         }
         extra.push(self.card_sizing());
         extra.push((
             "Recent orchestrator journal".to_owned(),
             self.recent_journal(),
         ));
+        if role == Role::Replan {
+            extra.extend(self.conflicts_section());
+        }
         if let Some(planner) = self.project.note("PLANNER") {
             extra.push(("Previous planner notes".to_owned(), planner));
         }
@@ -161,13 +172,50 @@ impl Runner {
         history: Vec<String>,
         why: &str,
     ) -> Result<(), RunError> {
-        self.deps.vcs.reset_hard(&self.current_base())?;
+        self.revert_work(&task.id)?;
         if task.id.split_depth() < self.params.max_split_depth
             && self.split_task(task, &history, why).await?
         {
             return Ok(());
         }
         self.block_task(task, history)
+    }
+
+    /// `task`'s builder declared at `attempt` that it cannot pass without
+    /// changing checks of done tasks: the task is blocked at once, and a
+    /// replan routes around it and may amend those checks (ADR 0009).
+    pub(super) async fn escalate_conflict(
+        &mut self,
+        task: &TaskCard,
+        attempt: u32,
+        conflict: Conflict,
+    ) -> Result<(), RunError> {
+        let checks = conflict.checks.join(", ");
+        self.log(&format!(
+            "  {} declares a conflict with done checks {checks}; a replan may amend them",
+            task.id
+        ));
+        // The attempt's verify failure is already in the history; this line
+        // says what came of it.
+        let mut history = self.current_history();
+        history.push(format!(
+            "Attempt {attempt}: declared a conflict with {checks}"
+        ));
+        self.revert_work(&task.id)?;
+        self.block_task(task, history)?;
+        self.journal(JournalRecord::Conflict {
+            task: task.id.clone(),
+            attempt,
+            checks: conflict.checks,
+        });
+        self.ledger.current = None;
+        self.save()?;
+        let why = format!(
+            "{} declared a conflict with checks of done tasks ({checks}) and is blocked. See \"{CONFLICTS_TITLE}\".",
+            task.id
+        );
+        self.planner_session(Role::Replan, None, &why).await?;
+        Ok(())
     }
 
     /// A split session for `task`. True when it was split into two or more
@@ -219,8 +267,23 @@ impl Runner {
             });
             return Ok(true);
         }
-        self.deps.vcs.reset_hard(&self.current_base())?;
+        self.revert_work(&task.id)?;
         Ok(false)
+    }
+
+    /// Reverts the work since the current task started, but keeps the
+    /// task's notes and conflict: they say what its attempts measured and
+    /// ruled out, which the split, the replan and later readers need.
+    fn revert_work(&self, id: &TaskId) -> Result<(), RunError> {
+        let kept: Vec<(String, String)> = [note_path(id.as_str()), conflict_path(id.as_str())]
+            .into_iter()
+            .filter_map(|path| self.project.read_if(&path).map(|text| (path, text)))
+            .collect();
+        self.deps.vcs.reset_hard(&self.current_base())?;
+        for (path, text) in kept {
+            self.project.write(&path, &text)?;
+        }
+        Ok(())
     }
 
     /// Blocks `task` with the history of its attempts.

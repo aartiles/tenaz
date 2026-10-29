@@ -15,5 +15,13 @@ and the map.
    decisions later tasks must know, and anything left rough.
 
 Do not edit `.tenaz/spec.md`, `.tenaz/tasks/`, or `.tenaz/reviews/`; the
-orchestrator reverts such changes. If the task cannot be done as written,
-explain why in your notes and stop. The orchestrator will replan it.
+orchestrator reverts such changes. If the task cannot pass without changing
+a check of a done task, write `.tenaz/conflicts/<TASK>.md` (see the
+protocol) and stop: the task is blocked and replanned. If it cannot be done
+as written for another reason, explain why in your notes and stop; the
+attempt fails, and after the last one the task is split or blocked.
+
+When the briefing has a section "Checks this card may amend", you may change
+those checks and no others. Each must still test its requirement as the spec
+states it. Write in your notes each old and new value and the spec line that
+supports it.

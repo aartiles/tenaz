@@ -55,11 +55,7 @@ fn agent_rule(role: Role, agent_path: &str, task: Option<&TaskId>, repo: &dyn Re
                 || agent_path.starts_with("tasks/")
                 || agent_path.starts_with("notes/")
         }
-        Role::Builder => {
-            agent_path == "verify"
-                || agent_path == "map.md"
-                || agent_path == format!("notes/{task_id}.md")
-        }
+        Role::Builder => builder_owns(agent_path, task_id),
         Role::Reviewer => agent_path == format!("reviews/{task_id}.md"),
         Role::Split | Role::Replan => {
             agent_path.starts_with("tasks/") || agent_path == "notes/PLANNER.md"
@@ -70,6 +66,18 @@ fn agent_rule(role: Role, agent_path: &str, task: Option<&TaskId>, repo: &dyn Re
                     && !repo.in_head(&format!(".tenaz/{agent_path}")))
         }
     }
+}
+
+/// Whether a builder of `task_id` may write `.tenaz/<agent_path>`: `verify`,
+/// the map, and its task's notes and conflict.
+fn builder_owns(agent_path: &str, task_id: &str) -> bool {
+    ["verify", "map.md"].contains(&agent_path)
+        || [
+            format!("notes/{task_id}.md"),
+            format!("conflicts/{task_id}.md"),
+        ]
+        .iter()
+        .any(|own| own == agent_path)
 }
 
 /// Splits changed paths into kept and reverted.
@@ -144,6 +152,18 @@ mod tests {
                 "{role}: done card"
             );
         }
+    }
+
+    /// A builder declares a conflict for its own task only, and no
+    /// planner writes one (ADR 0009).
+    #[test]
+    fn a_builder_declares_only_its_own_task_s_conflict() {
+        let r = repo();
+        let t = TaskId::parse("T007").unwrap();
+        let conflict = |task| format!(".tenaz/conflicts/{task}.md");
+        assert!(allowed(Role::Builder, &conflict("T007"), Some(&t), &r));
+        assert!(!allowed(Role::Builder, &conflict("T008"), Some(&t), &r));
+        assert!(!allowed(Role::Replan, &conflict("T007"), None, &r));
     }
 
     #[test]

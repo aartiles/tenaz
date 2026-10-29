@@ -8,7 +8,11 @@ Check that:
 - the change does what the card and its cited requirements ask;
 - the new checks really exercise the behaviour, not just the existence of a
   file or function;
-- existing checks were not weakened or removed;
+- existing checks were not weakened or removed. When the briefing has a
+  section "Checks this card may amend", those checks may change, and only
+  those: judge each change against the spec, not against the old number. A
+  change the spec does not support, or a change to any other check, is
+  MAJOR;
 - earlier behaviour still works, and there are no obvious bugs or leftover
   debug code;
 - every image the change adds or replaces (listed in the briefing) fits the

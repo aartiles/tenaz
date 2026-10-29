@@ -130,6 +130,8 @@ pub struct TaskCard {
     pub parent: Option<TaskId>,
     pub attempts: u32,
     pub budget: Budget,
+    /// Checks of done tasks this card's builder may change (ADR 0009).
+    pub amends: Vec<String>,
     /// Everything after the frontmatter.
     pub body: String,
     /// `.tenaz/tasks/T007.md`.
@@ -209,6 +211,7 @@ impl TaskCard {
             parent,
             attempts,
             budget,
+            amends: list_of("amends"),
             body: fm.body,
         })
     }

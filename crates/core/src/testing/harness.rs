@@ -41,7 +41,8 @@ pub struct ScriptedHarness {
     /// The first attempt of this task repeats one tool call until it is
     /// aborted.
     pub looping_task: Option<String>,
-    /// Every attempt of this task writes a failing check, so it is split.
+    /// Every attempt of this task writes a failing check, and a note saying
+    /// it cannot pass, so it is split.
     pub failing_task: Option<String>,
     /// This task's builder finishes, then circles between two calls with
     /// the same results until it is aborted.
@@ -72,6 +73,12 @@ pub struct ScriptedHarness {
     /// The first builder session for this task that does the work leaves
     /// out its check, and adds it when the orchestrator asks.
     pub forget_checks_task: Option<String>,
+    /// The harness of this task's builder dies, between tool calls, the
+    /// first time the orchestrator asks it for its checks; with
+    /// `forget_checks_task` naming the same task, so that it is asked.
+    pub crash_on_checks_task: Option<String>,
+    /// A builder that declares a conflict, and the replan that resolves it.
+    pub conflict: Option<ScriptedConflict>,
     /// The first builder session for this task reasons until its reply is
     /// cut at the output limit, and the harness exits, as fx does.
     pub truncate_task: Option<String>,
@@ -273,6 +280,15 @@ impl Session for ScriptedSession {
             code: self.exit_code,
         }
     }
+}
+
+/// The first builder session of `task` declares a conflict with `check`
+/// and stops. The first replan shown it adds `T005` (for R3, after T001,
+/// as the fake goal's T003 is), which amends the check, and drops `task`.
+#[derive(Clone, Debug)]
+pub struct ScriptedConflict {
+    pub task: String,
+    pub check: String,
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! The backlog: every card under `.tenaz/tasks/`, validated as a whole
 //! (references, cycles), with the scheduling rules of the task loop.
 
+use crate::conflict::Conflict;
 use std::collections::BTreeMap;
 
 use crate::spec::Requirement;
@@ -17,6 +18,8 @@ pub struct Backlog {
 pub struct LoadedBacklog {
     pub backlog: Backlog,
     pub errors: Vec<String>,
+    /// The conflicts that stood (ADR 0009); the project fills them in.
+    pub conflicts: Vec<Conflict>,
 }
 
 impl Backlog {
@@ -56,7 +59,11 @@ impl Backlog {
         }
         let backlog = Backlog { tasks };
         errors.extend(backlog.cycles());
-        LoadedBacklog { backlog, errors }
+        LoadedBacklog {
+            backlog,
+            errors,
+            conflicts: Vec::new(),
+        }
     }
 
     pub fn from_cards(cards: impl IntoIterator<Item = TaskCard>) -> Self {

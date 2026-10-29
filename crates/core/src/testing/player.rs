@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::ScriptedHarness;
 use super::abort::Abort;
 use super::paced::PacedSender;
+use super::{ScriptedConflict, ScriptedHarness};
 use crate::session::{SessionEvent, StopReason, Usage};
 
 /// One tool call of the scripted model: the tool, its arguments, what it
@@ -237,6 +237,13 @@ impl Player {
             .nth(1)
             .and_then(|rest| rest.split('.').next())
         {
+            if self.first(
+                self.script.crash_on_checks_task.as_deref(),
+                "crash-checks",
+                task,
+            ) {
+                return self.crash(false).await;
+            }
             self.write_check(task).await;
             return self.finish("Added the check.");
         }
@@ -265,7 +272,11 @@ impl Player {
             "BUILDER" => self.builder(&task, attempt).await,
             "REVIEWER" => self.reviewer(prompt, &task).await,
             "SPLIT" => self.split(&task).await,
-            "REPLAN" => self.replan().await,
+            "REPLAN" => {
+                if !self.amend(prompt).await {
+                    self.replan().await;
+                }
+            }
             "FINAL-REVIEWER" => {
                 self.write_tool(".tenaz/reviews/FINAL.md", "Verdict: ACCEPT\n", false)
                     .await;
@@ -330,6 +341,36 @@ impl Player {
         self.write_tool(".tenaz/notes/PLANNER.md", "Split.\n", false)
             .await;
         self.finish("Done.");
+    }
+
+    /// The first replan shown the conflict adds `T005`, which amends the
+    /// check in the way and does the blocked task's work, and drops the
+    /// blocked task.
+    async fn amend(&mut self, prompt: &str) -> bool {
+        let Some(ScriptedConflict { task, check }) = self.script.conflict.clone() else {
+            return false;
+        };
+        let shown = format!("## {}", crate::orchestrator::CONFLICTS_TITLE);
+        if !prompt.contains(&shown) || self.cwd.join(".tenaz/tasks/T005.md").exists() {
+            return false;
+        }
+        let amending = card("T005", &["R3"], &["T001"], None).replacen(
+            "status: todo\n",
+            &format!("status: todo\namends: [{check}]\n"),
+            1,
+        );
+        self.write_tool(".tenaz/tasks/T005.md", &amending, false)
+            .await;
+        let path = format!(".tenaz/tasks/{task}.md");
+        let blocked = std::fs::read_to_string(self.cwd.join(&path)).unwrap_or_default();
+        self.write_tool(
+            &path,
+            &blocked.replace("status: blocked", "status: dropped"),
+            false,
+        )
+        .await;
+        self.finish("Amended.");
+        true
     }
 
     /// Changes nothing, but may edit a card out of its role.
@@ -670,6 +711,26 @@ impl Player {
             || self.stuck(task, attempt).await
             || self.stopped(task).await
             || self.failing(task).await
+            || self.conflicting(task).await
+    }
+
+    /// The first session of the script's conflict task declares its
+    /// conflict and stops.
+    async fn conflicting(&mut self, task: &str) -> bool {
+        let Some(ScriptedConflict { task: at, check }) = self.script.conflict.clone() else {
+            return false;
+        };
+        if !self.first(Some(&at), "conflict", task) {
+            return false;
+        }
+        self.write_tool(
+            &format!(".tenaz/conflicts/{task}.md"),
+            &format!("---\nchecks: [{check}]\n---\n{task} and {check} cannot both pass.\n"),
+            false,
+        )
+        .await;
+        self.finish("Declared a conflict.");
+        true
     }
 
     /// A session stopped by a test, crashed, or cut at the output limit.
@@ -723,13 +784,20 @@ impl Player {
         true
     }
 
-    /// A session whose check fails, every time.
+    /// A session whose check fails, every time, and that leaves a note
+    /// saying it cannot pass.
     async fn failing(&mut self, task: &str) -> bool {
         if !names(self.script.failing_task.as_deref(), task) {
             return false;
         }
         self.write_tool(&format!("checks/{task}.exists.sh"), "exit 1\n", false)
             .await;
+        self.write_tool(
+            &format!(".tenaz/notes/{task}.md"),
+            &format!("{task} cannot pass as written.\n"),
+            false,
+        )
+        .await;
         self.finish("Done.");
         true
     }

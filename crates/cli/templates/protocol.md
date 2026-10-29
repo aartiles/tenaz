@@ -71,7 +71,8 @@ file; the code of its checks goes in `checks/`, never in a folder named
 - Never delete or weaken an existing check to make it pass. If a check is
   wrong, say so in your notes. An attempt after which `./verify --all`
   passes fewer checks of other tasks than when the last task was done
-  fails.
+  fails. The one exception is a card whose `amends` names checks of done
+  tasks; see "Conflicts with done checks".
 
 ## Task cards
 
@@ -97,3 +98,27 @@ Pointers only: functions, decisions, earlier tasks.
 
 The orchestrator owns `status` and `attempts`. Valid statuses are `todo`,
 `active`, `done`, `blocked`, `split`, and `dropped`.
+
+## Conflicts with done checks
+
+When a card cannot pass without changing a check of a **done** task (two
+thresholds that cannot hold together, measured, not guessed), its builder
+writes `.tenaz/conflicts/<TASK>.md` and stops:
+
+```markdown
+---
+checks: [T016a.look-cues]
+---
+Which requirement each check serves, what you measured, and why the card
+and the check cannot both pass.
+```
+
+The file is read only when the attempt fails `verify`. It stands when every
+check it names belongs to a done task other than yours; then the
+orchestrator blocks the task at once and starts a replan. One that does not
+stand is removed, and the attempt fails as any other. A replan may add a
+card with `amends: [T016a.look-cues]`, naming only checks of a conflict
+that stood. The builder of that card may change those checks, and no
+others, as long as each still tests its requirement as the spec states it:
+the spec decides, not the old number. Its reviewer judges each change
+against the spec.

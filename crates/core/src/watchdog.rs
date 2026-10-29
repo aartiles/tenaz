@@ -213,6 +213,14 @@ impl Watchdog {
         }
     }
 
+    /// A new prompt was sent: the session is not settled until it is
+    /// answered, so a harness that dies before then ended early. How the
+    /// last answer stopped says nothing about the new one.
+    pub fn prompted(&mut self) {
+        self.metrics.settled = false;
+        self.metrics.last_stop_reason = None;
+    }
+
     /// Records something the runner sent the session outside the rules.
     pub fn note(&mut self, kind: &str, elapsed_ms: u64) {
         self.event(kind, None, elapsed_ms);
@@ -1215,6 +1223,22 @@ mod tests {
         assert!(m.aborted && !m.settled && !m.ok());
         assert_eq!(m.compactions, 2);
         assert_eq!(m.duration_ms, 1234);
+    }
+
+    /// A session answers its first prompt and is sent another: until that
+    /// one is answered it has not settled, and a reply cut at the output
+    /// limit in the first does not explain an exit in the second.
+    #[test]
+    fn a_new_prompt_unsettles_the_session_until_it_is_answered() {
+        let mut w = watched();
+        message(&mut w, 1000, StopReason::MaxTokens, None);
+        w.handle(&SessionEvent::Settled { aborted: false }, 0, String::new);
+        assert!(w.metrics().settled);
+        w.prompted();
+        assert!(w.metrics().ended_early(), "{:?}", w.metrics());
+        assert!(!w.metrics().output_truncated());
+        w.handle(&SessionEvent::Settled { aborted: false }, 0, String::new);
+        assert!(w.metrics().settled);
     }
 
     #[test]
