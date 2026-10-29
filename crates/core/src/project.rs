@@ -363,7 +363,11 @@ impl Project {
     }
 
     pub fn note(&self, id: &str) -> Option<String> {
-        self.read_if(&format!(".tenaz/notes/{id}.md"))
+        self.read_if(&note_path(id))
+    }
+
+    pub fn write_note(&self, id: &str, text: &str) -> io::Result<()> {
+        self.write(&note_path(id), text)
     }
 
     pub fn role_prompt(&self, role: Role) -> io::Result<String> {
@@ -405,6 +409,11 @@ impl Project {
         text.push('\n');
         self.write(GITIGNORE, &text)
     }
+}
+
+/// Where the notes of `id` (a task, `BOOTSTRAP` or `PLANNER`) are kept.
+fn note_path(id: &str) -> String {
+    format!(".tenaz/notes/{id}.md")
 }
 
 /// A review that asks for changes with MINOR findings only: the reviewer

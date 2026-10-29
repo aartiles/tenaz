@@ -723,13 +723,20 @@ impl Player {
         true
     }
 
-    /// A session whose check fails, every time.
+    /// A session whose check fails, every time, and that leaves a note
+    /// saying it cannot pass.
     async fn failing(&mut self, task: &str) -> bool {
         if !names(self.script.failing_task.as_deref(), task) {
             return false;
         }
         self.write_tool(&format!("checks/{task}.exists.sh"), "exit 1\n", false)
             .await;
+        self.write_tool(
+            &format!(".tenaz/notes/{task}.md"),
+            &format!("{task} cannot pass as written.\n"),
+            false,
+        )
+        .await;
         self.finish("Done.");
         true
     }

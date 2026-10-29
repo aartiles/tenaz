@@ -73,8 +73,8 @@ impl Runner {
     }
 
     /// The planner's prompt: `extra` (the task list and why), the failure
-    /// history of a task to split, the builders' context budget, the recent
-    /// journal and the planner's notes.
+    /// history and the builders' notes of a task to split, the builders'
+    /// context budget, the recent journal and the planner's notes.
     fn planner_prompt(
         &self,
         role: Role,
@@ -83,6 +83,9 @@ impl Runner {
     ) -> Result<String, RunError> {
         if let (Role::Split, Some(task)) = (role, task) {
             extra.push(("Failure history".to_owned(), task.history.join("\n\n")));
+            if let Some(notes) = self.clipped_note(task.id.as_str()) {
+                extra.push(("Builder notes from the failed attempts".to_owned(), notes));
+            }
         }
         extra.push(self.card_sizing());
         extra.push((
@@ -161,7 +164,7 @@ impl Runner {
         history: Vec<String>,
         why: &str,
     ) -> Result<(), RunError> {
-        self.deps.vcs.reset_hard(&self.current_base())?;
+        self.revert_work(&task.id)?;
         if task.id.split_depth() < self.params.max_split_depth
             && self.split_task(task, &history, why).await?
         {
@@ -219,8 +222,20 @@ impl Runner {
             });
             return Ok(true);
         }
-        self.deps.vcs.reset_hard(&self.current_base())?;
+        self.revert_work(&task.id)?;
         Ok(false)
+    }
+
+    /// Reverts the work since the current task started, but keeps the
+    /// task's notes: they say what its attempts measured and ruled out,
+    /// which the split and later readers need.
+    fn revert_work(&self, id: &TaskId) -> Result<(), RunError> {
+        let notes = self.project.note(id.as_str());
+        self.deps.vcs.reset_hard(&self.current_base())?;
+        if let Some(notes) = notes {
+            self.project.write_note(id.as_str(), &notes)?;
+        }
+        Ok(())
     }
 
     /// Blocks `task` with the history of its attempts.

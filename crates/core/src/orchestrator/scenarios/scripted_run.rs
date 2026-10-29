@@ -423,6 +423,46 @@ async fn a_task_that_keeps_failing_is_split_and_its_work_reverted() {
     );
 }
 
+/// The split is told what the failed attempts' builders wrote in their
+/// notes, and the notes outlive the revert of their work.
+#[tokio::test(start_paused = true)]
+async fn the_split_is_told_the_notes_of_the_failed_attempts_and_they_are_kept() {
+    let run = Played::with(ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    })
+    .await;
+    let note = "T003 cannot pass as written.";
+    let split_prompt = run.prompts("split-T003").concat();
+    assert!(split_prompt.contains(note), "{split_prompt}");
+    assert_eq!(
+        run.project.note("T003"),
+        Some(format!("{note}\n")),
+        "T003's notes did not outlive the revert of its work"
+    );
+}
+
+/// A task blocked instead of split keeps its notes too.
+#[tokio::test(start_paused = true)]
+async fn a_blocked_task_keeps_its_notes() {
+    let harness = ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    };
+    let run = Played::play(&["maxAttempts=2", "maxSplitDepth=0"], harness).await;
+    assert_eq!(
+        run.card_field("T003", "status").as_deref(),
+        Some("blocked"),
+        "{}",
+        run.log
+    );
+    assert_eq!(
+        run.project.note("T003").as_deref(),
+        Some("T003 cannot pass as written.\n"),
+        "T003's notes did not outlive the revert of its work"
+    );
+}
+
 /// Every session that writes cards is told the builders' context budget:
 /// the bootstrap's task-cards step, the split and the replan.
 #[tokio::test(start_paused = true)]

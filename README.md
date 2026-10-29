@@ -55,7 +55,8 @@ task then gets its own session: the agent builds it, Tenaz runs `verify`,
 and a fresh session of the same model reviews the diff. A review asks for
 changes only for a problem that matters for the requirements. A task that
 passes is committed; one that fails is undone and retried, split into
-smaller tasks or marked blocked. When every task is done, a final review
+smaller tasks or marked blocked. Its notes are kept, so a split knows what
+the failed attempts tried. When every task is done, a final review
 checks the whole goal against the brief.
 
 **`verify` decides when the work is done.** It is an executable at the

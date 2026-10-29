@@ -26,6 +26,12 @@ uses [Semantic Versioning](https://semver.org/).
   `run.json` has `preflight.cache_reported` and `tenaz status --json` has
   `prompt_cache_reported` and `prompt_cache_percent`. An engine that
   reports 0 cached tokens still fails. Needs the engine proxy. See ADR 0007.
+- A task out of attempts keeps its notes. Its work was reverted with the
+  notes in it, so the split never saw what the builders had measured and
+  ruled out, and wrote cards that retried it: in the Lotion Pump run the
+  split of T016b blamed a cause its builder had already disproved. The
+  notes now survive the revert, the split's prompt shows them under
+  "Builder notes from the failed attempts", and a blocked task keeps them.
 
 ## [0.2.0] - 2026-10-28
 

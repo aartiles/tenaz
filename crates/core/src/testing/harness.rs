@@ -41,7 +41,8 @@ pub struct ScriptedHarness {
     /// The first attempt of this task repeats one tool call until it is
     /// aborted.
     pub looping_task: Option<String>,
-    /// Every attempt of this task writes a failing check, so it is split.
+    /// Every attempt of this task writes a failing check, and a note saying
+    /// it cannot pass, so it is split.
     pub failing_task: Option<String>,
     /// This task's builder finishes, then circles between two calls with
     /// the same results until it is aborted.

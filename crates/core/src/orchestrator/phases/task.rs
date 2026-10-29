@@ -519,11 +519,8 @@ impl Runner {
         if !notes.is_empty() && self.params.briefing {
             extra.push(("Notes from earlier tasks".to_owned(), notes));
         }
-        if let Some(own) = self.project.note(card.id.as_str()) {
-            extra.push((
-                "Your notes from earlier attempts".to_owned(),
-                clip(own.trim(), self.params.note_clip_bytes),
-            ));
+        if let Some(own) = self.clipped_note(card.id.as_str()) {
+            extra.push(("Your notes from earlier attempts".to_owned(), own));
         }
         extra
     }

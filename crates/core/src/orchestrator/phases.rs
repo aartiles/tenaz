@@ -8,6 +8,7 @@ use crate::briefing::{self, Briefing};
 use crate::role::Role;
 use crate::spec;
 use crate::task::{TaskId, TaskStatus};
+use crate::util::clip;
 use crate::verify::{VerifyOutcome, interpret, retarget};
 
 use super::{RunError, Runner};
@@ -76,6 +77,13 @@ impl Runner {
             briefing::CARD_SIZING_TITLE.to_owned(),
             briefing::card_sizing(self.ledger.configured_budget_tokens()),
         )
+    }
+
+    /// The notes of `id`, trimmed and clipped for a prompt.
+    fn clipped_note(&self, id: &str) -> Option<String> {
+        self.project
+            .note(id)
+            .map(|note| clip(note.trim(), self.params.note_clip_bytes))
     }
 
     /// Composes a prompt from the project's role prompt, spec and map, and
