@@ -58,8 +58,12 @@ For the `init` line, take the engine address and the model id from what
 doctor found, or ask the user when it lists several. A person at a
 terminal can instead run `tenaz init` with no `--model` and answer the
 setup wizard's questions; you cannot, because it needs a terminal.
-`--model-for ROLE=ID` only pins a model per role for now; sessions do not
-use it yet, so leave it out.
+
+When the user wants another model for some roles, for example a reviewer
+of another family, add `--model-for reviewer=<id>` (repeatable, one role
+each) and `--context-window-for reviewer=<tokens>` when its window
+differs. The engine must have every model named loaded at once. Not with
+`--harness pi`.
 
 ## Write the brief
 

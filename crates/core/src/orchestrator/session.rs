@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use crate::briefing::without_map;
 use crate::ledger::{JournalRecord, SessionRecord};
-use crate::memory::MemoryWindow;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
@@ -24,7 +23,8 @@ pub(crate) use harness::HarnessRun;
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
 const CRITICAL_PRESSURE: u32 = 4;
-/// A cap this close to the configured budget is lifted rather than raised.
+/// A cap this close to the largest configured budget is lifted rather than
+/// raised.
 const RAISE_STEP_MIN: u64 = 4096;
 
 /// What a session is about.
@@ -72,7 +72,7 @@ impl Runner {
                 return Err(self.pause(&label, role, ctx)?);
             }
             if !result.metrics.engine_failed() {
-                self.note_engine_held(&label, result.record.memory.as_ref())?;
+                self.note_engine_held(&result.record)?;
             }
             match recovery.next(&result.metrics, role, &self.params) {
                 Step::Done => return Ok(result),
@@ -207,25 +207,31 @@ impl Runner {
 
     /// Counts a session the engine held at a lowered budget and, after
     /// `capacityRecoverSessions` of them in a row, raises the budget halfway
-    /// back to the configured one, or to the ceiling a failed raise set. The
+    /// back to the largest configured one (the run's models may have
+    /// different windows), or to the ceiling a failed raise set. A session
+    /// whose budget was under the cap does not count: it did not test it. The
     /// engine only says how much it can hold when a prompt overflows it, so
     /// memory freed later is found by trying. Each raise that overflows again
     /// doubles the sessions the next one waits for, up to four times as many;
     /// a raise the engine held starts the count again.
-    fn note_engine_held(
-        &mut self,
-        label: &str,
-        memory: Option<&MemoryWindow>,
-    ) -> Result<(), RunError> {
+    fn note_engine_held(&mut self, session: &SessionRecord) -> Result<(), RunError> {
         let Some(cap) = self.ledger.context_cap else {
             return Ok(());
         };
         if self.params.capacity_recover_sessions == 0 {
             return Ok(());
         }
-        if memory.is_some_and(|m| m.pressure_max >= CRITICAL_PRESSURE) {
+        let label = session.label.as_str();
+        if session
+            .memory
+            .as_ref()
+            .is_some_and(|m| m.pressure_max >= CRITICAL_PRESSURE)
+        {
             self.ledger.cap_clean_sessions = 0;
             return self.save();
+        }
+        if session.context_budget < cap {
+            return Ok(());
         }
         self.ledger.cap_clean_sessions += 1;
         let needed = raise_wait(
@@ -236,7 +242,7 @@ impl Runner {
         if clean < needed {
             return self.save();
         }
-        let full = self.ledger.configured_budget_tokens();
+        let full = self.ledger.largest_budget_tokens();
         let Some(raised) = raised_cap(cap, full, self.ledger.cap_ceiling) else {
             // Already at the ceiling: nothing to try.
             self.ledger.cap_clean_sessions = 0;
@@ -297,8 +303,8 @@ fn raise_wait(recover_sessions: u32, failed_raises: u32) -> u32 {
     recover_sessions.saturating_mul(1 << failed_raises.min(2))
 }
 
-/// The budget after a raise from `cap`: halfway to the configured `full`
-/// budget, or to `ceiling` when that is lower, and all the way when less
+/// The budget after a raise from `cap`: halfway to the largest configured
+/// budget `full`, or to `ceiling` when that is lower, and all the way when less
 /// than [`RAISE_STEP_MIN`] is left. `None` when `cap` is already there.
 fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
     let target = ceiling.map_or(full, |c| c.min(full));

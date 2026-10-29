@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use tenaz_acp::AcpHarness;
-use tenaz_core::ports::{Harness, HarnessInfo, SessionSpec};
+use tenaz_core::ports::{Harness, HarnessInfo, SessionModel, SessionSpec};
 use tenaz_core::session::SessionEvent;
 
 const AGENT: &str = r#"#!/bin/sh
@@ -52,6 +52,12 @@ async fn an_agent_that_exits_mid_turn_leaves_its_stderr_and_exit_code() {
         raw_log: None,
         thinking_log: None,
         stderr_log: Some(stderr_log.clone()),
+        model: SessionModel {
+            name: "p/m".into(),
+            id: "m".into(),
+            context_window: 65536,
+            supports_images: false,
+        },
     };
     let mut session = harness.open(spec).await.expect("the handshake succeeds");
     session.prompt("build T001").await.unwrap();

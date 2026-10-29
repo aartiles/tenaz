@@ -10,12 +10,14 @@ use serde::{Deserialize, Serialize};
 use crate::metrics::EngineSummary;
 use crate::params::RunParams;
 use crate::role::Role;
-use crate::role_models::RoleModel;
 use crate::session::{StopReason, Usage, WatchdogEvent};
 use crate::spec::Coverage;
 use crate::task::TaskId;
 
+mod budget;
+mod config;
 mod current;
+pub use config::ModelConfig;
 pub use current::{CurrentTask, StoppedAttempt, VerifyFailure};
 
 /// Where the run is.
@@ -99,35 +101,6 @@ impl std::fmt::Display for BootstrapStep {
 impl std::fmt::Display for Phase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-
-/// The model and harness a run is pinned to.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelConfig {
-    pub harness: HarnessKind,
-    pub harness_version: String,
-    /// The model as the harness names it (`sushi/Qwen3.8-Flash-Next-Sushi-2.6bpw`).
-    pub model: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
-    pub context_window: u64,
-    #[serde(default)]
-    pub input: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<String>,
-    /// Roles played by another model than this one (ADR 0010).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub role_models: BTreeMap<Role, RoleModel>,
-}
-
-impl ModelConfig {
-    pub fn supports_images(&self) -> bool {
-        self.input.iter().any(|i| i == "image")
     }
 }
 
@@ -460,26 +433,6 @@ impl Ledger {
         }
     }
 
-    /// The budget a session is steered at: the configured share of the
-    /// window, or less once the engine has said it cannot hold more.
-    pub fn context_budget_tokens(&self, requested: Option<u64>) -> u64 {
-        let wanted = requested.unwrap_or_else(|| self.configured_budget_tokens());
-        self.context_cap.map_or(wanted, |cap| wanted.min(cap))
-    }
-
-    /// The configured share of the context window, before any cap.
-    pub fn configured_budget_tokens(&self) -> u64 {
-        #[expect(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a context window times a fraction is far below 2^53 and floors to a positive u64"
-        )]
-        let budget =
-            (self.config.context_window as f64 * self.params.context_budget).floor() as u64;
-        budget
-    }
-
     /// `003-builder-T007`.
     pub fn next_label(&mut self, role: Role, task: Option<&TaskId>) -> String {
         self.session_seq += 1;
@@ -495,6 +448,10 @@ impl Ledger {
 pub struct SessionRecord {
     pub label: String,
     pub role: Role,
+    /// The model the session was opened with (`provider/id`, as in
+    /// `run.json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub task: Option<TaskId>,
     pub attempt: Option<u32>,
     pub ok: bool,
@@ -599,7 +556,7 @@ pub enum JournalRecord {
     },
     ContextCapRaised {
         label: String,
-        /// `None`: back to the configured budget.
+        /// `None`: back to each model's configured budget.
         context_cap: Option<u64>,
         clean_sessions: u32,
     },
@@ -763,6 +720,7 @@ fn is_zero(n: &u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::role_models::RoleModel;
 
     #[test]
     fn the_harness_is_pinned_by_its_lowercase_name() {
@@ -791,7 +749,7 @@ mod tests {
         assert_eq!(serde_json::to_string(&entry).unwrap(), line);
     }
 
-    fn config() -> ModelConfig {
+    pub(super) fn config() -> ModelConfig {
         ModelConfig {
             harness: HarnessKind::Fx,
             harness_version: "0.0.14".into(),
@@ -878,11 +836,39 @@ mod tests {
             RunParams::default(),
             vec![],
         );
-        assert_eq!(ledger.context_budget_tokens(None), 85196);
-        assert_eq!(ledger.context_budget_tokens(Some(50_000)), 50_000);
+        let window = ledger.config.context_window;
+        assert_eq!(ledger.context_budget_tokens(window, None), 85196);
+        assert_eq!(ledger.context_budget_tokens(window, Some(50_000)), 50_000);
         ledger.context_cap = Some(49_190);
-        assert_eq!(ledger.context_budget_tokens(None), 49_190);
-        assert_eq!(ledger.context_budget_tokens(Some(30_000)), 30_000);
+        assert_eq!(ledger.context_budget_tokens(window, None), 49_190);
+        assert_eq!(ledger.context_budget_tokens(window, Some(30_000)), 30_000);
+    }
+
+    pub(super) fn role_model(id: &str, context_window: u64) -> RoleModel {
+        RoleModel {
+            model: format!("sushi/{id}"),
+            id: id.into(),
+            context_window,
+            input: vec!["text".into()],
+        }
+    }
+
+    #[test]
+    fn a_session_record_names_its_model_and_old_records_load_without_one() {
+        let line = r#"{"at":"t","type":"session","label":"002-reviewer-T001","role":"reviewer","model":"sushi/r","task":"T001","attempt":1,"ok":true,"abort_reason":null,"exit_code":0,"last_stop_reason":null,"turns":1,"tool_calls":0,"writes":0,"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"reasoning":0},"reasoning_chars":0,"context_peak":0,"context_budget":42598,"compactions":0,"provider_errors":0,"capacity_limits":[],"image_refusal":null,"big_outputs":0,"watchdog":[],"reverted":[],"prompt_chars":0,"duration_ms":0,"engine":null,"memory":null}"#;
+        let entry: JournalEntry = serde_json::from_str(line).unwrap();
+        let JournalRecord::Session(record) = &entry.record else {
+            panic!("not a session: {entry:?}");
+        };
+        assert_eq!(record.model.as_deref(), Some("sushi/r"));
+        assert_eq!(serde_json::to_string(&entry).unwrap(), line);
+        let old = line.replace(r#""model":"sushi/r","#, "");
+        let entry: JournalEntry = serde_json::from_str(&old).unwrap();
+        let JournalRecord::Session(record) = &entry.record else {
+            panic!("not a session: {entry:?}");
+        };
+        assert_eq!(record.model, None);
+        assert_eq!(serde_json::to_string(&entry).unwrap(), old);
     }
 
     #[test]

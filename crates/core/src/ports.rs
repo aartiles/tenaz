@@ -21,6 +21,17 @@ pub struct HarnessInfo {
     pub version: String,
 }
 
+/// The model a session runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionModel {
+    /// The model as the harness names it (`provider/id`), as in `run.json`.
+    pub name: String,
+    /// The model as the engine lists it.
+    pub id: String,
+    pub context_window: u64,
+    pub supports_images: bool,
+}
+
 /// How to open one session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSpec {
@@ -40,6 +51,9 @@ pub struct SessionSpec {
     pub thinking_log: Option<PathBuf>,
     /// Where the harness's stderr is appended.
     pub stderr_log: Option<PathBuf>,
+    /// The model to run: the run's, or the one its role is pinned to. A
+    /// harness runs this model or refuses the session.
+    pub model: SessionModel,
 }
 
 /// The runner's answer to a permission request.

@@ -95,6 +95,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   settings, credentials (`auth.json`), extensions and context files are
   not used: a provider you signed in to with `/login` needs its `apiKey`
   in `models.json` instead.
+- fx's `settings.json` is written again before each session, for that
+  session's model.
 - Skills: by default Pi sees only the skills pinned with `init --skill`,
   and none without them: it gets `--no-skills` plus each pinned skill.
   fx's skill catalog gets a 0-byte budget, so its prompt lists no skills,
@@ -105,6 +107,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **A model per role** (`--model-for`, ADR 0010). fx is launched with
+  each session's model: its `settings.json` is rewritten before the
+  session starts. Tested with an in-process ACP agent and the scripted
+  harness; not yet run against a real fx with two models served by one
+  engine, nor checked whether fx writes `settings.json` itself. Not with
+  Pi: `init` refuses the map, and Pi refuses a session on another model
+  than the one it was set up for.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.

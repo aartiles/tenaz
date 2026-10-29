@@ -63,9 +63,10 @@ upstream per session, and the compatibility surface doubles.
 B. C is deferred until a machine needs it; the map does not get in its
 way. D is rejected.
 
-B lands in steps, each with its CHANGELOG line: `init` pins the map and
-`status` shows it; then the sessions use it; then the preflight and
-`doctor` check each model; then fx is launched with the session's model.
+B lands in steps: `init` pins the map and `status` shows it; then the
+sessions run their role's model, fx with them; then the preflight,
+`doctor` and the lease handle each model. Until that last step, a media
+job frees and reloads only the run's model.
 
 One engine per run, as before. The capacity cap the engine sets after it
 runs out of memory (`context_cap`) stays one for the run, whichever

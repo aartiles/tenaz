@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use tenaz_core::ports::{Harness, HarnessError, Session, SessionSpec};
+use tenaz_core::ports::{Harness, HarnessError, Session, SessionModel, SessionSpec};
 use tenaz_core::session::{SessionEvent, StopReason, capacity_limit};
 use tenaz_pi::{PI_TOOLS, PiHarness, PiLaunch};
 
@@ -33,6 +33,12 @@ fn spec(dir: &Path, persist: bool) -> SessionSpec {
         raw_log: persist.then(|| dir.join("private/001-builder-T001.rpc.jsonl")),
         thinking_log: None,
         stderr_log: persist.then(|| dir.join("private/001-builder-T001.stderr.log")),
+        model: SessionModel {
+            name: "fake/fake".into(),
+            id: "fake".into(),
+            context_window: 65536,
+            supports_images: false,
+        },
     }
 }
 
@@ -334,6 +340,19 @@ async fn a_process_that_ignores_stdin_eof_is_killed_after_the_grace() {
         session.prompt("x").await,
         Err(HarnessError::Closed)
     ));
+}
+
+#[tokio::test]
+async fn a_session_on_another_model_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut spec = spec(dir.path(), false);
+    spec.model.name = "fake/critic".into();
+    spec.model.id = "critic".into();
+    let error = harness(dir.path()).open(spec).await.err().unwrap();
+    assert!(
+        matches!(&error, HarnessError::Spawn(m) if m.contains("set up for fake/fake, not fake/critic")),
+        "{error}"
+    );
 }
 
 #[tokio::test]

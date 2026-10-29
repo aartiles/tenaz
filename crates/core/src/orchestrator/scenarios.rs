@@ -3,6 +3,7 @@
 
 mod conflict;
 mod harness_exit;
+mod role_models;
 mod scripted_run;
 mod stop_grace;
 

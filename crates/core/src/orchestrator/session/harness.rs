@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::metrics::RequestRecord;
 use crate::orchestrator::{RunError, Runner};
-use crate::ports::{Clock, PermissionDecision, Session, SessionSpec};
+use crate::ports::{Clock, PermissionDecision, Session, SessionModel, SessionSpec};
 use crate::session::{SessionEvent, SessionMetrics};
 use crate::task::TaskId;
 use crate::verify::retarget;
@@ -36,6 +36,8 @@ pub(crate) struct HarnessRun<'a> {
     /// Sent one after another (the preflight sends several).
     pub prompts: &'a [String],
     pub cwd: PathBuf,
+    /// The model the session runs.
+    pub model: SessionModel,
     pub watch: Option<WatchConfig>,
     /// Keep the raw stream and the harness state under `.tenaz/private/`.
     pub persist: bool,
@@ -81,18 +83,23 @@ struct SessionLoop<'a> {
 }
 
 impl Runner {
-    /// How to open a session; `persist` keeps its logs and state under
-    /// `.tenaz/private/`.
-    fn session_spec(&self, label: &str, cwd: PathBuf, persist: bool) -> SessionSpec {
+    /// How to open the session of `run`; `persist` keeps its logs and
+    /// state under `.tenaz/private/`.
+    fn session_spec(&self, run: &HarnessRun<'_>) -> SessionSpec {
         let private = self.project.private_dir();
-        let log = |suffix: &str| persist.then(|| private.join(format!("{label}.{suffix}")));
+        let label = run.label;
+        let log = |suffix: &str| {
+            run.persist
+                .then(|| private.join(format!("{label}.{suffix}")))
+        };
         SessionSpec {
             label: label.to_owned(),
-            cwd,
-            persist_dir: persist.then(|| private.join("sessions")),
+            cwd: run.cwd.clone(),
+            persist_dir: run.persist.then(|| private.join("sessions")),
             raw_log: log("rpc.jsonl"),
             thinking_log: log("thinking.md"),
             stderr_log: log("stderr.log"),
+            model: run.model.clone(),
         }
     }
 
@@ -102,7 +109,7 @@ impl Runner {
         &self,
         run: HarnessRun<'_>,
     ) -> Result<(SessionMetrics, Vec<RequestRecord>), RunError> {
-        let spec = self.session_spec(run.label, run.cwd, run.persist);
+        let spec = self.session_spec(&run);
         let stderr_log = spec.stderr_log.clone();
         let session = self.deps.harness.open(spec).await?;
         let mut watchdog = Watchdog::new(self.params.clone(), run.watch);

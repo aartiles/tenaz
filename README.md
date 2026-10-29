@@ -52,8 +52,9 @@ You write the goal as a short brief. The **bootstrap** turns it into
 numbered requirements, a `verify` script and a list of small tasks, in three
 sessions, one step each, so no session has to plan everything at once. Each
 task then gets its own session: the agent builds it, Tenaz runs `verify`,
-and a fresh session of the same model reviews the diff. A review asks for
-changes only for a problem that matters for the requirements. A task that
+and a fresh session of the same model, or of the one `--model-for` gives
+the reviewer, reviews the diff. A review asks for changes only for a
+problem that matters for the requirements. A task that
 passes is committed; one that fails is undone and retried, split into
 smaller tasks or marked blocked. Its notes are kept, so a split knows what
 the failed attempts tried. A builder that finds its task cannot pass
@@ -346,10 +347,14 @@ scripts and CI. With llama.cpp's server on its default port:
 tenaz init --project my-goal --brief brief.md --model my-model --base-url http://127.0.0.1:8080/v1 --context-window 65536
 ```
 
-`--model-for ROLE=ID` (repeatable, with `--context-window-for ROLE=N`)
-pins another model for a role (bootstrap, builder, reviewer, split,
-replan or final-reviewer) in `run.json`; sessions do not use it yet
-([ADR 0010](docs/adr/0010-a-model-per-role.md)).
+`--model-for ROLE=ID` gives one role another model, for example
+`--model-for reviewer=Qwen3.8-27B` to have the diffs reviewed by another
+model family; the other roles keep `--model`. Repeat it for more roles
+(bootstrap, builder, reviewer, split, replan, final-reviewer), and add
+`--context-window-for ROLE=N` when that model's window is not
+`--context-window`. The engine serves every model named, all loaded at
+once: Tenaz does not swap between them. Not with `--harness pi` yet. See
+[ADR 0010](docs/adr/0010-a-model-per-role.md).
 
 `--vision` says the model reads images. `--set key=value` overrides a
 parameter; `tenaz params` lists them. Tenaz does not set the sampling

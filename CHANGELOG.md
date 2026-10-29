@@ -8,15 +8,23 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `tenaz init --model-for ROLE=ID` pins another model than `--model` for
-  a role, for example a reviewer of another model family. It is
-  repeatable, one role each, and `--context-window-for ROLE=N` sets that
-  model's window (default: the run's). The map is kept in `run.json`
-  under `config.roleModels`; `tenaz status` names the roles it covers, and
-  `status --json` has `role_models`. An unknown or repeated role, the
-  run's own model, and a window for a role with no model of its own are
-  refused, and so is a map with `--harness pi`.
-  Sessions do not use the map yet. See ADR 0010.
+- `tenaz init --model-for ROLE=ID` gives a role another model than
+  `--model`, for example a reviewer of another model family, served by the
+  same engine. It is repeatable, one role each, and
+  `--context-window-for ROLE=N` sets that model's window (default: the
+  run's). The map is kept in `run.json` under `config.roleModels`;
+  `tenaz status` names the roles it covers and gives the builder's context
+  budget, and `status --json` has `role_models`. An unknown or repeated
+  role, the run's own model, and a window for a role with no model of its
+  own are refused, and so is a map with `--harness pi`.
+
+  fx is launched with each session's model, and the session's context
+  budget is the `contextBudget` share of that model's window; the
+  session's journal record has `model`. Planners size cards for the
+  builder's model. After the engine runs out of memory, the lowered budget
+  is raised toward the largest model's budget, and a session whose budget
+  was already under the lowered one does not count toward that raise. See
+  ADR 0010.
 - A builder whose task cannot pass without changing a check of a done task
   writes `.tenaz/conflicts/<TASK>.md` naming those checks and stops. Tenaz
   blocks the task at once, without more attempts or a split, journals a

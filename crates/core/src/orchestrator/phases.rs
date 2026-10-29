@@ -84,7 +84,7 @@ impl Runner {
     fn card_sizing(&self) -> (String, String) {
         (
             briefing::CARD_SIZING_TITLE.to_owned(),
-            briefing::card_sizing(self.ledger.configured_budget_tokens()),
+            briefing::card_sizing(self.ledger.builder_budget_tokens()),
         )
     }
 

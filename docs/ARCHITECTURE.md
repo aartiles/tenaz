@@ -86,7 +86,7 @@ module with unit tests turns the harness's own records into those events.
 | | `tenaz-acp` (fx) | `tenaz-pi` (Pi) |
 |---|---|---|
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
-| Per session | `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
+| Per session | `settings.json` written for the session's model, then `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
 | Prompt | `session/prompt` | `{"id":"prompt-N","type":"prompt","message":...}`; a `response` that is not `success` or whose disposition is `handled` becomes `PromptRejected` |
 | Steer | fx's extension: a `session/prompt` with `_meta.fx.steer: true` while a prompt runs; otherwise dropped | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
 | Abort | `session/cancel` | `clear_queue` then `abort`; `agent_settled {aborted:true}` follows |

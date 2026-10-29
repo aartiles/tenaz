@@ -11,7 +11,7 @@ use tenaz_core::orchestrator::{InitOptions, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
 use tenaz_core::role::Role;
-use tenaz_core::role_models::{self, RolePick};
+use tenaz_core::role_models::{self, RoleFlags, RolePick, RunDefaults};
 use tenaz_pi::models::ModelEntry;
 
 use super::{
@@ -95,8 +95,8 @@ pub(crate) struct InitArgs {
     /// Default 131072; with --harness pi, the model's contextWindow in models.json.
     #[arg(long)]
     pub(crate) context_window: Option<u64>,
-    /// Another model for one role, `ROLE=ID` (repeatable). Pinned in
-    /// run.json; sessions do not use it yet. Not with --harness pi.
+    /// Another model for one role, `ROLE=ID` (repeatable); the engine must
+    /// serve it next to --model. Not with --harness pi yet.
     #[arg(long = "model-for", value_name = "ROLE=ID")]
     pub(crate) models_for: Vec<String>,
     /// The context window of a --model-for model, `ROLE=N` (repeatable;
@@ -287,7 +287,11 @@ impl InitPlan {
             anyhow::bail!("--project is required");
         };
         let harness = args.harness.map_or(HarnessKind::Fx, HarnessArg::kind);
-        let role_picks = role_models::picks(&args.models_for, &args.context_windows_for, &model)?;
+        let flags = RoleFlags {
+            models: &args.models_for,
+            windows: &args.context_windows_for,
+        };
+        let role_picks = flags.picks(&model)?;
         if harness == HarnessKind::Pi && !role_picks.is_empty() {
             anyhow::bail!("--model-for is not supported with --harness pi yet");
         }
@@ -460,7 +464,12 @@ fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
         plan.args.base_url.clone(),
         plan.args.context_window,
     );
-    let role_models = role_models::pin(&plan.role_picks, &plan.provider, context_window, &input);
+    let run = RunDefaults {
+        provider: &plan.provider,
+        context_window,
+        input: &input,
+    };
+    let role_models = role_models::pin(&plan.role_picks, run);
     Ok(ModelConfig {
         harness: plan.harness,
         harness_version,

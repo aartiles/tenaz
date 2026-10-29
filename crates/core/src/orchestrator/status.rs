@@ -52,18 +52,6 @@ pub fn status_text(project: &Project) -> String {
         .as_ref()
         .map(|i| format!(", in flight {}", i.label))
         .unwrap_or_default();
-    #[expect(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "a context window times a fraction is far below 2^53 and floors to a positive u64"
-    )]
-    let budget =
-        (ledger.config.context_window as f64 * ledger.params.context_budget).floor() as u64;
-    let cap = ledger
-        .context_cap
-        .map(|c| format!(", lowered to {c} after the engine ran out of memory"))
-        .unwrap_or_default();
     let mut lines = vec![
         format!(
             "Phase: {}{}{}",
@@ -104,7 +92,7 @@ pub fn status_text(project: &Project) -> String {
             }
         ),
         format!("Current: {current}{inflight}"),
-        format!("Context budget: {budget} tokens{cap}"),
+        context_budget_line(&ledger),
         format!(
             "Sessions: {} ({} stopped or failed), compactions {}",
             sessions.len(),
@@ -128,6 +116,24 @@ Tool-call repairs: {repairs} (tool-call arguments the proxy fixed before the har
 
 /// The engine proxy's log of repaired tool-call arguments, under `.tenaz/private/`.
 pub const TOOL_REPAIRS: &str = "tool-repairs.jsonl";
+
+/// `Context budget: N tokens`, the builder's when roles have their own
+/// models, and the cap after a memory failure when it holds the builder
+/// back (a raise toward a larger model's budget can pass it).
+fn context_budget_line(ledger: &Ledger) -> String {
+    let whose = if ledger.config.role_models.is_empty() {
+        ""
+    } else {
+        " for the builder"
+    };
+    let budget = ledger.builder_budget_tokens();
+    let cap = ledger
+        .context_cap
+        .filter(|c| *c < budget)
+        .map(|c| format!(", lowered to {c} after the engine ran out of memory"))
+        .unwrap_or_default();
+    format!("Context budget: {budget} tokens{whose}{cap}")
+}
 
 /// The `Model:` line and, when some roles have a model of their own, the
 /// `Role models:` line after it.
@@ -280,6 +286,13 @@ mod tests {
     use crate::role_models::RoleModel;
 
     fn project_with(role_models: BTreeMap<Role, RoleModel>) -> (tempfile::TempDir, Project) {
+        project_capped(role_models, None)
+    }
+
+    fn project_capped(
+        role_models: BTreeMap<Role, RoleModel>,
+        context_cap: Option<u64>,
+    ) -> (tempfile::TempDir, Project) {
         let work = tempfile::tempdir().unwrap();
         let project = Project::new(work.path());
         let config = ModelConfig {
@@ -294,7 +307,7 @@ mod tests {
             thinking: None,
             role_models,
         };
-        let ledger = Ledger::new(
+        let mut ledger = Ledger::new(
             "t".into(),
             "b".into(),
             "s".into(),
@@ -303,6 +316,7 @@ mod tests {
             RunParams::default(),
             vec![],
         );
+        ledger.context_cap = context_cap;
         project.save_ledger(&ledger).unwrap();
         (work, project)
     }
@@ -332,9 +346,50 @@ mod tests {
     }
 
     #[test]
+    fn the_context_budget_is_the_builder_s_model_s() {
+        let builder = RoleModel {
+            model: "sushi/B".into(),
+            id: "B".into(),
+            context_window: 65536,
+            input: vec!["text".into()],
+        };
+        let (_work, project) = project_with(BTreeMap::from([(Role::Builder, builder)]));
+        let text = status_text(&project);
+        assert!(
+            text.contains("Context budget: 42598 tokens for the builder\n"),
+            "{text}"
+        );
+    }
+
+    /// A cap raised toward a larger model's budget no longer holds the
+    /// builder back.
+    #[test]
+    fn a_cap_is_shown_only_while_it_lowers_the_builder_s_budget() {
+        let line = |cap| {
+            let (_work, project) = project_capped(BTreeMap::new(), Some(cap));
+            let text = status_text(&project);
+            text.lines()
+                .find(|l| l.starts_with("Context budget:"))
+                .map(str::to_owned)
+        };
+        assert_eq!(
+            line(49_190).as_deref(),
+            Some(
+                "Context budget: 85196 tokens, lowered to 49190 after the engine ran out of memory"
+            )
+        );
+        assert_eq!(
+            line(109_791).as_deref(),
+            Some("Context budget: 85196 tokens")
+        );
+    }
+
+    #[test]
     fn without_role_models_status_has_no_line_and_an_empty_map() {
         let (_work, project) = project_with(BTreeMap::new());
-        assert!(!status_text(&project).contains("Role models"));
+        let text = status_text(&project);
+        assert!(!text.contains("Role models"), "{text}");
+        assert!(text.contains("Context budget: 85196 tokens\n"), "{text}");
         assert_eq!(status_json(&project)["role_models"], json!({}));
     }
 }

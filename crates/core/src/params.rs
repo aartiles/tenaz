@@ -53,9 +53,10 @@ pub struct RunParams {
     /// Seconds to wait before each of those reruns, while the engine frees
     /// the memory the failed request held (0 reruns at once).
     pub capacity_retry_wait_sec: u64,
-    /// Sessions in a row without a memory failure before a lowered context
-    /// budget is raised halfway back; doubles after each raise that fails,
-    /// up to four times as many (0 keeps it lowered).
+    /// Sessions in a row held at a lowered context budget without a memory
+    /// failure before it is raised halfway toward the largest model's
+    /// budget; doubles after each raise that fails, up to four times as
+    /// many (0 keeps it lowered).
     pub capacity_recover_sessions: u32,
     /// A single tool result above this (about 4 characters per token) gets a steer.
     pub big_output_tokens: usize,

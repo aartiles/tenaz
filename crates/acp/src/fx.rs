@@ -5,8 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tenaz_core::ports::HarnessInfo;
+use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionModel, SessionSpec};
 use tenaz_core::util::wrap_command;
 
 use crate::AcpHarness;
@@ -39,6 +40,17 @@ pub struct FxSettings {
 }
 
 impl FxSettings {
+    /// These settings with `model` in place of the model they name.
+    #[must_use]
+    pub fn for_model(&self, model: &SessionModel) -> Self {
+        Self {
+            model: model.id.clone(),
+            context_window: model.context_window,
+            supports_vision: model.supports_images,
+            ..self.clone()
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         let mut json = serde_json::json!({
             "providers": {
@@ -94,12 +106,8 @@ pub fn write_profile(
     settings: &FxSettings,
     mcp: &[ProfileMcpServer],
 ) -> io::Result<()> {
+    write_settings(home, settings)?;
     let dir = home.join(".fx");
-    std::fs::create_dir_all(&dir)?;
-    std::fs::write(
-        dir.join("settings.json"),
-        serde_json::to_string_pretty(&settings.to_json())?,
-    )?;
     let servers: serde_json::Map<String, serde_json::Value> = mcp
         .iter()
         .map(|s| (s.name.clone(), serde_json::json!({ "type": "http", "url": s.url, "enabled": true, "operation_timeout_ms": s.operation_timeout_ms })))
@@ -109,6 +117,51 @@ pub fn write_profile(
         serde_json::to_string_pretty(&serde_json::json!({ "mcp": servers }))?,
     )?;
     Ok(())
+}
+
+/// Writes `settings.json` under `<home>/.fx/`.
+pub fn write_settings(home: &Path, settings: &FxSettings) -> io::Result<()> {
+    let dir = home.join(".fx");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(
+        dir.join("settings.json"),
+        serde_json::to_string_pretty(&settings.to_json())?,
+    )
+}
+
+/// fx with its settings written for each session's model before fx starts.
+/// Sessions run one after another, so the one `HOME` holds the model of the
+/// session that is starting.
+#[derive(Debug)]
+pub struct FxHarness {
+    acp: AcpHarness,
+    home: PathBuf,
+    settings: FxSettings,
+}
+
+impl FxHarness {
+    /// `acp` launched with `HOME` at `home`, where `settings` are rewritten
+    /// for each session's model.
+    pub fn new(acp: AcpHarness, home: impl Into<PathBuf>, settings: FxSettings) -> Self {
+        Self {
+            acp,
+            home: home.into(),
+            settings,
+        }
+    }
+}
+
+#[async_trait]
+impl Harness for FxHarness {
+    fn info(&self) -> HarnessInfo {
+        self.acp.info()
+    }
+
+    async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
+        write_settings(&self.home, &self.settings.for_model(&spec.model))
+            .map_err(|e| HarnessError::Spawn(format!("cannot write the fx settings: {e}")))?;
+        self.acp.open(spec).await
+    }
 }
 
 /// The first line of `fx --version`.
@@ -242,7 +295,6 @@ impl FxLaunch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tenaz_core::ports::Harness as _;
 
     #[test]
     fn profile_files_match_the_spike_layout() {

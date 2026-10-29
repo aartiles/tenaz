@@ -1,5 +1,6 @@
-//! Which model plays each role: the `--model-for ROLE=ID` map `init`
-//! checks and pins in `run.json`. A role without an entry is played by
+//! Which model plays each role: the `--model-for ROLE=ID` and
+//! `--context-window-for ROLE=N` pairs `init` checks and pins in
+//! `run.json`. A role without an entry is played by
 //! the run's model (ADR 0010).
 
 use std::collections::BTreeMap;
@@ -7,6 +8,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::ports::SessionModel;
 use crate::role::Role;
 
 /// A model that plays one role instead of the run's. It is served by the
@@ -22,6 +24,24 @@ pub struct RoleModel {
     pub input: Vec<String>,
 }
 
+/// The `input` entry of a model that reads images.
+pub const IMAGE_INPUT: &str = "image";
+
+impl RoleModel {
+    pub fn supports_images(&self) -> bool {
+        self.input.iter().any(|i| i == IMAGE_INPUT)
+    }
+
+    pub fn session_model(&self) -> SessionModel {
+        SessionModel {
+            name: self.model.clone(),
+            id: self.id.clone(),
+            context_window: self.context_window,
+            supports_images: self.supports_images(),
+        }
+    }
+}
+
 /// A role's model as `init` was given it, before the defaults fill in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RolePick {
@@ -32,68 +52,70 @@ pub struct RolePick {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RoleModelError {
-    #[error("{flag} expects ROLE={value}, got {got}")]
-    Syntax {
-        flag: &'static str,
-        value: &'static str,
-        got: String,
-    },
-    #[error("{flag}: unknown role {role}; roles: {roles}", roles = role_names())]
-    UnknownRole { flag: &'static str, role: String },
-    #[error("{flag} {role} is given twice")]
-    Twice { flag: &'static str, role: Role },
-    #[error("{MODEL_FLAG} {role}={id} names the run's --model; leave it out")]
+    #[error("{} expects ROLE={}, got {got}", flag.name, flag.value)]
+    Syntax { flag: &'static Flag, got: String },
+    #[error("{}: unknown role {role}; roles: {roles}", flag.name, roles = role_names())]
+    UnknownRole { flag: &'static Flag, role: String },
+    #[error("{} {role} is given twice", flag.name)]
+    Twice { flag: &'static Flag, role: Role },
+    #[error("{} {role}={id} names the run's --model; leave it out", MODEL.name)]
     SameAsDefault { role: Role, id: String },
-    #[error("{WINDOW_FLAG} {0} needs a {MODEL_FLAG} {0}")]
+    #[error("{window} {0} needs a {model} {0}", window = WINDOW.name, model = MODEL.name)]
     WindowWithoutModel(Role),
-    #[error("{WINDOW_FLAG} {role} is not a number of tokens: {got}")]
+    #[error("{} {role} is not a positive number of tokens: {got}", WINDOW.name)]
     BadWindow { role: Role, got: String },
 }
 
-const MODEL_FLAG: &str = "--model-for";
-const WINDOW_FLAG: &str = "--context-window-for";
+/// A flag of `ROLE=VALUE` pairs, and what its errors call VALUE.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Flag {
+    pub name: &'static str,
+    pub value: &'static str,
+}
+
+const MODEL: Flag = Flag {
+    name: "--model-for",
+    value: "ID",
+};
+const WINDOW: Flag = Flag {
+    name: "--context-window-for",
+    value: "N",
+};
 
 fn role_names() -> String {
     Role::ALL.map(Role::as_str).join(", ")
 }
 
-/// The picks from `--model-for` and `--context-window-for` pairs. A role
-/// given twice, a model the same as the run's `default_id`, or a window
-/// for a role with no model of its own is an error.
-pub fn picks(
-    models: &[String],
-    windows: &[String],
-    default_id: &str,
-) -> Result<BTreeMap<Role, RolePick>, RoleModelError> {
-    let mut picks = BTreeMap::new();
-    for (role, id) in pairs(MODEL_FLAG, "ID", models)? {
-        add_model(&mut picks, role, id, default_id)?;
-    }
-    for (role, raw) in pairs(WINDOW_FLAG, "N", windows)? {
-        add_window(&mut picks, role, &raw)?;
-    }
-    Ok(picks)
+/// The `--model-for` and `--context-window-for` pairs as given.
+#[derive(Clone, Copy, Debug)]
+pub struct RoleFlags<'a> {
+    pub models: &'a [String],
+    pub windows: &'a [String],
 }
 
-fn add_model(
-    picks: &mut BTreeMap<Role, RolePick>,
-    role: Role,
-    id: String,
-    default_id: &str,
-) -> Result<(), RoleModelError> {
-    if id == default_id {
-        return Err(RoleModelError::SameAsDefault { role, id });
-    }
-    let pick = RolePick {
-        id,
-        context_window: None,
-    };
-    match picks.insert(role, pick) {
-        Some(_) => Err(RoleModelError::Twice {
-            flag: MODEL_FLAG,
-            role,
-        }),
-        None => Ok(()),
+impl RoleFlags<'_> {
+    /// The picks these flags make. A pair that is not `ROLE=VALUE`, an
+    /// unknown role, a role given twice, a model the same as the run's
+    /// `default_id`, a window for a role with no model of its own, and a
+    /// window that is not a positive number are errors.
+    pub fn picks(self, default_id: &str) -> Result<BTreeMap<Role, RolePick>, RoleModelError> {
+        let mut picks = BTreeMap::new();
+        for (role, id) in pairs(&MODEL, self.models)? {
+            if id == default_id {
+                return Err(RoleModelError::SameAsDefault { role, id });
+            }
+            let pick = RolePick {
+                id,
+                context_window: None,
+            };
+            if picks.insert(role, pick).is_some() {
+                return Err(RoleModelError::Twice { flag: &MODEL, role });
+            }
+        }
+        for (role, raw) in pairs(&WINDOW, self.windows)? {
+            add_window(&mut picks, role, &raw)?;
+        }
+        Ok(picks)
     }
 }
 
@@ -107,29 +129,26 @@ fn add_window(
         .ok_or(RoleModelError::WindowWithoutModel(role))?;
     if pick.context_window.is_some() {
         return Err(RoleModelError::Twice {
-            flag: WINDOW_FLAG,
+            flag: &WINDOW,
             role,
         });
     }
-    let window =
-        raw.parse::<u64>()
-            .ok()
-            .filter(|w| *w > 0)
-            .ok_or_else(|| RoleModelError::BadWindow {
-                role,
-                got: raw.to_owned(),
-            })?;
-    pick.context_window = Some(window);
+    pick.context_window = Some(parse_window(role, raw)?);
     Ok(())
 }
 
-/// `flag`'s `ROLE=VALUE` pairs, the role parsed; `value` names VALUE in
-/// the error.
-fn pairs(
-    flag: &'static str,
-    value: &'static str,
-    raw: &[String],
-) -> Result<Vec<(Role, String)>, RoleModelError> {
+fn parse_window(role: Role, raw: &str) -> Result<u64, RoleModelError> {
+    match raw.parse::<u64>() {
+        Ok(window) if window > 0 => Ok(window),
+        _ => Err(RoleModelError::BadWindow {
+            role,
+            got: raw.to_owned(),
+        }),
+    }
+}
+
+/// `flag`'s `ROLE=VALUE` pairs, the role parsed.
+fn pairs(flag: &'static Flag, raw: &[String]) -> Result<Vec<(Role, String)>, RoleModelError> {
     raw.iter()
         .map(|pair| {
             let (role, given) = pair
@@ -137,7 +156,6 @@ fn pairs(
                 .filter(|(r, v)| !r.is_empty() && !v.is_empty())
                 .ok_or_else(|| RoleModelError::Syntax {
                     flag,
-                    value,
                     got: pair.clone(),
                 })?;
             let role = role
@@ -151,23 +169,26 @@ fn pairs(
         .collect()
 }
 
-/// The models to pin: each pick under `provider`, with the run's window
-/// where it gave none. A role's model is taken to read images when the
-/// run's does: it gets the run's `input`.
-pub fn pin(
-    picks: &BTreeMap<Role, RolePick>,
-    provider: &str,
-    context_window: u64,
-    input: &[String],
-) -> BTreeMap<Role, RoleModel> {
+/// What a role's model takes from the run's.
+#[derive(Clone, Copy, Debug)]
+pub struct RunDefaults<'a> {
+    pub provider: &'a str,
+    pub context_window: u64,
+    pub input: &'a [String],
+}
+
+/// The models to pin: each pick under the run's provider, with the run's
+/// window where it gave none. A role's model is taken to read images when
+/// the run's does: it gets the run's `input`.
+pub fn pin(picks: &BTreeMap<Role, RolePick>, run: RunDefaults<'_>) -> BTreeMap<Role, RoleModel> {
     picks
         .iter()
         .map(|(role, pick)| {
             let model = RoleModel {
-                model: format!("{provider}/{}", pick.id),
+                model: format!("{}/{}", run.provider, pick.id),
                 id: pick.id.clone(),
-                context_window: pick.context_window.unwrap_or(context_window),
-                input: input.to_vec(),
+                context_window: pick.context_window.unwrap_or(run.context_window),
+                input: run.input.to_vec(),
             };
             (*role, model)
         })
@@ -178,10 +199,6 @@ pub fn pin(
 mod tests {
     use super::*;
 
-    fn strings(raw: &[&str]) -> Vec<String> {
-        raw.iter().map(|s| (*s).to_owned()).collect()
-    }
-
     fn pick(id: &str, context_window: Option<u64>) -> RolePick {
         RolePick {
             id: id.into(),
@@ -191,12 +208,11 @@ mod tests {
 
     #[test]
     fn picks_name_a_model_per_role_and_an_optional_window() {
-        let picks = picks(
-            &strings(&["reviewer=B", "final-reviewer=B", "split=C"]),
-            &strings(&["reviewer=65536"]),
-            "A",
-        )
-        .unwrap();
+        let flags = RoleFlags {
+            models: &["reviewer=B", "final-reviewer=B", "split=C"].map(String::from),
+            windows: &["reviewer=65536"].map(String::from),
+        };
+        let picks = flags.picks("A").unwrap();
         assert_eq!(
             picks.into_iter().collect::<Vec<_>>(),
             vec![
@@ -207,65 +223,74 @@ mod tests {
         );
     }
 
+    /// `--model-for` and `--context-window-for` pairs, and the error each gives.
+    const WRONG: [(&[&str], &[&str], &str); 11] = [
+        (
+            &["reviewer"],
+            &[],
+            "--model-for expects ROLE=ID, got reviewer",
+        ),
+        (
+            &["reviewer="],
+            &[],
+            "--model-for expects ROLE=ID, got reviewer=",
+        ),
+        (&["=B"], &[], "--model-for expects ROLE=ID, got =B"),
+        (
+            &["critic=B"],
+            &[],
+            "--model-for: unknown role critic; roles: bootstrap, builder, reviewer, split, replan, final-reviewer",
+        ),
+        (
+            &["reviewer=B", "reviewer=C"],
+            &[],
+            "--model-for reviewer is given twice",
+        ),
+        (
+            &["builder=A"],
+            &[],
+            "--model-for builder=A names the run's --model; leave it out",
+        ),
+        (
+            &["reviewer=B"],
+            &["reviewer"],
+            "--context-window-for expects ROLE=N, got reviewer",
+        ),
+        (
+            &["reviewer=B"],
+            &["split=1000"],
+            "--context-window-for split needs a --model-for split",
+        ),
+        (
+            &["reviewer=B"],
+            &["reviewer=1", "reviewer=2"],
+            "--context-window-for reviewer is given twice",
+        ),
+        (
+            &["reviewer=B"],
+            &["reviewer=big"],
+            "--context-window-for reviewer is not a positive number of tokens: big",
+        ),
+        (
+            &["reviewer=B"],
+            &["reviewer=0"],
+            "--context-window-for reviewer is not a positive number of tokens: 0",
+        ),
+    ];
+
     #[test]
     fn a_wrong_pair_is_refused_with_what_is_wrong() {
-        let cases: [(&[&str], &[&str], &str); 11] = [
-            (
-                &["reviewer"],
-                &[],
-                "--model-for expects ROLE=ID, got reviewer",
-            ),
-            (
-                &["reviewer="],
-                &[],
-                "--model-for expects ROLE=ID, got reviewer=",
-            ),
-            (&["=B"], &[], "--model-for expects ROLE=ID, got =B"),
-            (
-                &["critic=B"],
-                &[],
-                "--model-for: unknown role critic; roles: bootstrap, builder, reviewer, split, replan, final-reviewer",
-            ),
-            (
-                &["reviewer=B", "reviewer=C"],
-                &[],
-                "--model-for reviewer is given twice",
-            ),
-            (
-                &["builder=A"],
-                &[],
-                "--model-for builder=A names the run's --model; leave it out",
-            ),
-            (
-                &["reviewer=B"],
-                &["reviewer"],
-                "--context-window-for expects ROLE=N, got reviewer",
-            ),
-            (
-                &["reviewer=B"],
-                &["split=1000"],
-                "--context-window-for split needs a --model-for split",
-            ),
-            (
-                &["reviewer=B"],
-                &["reviewer=1", "reviewer=2"],
-                "--context-window-for reviewer is given twice",
-            ),
-            (
-                &["reviewer=B"],
-                &["reviewer=big"],
-                "--context-window-for reviewer is not a number of tokens: big",
-            ),
-            (
-                &["reviewer=B"],
-                &["reviewer=0"],
-                "--context-window-for reviewer is not a number of tokens: 0",
-            ),
-        ];
-        let wrong: Vec<String> = cases
+        let wrong: Vec<String> = WRONG
             .iter()
             .filter_map(|(models, windows, expected)| {
-                let got = picks(&strings(models), &strings(windows), "A")
+                let owned = |raw: &[&str]| raw.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+                let (models, windows) = (owned(models), owned(windows));
+                let flags = RoleFlags {
+                    models: &models,
+                    windows: &windows,
+                };
+                let got = flags
+                    .picks("A")
                     .map_or_else(|e| e.to_string(), |p| format!("{p:?}"));
                 (got != *expected).then(|| format!("{models:?} {windows:?}: {got}"))
             })
@@ -279,8 +304,15 @@ mod tests {
             (Role::Reviewer, pick("B", None)),
             (Role::Split, pick("C", Some(32768))),
         ]);
-        let input = strings(&["text", "image"]);
-        let pinned = pin(&picks, "sushi", 131_072, &input);
+        let input = ["text", "image"].map(String::from).to_vec();
+        let pinned = pin(
+            &picks,
+            RunDefaults {
+                provider: "sushi",
+                context_window: 131_072,
+                input: &input,
+            },
+        );
         let model = |id: &str, context_window| RoleModel {
             model: format!("sushi/{id}"),
             id: id.into(),
