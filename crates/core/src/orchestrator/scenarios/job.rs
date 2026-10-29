@@ -15,6 +15,7 @@ use crate::briefing::OUT_OF_MEMORY;
 use crate::lease::{Gate, LeaseManager};
 use crate::ledger::JournalRecord::JobFinished;
 use crate::ledger::{JournalRecord, Phase};
+use crate::orchestrator::ENGINE_WAIT;
 use crate::ports::{
     Clock, EngineAdapter, EngineError, Harness, HarnessError, HarnessInfo, ModelState, Session,
     SessionSpec,
@@ -626,7 +627,7 @@ impl Clock for StopOnEngineWait {
     }
 
     async fn sleep(&self, duration: std::time::Duration) {
-        if duration == std::time::Duration::from_secs(20) {
+        if duration == ENGINE_WAIT {
             self.stop.cancel();
         }
         self.clock.sleep(duration).await;

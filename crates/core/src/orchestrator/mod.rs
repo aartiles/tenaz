@@ -120,6 +120,9 @@ impl std::fmt::Debug for Runner {
     }
 }
 
+/// The pause between two checks that the engine serves the pinned model.
+pub(crate) const ENGINE_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
 impl Runner {
     /// Loads the ledger and checks the pins. `stop` pauses the run when cancelled.
     pub fn open(project: Project, deps: Deps, stop: CancellationToken) -> Result<Self, RunError> {
@@ -231,9 +234,10 @@ impl Runner {
         Ok(())
     }
 
-    /// Waits for the engine to serve the pinned model (up to 30 tries, 20 s apart), and logs
-    /// the wait, `why`, once the first try fails. The last error when it still does not
-    /// serve; `None` once it serves, or when the run is stopping, which callers check.
+    /// Waits for the engine to serve the pinned model (up to 30 tries,
+    /// [`ENGINE_WAIT`] apart), and logs the wait, `why`, once the first try
+    /// fails. The last error when it still does not serve; `None` once it
+    /// serves, or when the run is stopping, which callers check.
     async fn wait_for_engine(&self, why: &str) -> Option<RunError> {
         const TRIES: u32 = 30;
         for tried in 1..=TRIES {
@@ -249,10 +253,7 @@ impl Runner {
                     "  waiting for the LLM to serve again {why}: {error}"
                 ));
             }
-            self.deps
-                .clock
-                .sleep(std::time::Duration::from_secs(20))
-                .await;
+            self.deps.clock.sleep(ENGINE_WAIT).await;
         }
         None
     }

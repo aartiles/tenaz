@@ -114,7 +114,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   (`--engine generic` without stop/start scripts) the job runs next to the
   resident LLM, with only the request gate closed, and may still fail for
   memory. `verify` still runs with the LLM loaded, so checks that render
-  can clash the same way.
+  can clash the same way. No job has yet run under the sandbox launcher
+  (sandbox-exec, bwrap), with a GPU program, or around a real engine's
+  unload and reload (Sushi).
 - **An engine error inside a stream** (Sushi's `GenerationOutOfMemory`),
   with fx; Pi reports engine errors itself. Its shape, `data: {"error":
   {"message":…},"choices":[{"finish_reason":"error"}]}`, was read from

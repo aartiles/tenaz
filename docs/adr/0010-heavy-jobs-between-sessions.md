@@ -130,6 +130,7 @@ Taken while implementing D, on the open questions above:
   duration of the job itself, without the engine's unload and reload). Run
   reports can tell from them which runs used jobs. A job a stop cut short
   has a `job-started` and no `job-finished`; a `paused` record follows it.
+  The lease's own records name the job as holder `job`.
 - **A stop during a job** pauses the run with the job file kept and the
   attempt not charged; on resume the job runs again before any session,
   and the next session is not told it continues a stopped one.
@@ -156,6 +157,6 @@ Taken while implementing D, on the open questions above:
   duration), the protocol, builder prompt, SKILL.md, README and
   COMPATIBILITY updated, and the note to a builder session rerun after an
   engine out-of-memory error.
-- Tested with the scripted harness, a fake job runner and, in one run, a
-  lease over a fake LLM whose reload fails; whether a small model declares
-  jobs at the right times is unknown until a run.
+- Tested with the scripted harness, a fake job runner and, in three runs,
+  a lease over a fake LLM whose reload fails; whether a small model
+  declares jobs at the right times is unknown until a run.
