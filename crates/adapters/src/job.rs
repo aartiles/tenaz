@@ -155,7 +155,7 @@ mod tests {
         assert!(outcome.timed_out && outcome.status.is_none(), "{outcome:?}");
         let pid = std::fs::read_to_string(&pid).unwrap();
         assert!(
-            gone_within(pid.trim(), Duration::from_secs(5)),
+            gone_within(pid.trim().parse().expect("a pid"), Duration::from_secs(5)),
             "the job still runs"
         );
     }
@@ -169,9 +169,10 @@ mod tests {
         let stop = CancellationToken::new();
         let stopping = stop.clone();
         let running = pid.clone();
-        // Stop once the job has written its pid: no fixed delay.
+        // Stop once the job has written its pid, the whole line: no fixed
+        // delay, and no stop between creating the file and writing it.
         tokio::spawn(async move {
-            while !running.exists() {
+            while !std::fs::read_to_string(&running).is_ok_and(|p| p.ends_with('\n')) {
                 tokio::task::yield_now().await;
             }
             stopping.cancel();
@@ -182,7 +183,7 @@ mod tests {
         assert!(outcome.stopped, "{outcome:?}");
         let pid = std::fs::read_to_string(&pid).unwrap();
         assert!(
-            gone_within(pid.trim(), Duration::from_secs(5)),
+            gone_within(pid.trim().parse().expect("a pid"), Duration::from_secs(5)),
             "the stopped job still runs"
         );
     }
@@ -200,7 +201,7 @@ mod tests {
         .await;
         let pid = std::fs::read_to_string(&pid).unwrap();
         assert!(
-            gone_within(pid.trim(), Duration::from_secs(5)),
+            gone_within(pid.trim().parse().expect("a pid"), Duration::from_secs(5)),
             "the background sleep still runs"
         );
     }

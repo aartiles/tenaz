@@ -178,7 +178,10 @@ mod tests {
         for name in ["quiet.pid", "loud.pid"] {
             let pid = std::fs::read_to_string(dir.path().join(name)).unwrap();
             assert!(
-                crate::testing::gone_within(pid.trim(), Duration::from_secs(5)),
+                crate::testing::gone_within(
+                    pid.trim().parse().expect("a pid"),
+                    Duration::from_secs(5)
+                ),
                 "{name} still running"
             );
         }
