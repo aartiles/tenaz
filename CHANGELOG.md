@@ -25,7 +25,8 @@ uses [Semantic Versioning](https://semver.org/).
   check. The builder prompt no longer promises a replan for any other
   task that cannot be done. See ADR 0009.
 - Without the sandbox, a write tool that names a file outside the project,
-  the temporary directories and `sandboxAllowWrite` is noted: a line in
+  the temporary directories, on macOS the per-user cache, and
+  `sandboxAllowWrite` is noted: a line in
   `orchestrator.log`, `outside_writes` and an `outside-write` watchdog
   event in the session's journal record, and one steer telling the session
   its files belong in the project. A bootstrap step that is not accepted
@@ -57,18 +58,20 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- An engine that runs out of memory part way through a reply is reported
-  as such. Sushi sends the error inside a stream that started with status
-  200, which the proxy ignored, so the session read as a harness exit:
-  `failed (toolUse)` in the log and `cause: harness` in the journal. The
-  proxy now reads an `error` sent inside the stream and reports it as it
-  arrives; the session's log line says `failed (engine out of memory)` and
-  the rerun's log line says another program may be using the GPU. The
-  journal's `engine-retry` keeps its values: an engine error stated before
-  the harness exits is now `cause: engine`, not `harness`, out of memory
-  included. An engine that sends an `error` object in a `data:` chunk is
-  reported the same way. In the Lotion Pump run
-  seven sessions ended this way while Blender rendered on the same GPU.
+- With fx, an engine that runs out of memory part way through a reply is
+  reported as such. Sushi sends the error inside a stream that started
+  with status 200, which the proxy ignored, so the session read as a
+  harness exit: `failed (toolUse)` in the log and `cause: harness` in the
+  journal. The proxy now reads an `error` sent in a `data:` chunk of the
+  stream and reports it as it arrives; the session's log line says
+  `failed (engine out of memory)` and the rerun's log line says another
+  program may be using the GPU. In the Lotion Pump run seven sessions
+  ended this way while Blender rendered on the same GPU. Pi reports
+  engine errors itself; the proxy is not on its path.
+- Any engine error stated before the harness exits now journals the
+  rerun as `cause: engine` rather than `harness`: the exit follows the
+  error. The journal's `cause` keeps its two values; out of memory is
+  `engine`.
 - A harness that dies in a later prompt of its session, such as the one
   that asks a builder for its task's checks or the note that resumes an
   interrupted turn, is rerun without charging an attempt, as one that

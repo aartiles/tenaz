@@ -153,7 +153,10 @@ impl Recovery {
         }
         self.retry += 1;
         // What the engine said comes first: fx exits after an engine
-        // error, and that exit is its consequence, not its cause.
+        // error, and that exit is its consequence, not its cause. The
+        // session's log line ranks an abort reason higher (`outcome` in
+        // session/record.rs): it says why the session stopped, this says
+        // why it is rerun.
         let cause = if metrics.engine_out_of_memory {
             FailureCause::OutOfMemory
         } else if metrics.harness_exit.is_none()

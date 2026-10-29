@@ -343,6 +343,13 @@ mod tests {
             ))
         );
         assert_eq!(
+            stream_error(&serde_json::json!({"error": "GenerationOutOfMemory"})),
+            Some((
+                "GenerationOutOfMemory".to_owned(),
+                EngineErrorKind::OutOfMemory
+            ))
+        );
+        assert_eq!(
             stream_error(&serde_json::json!({"choices": [{"delta": {"content": "hi"}}]})),
             None
         );

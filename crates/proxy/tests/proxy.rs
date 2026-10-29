@@ -350,6 +350,11 @@ async fn an_error_inside_a_stream_is_reported_before_the_stream_ends() {
     );
     drop(response);
     let closed = settle(&events, 2).await;
+    assert_eq!(
+        closed.len(),
+        2,
+        "no completion once the client left: {closed:?}"
+    );
     assert!(
         matches!(&closed[1], ProxyEvent::Completed { usage: None, .. }),
         "{closed:?}"
