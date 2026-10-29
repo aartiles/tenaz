@@ -603,7 +603,9 @@ pub enum JournalRecord {
         label: String,
         retry: u32,
         wait_s: u64,
-        /// `engine` (a provider error) or `harness` (the harness ended early).
+        /// `engine` (the engine failed a request, out of memory included,
+        /// even when the harness exited after it) or `harness` (the harness
+        /// ended early with no engine error before it).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cause: Option<String>,
     },

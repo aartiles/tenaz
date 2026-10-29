@@ -113,8 +113,9 @@ pub struct RunParams {
     pub repair_tool_args: bool,
     /// Run the coding agent and `verify` in an OS sandbox (Seatbelt on macOS,
     /// Landlock on Linux): they can write only to the project, its git
-    /// directory, the temporary directories and `sandboxAllowWrite`, and
-    /// never to the git hooks and config or `.tenaz/run.json`.
+    /// directory, the temporary directories, on macOS the per-user cache,
+    /// and `sandboxAllowWrite`, and never to the git hooks and config or
+    /// `.tenaz/run.json`.
     pub sandbox: bool,
     /// More directories a sandboxed run may write to, comma-separated
     /// (`~` is the home directory); the ones that do not exist are skipped.

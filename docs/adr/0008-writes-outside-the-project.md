@@ -51,9 +51,10 @@ shell command can write anywhere, and its text cannot be read reliably
 **B**, for runs without the sandbox. A write tool's target is resolved
 against the project root, where sessions run (`~` expanded, `.` and `..`
 taken out as written), and checked against the places the sandbox allows:
-the project, its git directories, the temporary directories, `/dev` and
-`sandboxAllowWrite`. The sandbox adapter builds that list once per run,
-from the same policy the sandbox uses, so the two cannot drift apart.
+the project, its git directories, the temporary directories, on macOS the
+per-user cache, `/dev` and `sandboxAllowWrite`. The sandbox adapter builds
+that list once per run, from the same policy the sandbox uses, so the two
+cannot drift apart.
 Each file outside them is:
 
 - a watchdog event `outside-write` with the path, and in the session's
@@ -73,8 +74,9 @@ they went.
   Only the sandbox catches those.
 - Symbolic links are not followed: a link inside the project to a
   directory outside it counts as inside, and a path that reaches the
-  project through a link outside it counts as outside. The project and the
-  temporary directories are allowed both as given and as resolved.
+  project through a link outside it counts as outside. The project, the
+  temporary directories and the per-user cache are allowed both as given
+  and as resolved.
 - fx runs with `HOME` set to its profile; a `~` in an fx write is read as
   the user's home. Either way the file is outside the project.
 - Tested with the scripted harness; not yet seen against a real model.

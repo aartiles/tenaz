@@ -1,8 +1,9 @@
 //! The optional OS sandbox (`sandbox` in run.json) around the coding agent
 //! and `verify`: they may write only to the project, its git directory, the
-//! temporary directories and the configured caches, and never to the files
-//! Tenaz itself runs or trusts outside the sandbox (the git hooks and
-//! config, the `.git` file of a worktree, `.tenaz/run.json`).
+//! temporary directories, on macOS the per-user cache, and the configured
+//! caches, and never to the files Tenaz itself runs or trusts outside the
+//! sandbox (the git hooks and config, the `.git` file of a worktree,
+//! `.tenaz/run.json`).
 //!
 //! A sandboxed program is started as `tenaz sandbox-exec <policy> -- <program>`
 //! ([`Policy::wrapper`]), which applies the policy to itself and execs the
@@ -49,11 +50,11 @@ pub struct Policy {
 
 impl Policy {
     /// The policy of a run in `root`: write to the project, its git
-    /// directories, the temporary directories, `/dev` and `allow_write`;
-    /// the git hooks and config, a worktree's `.git` file and the ledger
-    /// are protected; `deny_read` is unreadable. The two lists are
-    /// comma-separated, with `~` for the home directory; missing
-    /// directories are skipped.
+    /// directories, the temporary directories, on macOS the per-user cache,
+    /// `/dev` and `allow_write`; the git hooks and config, a worktree's
+    /// `.git` file and the ledger are protected; `deny_read` is unreadable.
+    /// The two lists are comma-separated, with `~` for the home directory;
+    /// missing directories are skipped.
     pub fn for_project(root: &Path, allow_write: &str, deny_read: &str) -> io::Result<Self> {
         let root = std::fs::canonicalize(root)?;
         let mut policy = Self {
@@ -74,7 +75,8 @@ impl Policy {
             policy.write.push(common_dir);
         }
         let temp = [std::env::temp_dir(), PathBuf::from("/tmp")];
-        for dir in temp.iter().chain([&PathBuf::from("/dev")]) {
+        let cache = user_cache_dir();
+        for dir in temp.iter().chain(&cache).chain([&PathBuf::from("/dev")]) {
             if let Ok(dir) = std::fs::canonicalize(dir) {
                 policy.write.push(dir);
             }
@@ -278,20 +280,59 @@ fn read_rules(top: &Path, deny: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
     (readable, listable)
 }
 
-/// `(git dir, common dir)` of the repository at `root`, canonical; they
-/// differ in a linked worktree.
+/// The per-user cache directory of macOS (`getconf DARWIN_USER_CACHE_DIR`,
+/// the `C` beside the temporary `T`), where Metal keeps its shader cache.
+/// Without it every program that draws with Metal compiles its shaders
+/// again on each start: Blender took 11 s instead of 0.9 s for a small
+/// render. `None` elsewhere, or when `getconf` does not answer.
+#[cfg(target_os = "macos")]
+fn user_cache_dir() -> Option<PathBuf> {
+    // By absolute path: whatever it prints becomes a write root.
+    let output = std::process::Command::new("/usr/bin/getconf")
+        .arg("DARWIN_USER_CACHE_DIR")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    cache_dir_from(&output.stdout)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn user_cache_dir() -> Option<PathBuf> {
+    None
+}
+
+/// The cache directory `getconf` printed, when it has the shape macOS gives
+/// it: `/var/folders/<xx>/<user>/C`, with plain names only (no `..`).
+/// Anything else is not trusted as a write root.
+#[cfg(any(target_os = "macos", test))]
+fn cache_dir_from(stdout: &[u8]) -> Option<PathBuf> {
+    let dir = PathBuf::from(std::str::from_utf8(stdout).ok()?.trim());
+    let rest = ["/var/folders", "/private/var/folders"]
+        .iter()
+        .find_map(|base| dir.strip_prefix(base).ok())?;
+    let names: Vec<_> = rest.components().collect();
+    let plain = names
+        .iter()
+        .all(|c| matches!(c, std::path::Component::Normal(_)));
+    (plain && names.len() == 3 && rest.ends_with("C")).then_some(dir)
+}
+
 /// Where a run of `root` without the sandbox may write, for the check of
 /// its write tools (ADR 0008): what the sandbox would allow, resolved, and
-/// the project and the temporary directories as written too, since a
-/// session names them as it is told them (`/tmp`, not `/private/tmp`).
+/// the project, the temporary directories and the per-user cache as written
+/// too, since a session names them as it is told them (`/tmp`, not
+/// `/private/tmp`).
 pub fn write_scope(root: &Path, allow_write: &str) -> io::Result<WriteScope> {
     let policy = Policy::for_project(root, allow_write, "")?;
     let mut others = policy.write;
     others.extend([std::env::temp_dir(), PathBuf::from("/tmp")]);
+    others.extend(user_cache_dir());
     let home = std::env::var_os("HOME").map(PathBuf::from);
     Ok(WriteScope::new(&std::path::absolute(root)?, home, others))
 }
 
+/// `(git dir, common dir)` of the repository at `root`, canonical; they
+/// differ in a linked worktree.
 fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
     let output = std::process::Command::new("git")
         .current_dir(root)
@@ -611,6 +652,16 @@ mod tests {
             );
         }
         assert!(policy.write.iter().any(|w| w.ends_with("dev")));
+        #[cfg(target_os = "macos")]
+        {
+            let cache = std::fs::canonicalize(user_cache_dir().unwrap()).unwrap();
+            assert!(
+                policy.write.iter().any(|w| cache.starts_with(w)),
+                "Metal's cache, {} in {:?}",
+                cache.display(),
+                policy.write
+            );
+        }
         // The git dir is inside the project: it adds no write root.
         assert!(!policy.write.contains(&root.join(".git")));
     }
@@ -799,5 +850,51 @@ mod tests {
         assert!(status.success());
         assert!(root.join("made").exists());
         assert!(!outside.path().join("escaped").exists());
+    }
+
+    /// Only a `C` directory under `/var/folders` is taken from `getconf`.
+    #[test]
+    fn only_a_cache_directory_under_var_folders_is_trusted() {
+        for (printed, trusted) in [
+            ("/var/folders/zb/ys04/C/\n", Some("/var/folders/zb/ys04/C")),
+            (
+                "/private/var/folders/zb/ys04/C",
+                Some("/private/var/folders/zb/ys04/C"),
+            ),
+            ("", None),
+            ("\n", None),
+            ("/", None),
+            ("/var/folders/", None),
+            ("/Users/me/C", None),
+            ("/var/folders/zb/ys04/T/", None),
+            ("/var/folders/../../Users/me/C", None),
+            ("/var/folders/C", None),
+            ("/var/folders/zb/ys04/x/C", None),
+        ] {
+            assert_eq!(
+                cache_dir_from(printed.as_bytes()),
+                trusted.map(PathBuf::from),
+                "{printed:?}"
+            );
+        }
+    }
+
+    /// A sandboxed program writes the per-user cache, where Metal keeps
+    /// its compiled shaders.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_lets_a_program_write_the_user_cache() {
+        let (_dir, root) = repo();
+        let cache = tempfile::tempdir_in(user_cache_dir().unwrap()).unwrap();
+        let policy = Policy::for_project(&root, "", "").unwrap();
+        let script = format!("echo ok > {}/shader", cache.path().display());
+        let status = std::process::Command::new(SANDBOX_EXEC)
+            .arg("-p")
+            .arg(policy.seatbelt_profile())
+            .args(["/bin/sh", "-c", &script])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(cache.path().join("shader").exists());
     }
 }

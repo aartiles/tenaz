@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tenaz_core::session::{capacity_limit, is_image_refusal};
+use tenaz_core::session::{capacity_limit, is_image_refusal, is_out_of_memory};
 
 /// Token usage of one engine response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +26,8 @@ pub enum EngineErrorKind {
     },
     /// A vision engine refused an image in the conversation.
     ImageRefused,
+    /// The engine ran out of memory on the request; it may fit again later.
+    OutOfMemory,
     /// No connection to the engine.
     Unreachable,
     Other,
@@ -66,7 +68,8 @@ pub enum ProxyEvent {
         tool: String,
         fields: Vec<String>,
     },
-    /// The engine returned an error status or could not be reached.
+    /// The engine returned an error status, sent an error inside a stream
+    /// that started with status 200, or could not be reached.
     EngineError {
         request: u64,
         status: Option<u16>,
@@ -153,34 +156,55 @@ pub fn classify_error(body: &[u8]) -> (String, EngineErrorKind) {
     let text = String::from_utf8_lossy(body);
     let message = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
-        .and_then(|j| {
-            j.get("error")
-                .and_then(|e| {
-                    e.get("message")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                        .or_else(|| e.as_str().map(str::to_owned))
-                })
-                .or_else(|| {
-                    j.get("message")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                })
-                .or_else(|| {
-                    j.get("detail")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                })
-        })
+        .and_then(|j| error_message(&j))
         .unwrap_or_else(|| text.trim().to_owned());
-    let kind = if let Some(max_context) = capacity_limit(&message) {
+    let kind = classify_message(&message);
+    (message, kind)
+}
+
+/// The error an engine sent inside a stream that had started well (status
+/// 200), as Sushi does when a generation fails part way:
+/// `data: {"error":{"message":…},"choices":[{"finish_reason":"error"}]}`.
+pub fn stream_error(chunk: &serde_json::Value) -> Option<(String, EngineErrorKind)> {
+    let error = chunk.get("error").filter(|e| {
+        e.as_object().is_some_and(|o| !o.is_empty()) || e.as_str().is_some_and(|s| !s.is_empty())
+    })?;
+    let message = error_message(chunk).unwrap_or_else(|| error.to_string());
+    let kind = classify_message(&message);
+    Some((message, kind))
+}
+
+/// The message of an error object, in the shapes engines use: an `error`
+/// object (its `message`, else its `type` or `code`) or string, or a
+/// top-level `message` or `detail`.
+fn error_message(json: &serde_json::Value) -> Option<String> {
+    let text = |v: Option<&serde_json::Value>| {
+        v.and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    json.get("error")
+        .and_then(|e| {
+            text(e.get("message"))
+                .or_else(|| text(e.get("type")))
+                .or_else(|| text(e.get("code")))
+                .or_else(|| text(Some(e)))
+        })
+        .or_else(|| text(json.get("message")))
+        .or_else(|| text(json.get("detail")))
+}
+
+/// What an engine error message means to the runner.
+fn classify_message(message: &str) -> EngineErrorKind {
+    if let Some(max_context) = capacity_limit(message) {
         EngineErrorKind::Capacity { max_context }
-    } else if is_image_refusal(&message) {
+    } else if is_image_refusal(message) {
         EngineErrorKind::ImageRefused
+    } else if is_out_of_memory(message) {
+        EngineErrorKind::OutOfMemory
     } else {
         EngineErrorKind::Other
-    };
-    (message, kind)
+    }
 }
 
 #[cfg(test)]
@@ -284,5 +308,58 @@ mod tests {
             ("plain failure".to_owned(), EngineErrorKind::Other)
         );
         assert_eq!(classify_error(br#"{"error":"short form"}"#).0, "short form");
+        assert_eq!(
+            classify_error(br#"{"error":{"message":"GenerationOutOfMemory"}}"#).1,
+            EngineErrorKind::OutOfMemory
+        );
+    }
+
+    /// Sushi's chat-completions stream error: the message, else the type.
+    #[test]
+    fn an_error_inside_a_stream_is_read_and_classified() {
+        let chunk = |error: serde_json::Value| {
+            serde_json::json!({
+                "error": error,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}]
+            })
+        };
+        assert_eq!(
+            stream_error(&chunk(serde_json::json!({
+                "message": "error.GenerationOutOfMemory", "type": "server_error",
+                "param": null, "code": null
+            }))),
+            Some((
+                "error.GenerationOutOfMemory".to_owned(),
+                EngineErrorKind::OutOfMemory
+            ))
+        );
+        assert_eq!(
+            stream_error(&chunk(
+                serde_json::json!({"message": "", "type": "GenerationOutOfMemory"})
+            )),
+            Some((
+                "GenerationOutOfMemory".to_owned(),
+                EngineErrorKind::OutOfMemory
+            ))
+        );
+        assert_eq!(
+            stream_error(&serde_json::json!({"error": "GenerationOutOfMemory"})),
+            Some((
+                "GenerationOutOfMemory".to_owned(),
+                EngineErrorKind::OutOfMemory
+            ))
+        );
+        assert_eq!(
+            stream_error(&serde_json::json!({"choices": [{"delta": {"content": "hi"}}]})),
+            None
+        );
+        for empty in [
+            serde_json::Value::Null,
+            serde_json::json!(false),
+            serde_json::json!(""),
+            serde_json::json!({}),
+        ] {
+            assert_eq!(stream_error(&serde_json::json!({"error": empty})), None);
+        }
     }
 }

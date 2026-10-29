@@ -19,8 +19,9 @@ your user. By default it is not a sandbox:
 
 `sandbox=true` (see the README's Sandbox section) runs the agent and
 `verify` in an OS sandbox, Seatbelt on macOS and Landlock on Linux: they
-write only to the project, its git directory, the temporary directories and
-the configured caches; they cannot change the git hooks and config or
+write only to the project, its git directory, the temporary directories,
+on macOS the per-user cache (`getconf DARWIN_USER_CACHE_DIR`) and the
+configured caches; they cannot change the git hooks and config or
 `.tenaz/run.json`, which Tenaz uses outside the sandbox (on Linux Tenaz
 puts them back after each session and `verify` run instead of the kernel
 refusing the write); and they cannot read the configured secrets
