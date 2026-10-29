@@ -62,25 +62,15 @@ impl VerifyRunner for VerifyProcess {
         }
         // `./verify` from the root, as the contract names it: a relative root
         // joined into the program path would be resolved from the root again.
-        let (program, args) = tenaz_core::util::wrap_command(
+        let spawned = crate::process::command(
+            &self.root,
             &self.wrapper,
             std::path::Path::new(&format!("./{}", self.path)),
             args.iter().map(|a| (*a).to_owned()).collect(),
-        );
-        let spawned = tokio::process::Command::new(program)
-            .args(args)
-            .current_dir(&self.root)
-            .env("CI", "1")
-            // `CI` turns colours on in some tools (picocolors, so Vite);
-            // a check that reads their output would see escape codes the
-            // builder's shell never shows it.
-            .env("NO_COLOR", "1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true)
-            .spawn();
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
         let mut child = match spawned {
             Ok(child) => child,
             Err(error) => {
@@ -111,15 +101,10 @@ impl VerifyRunner for VerifyProcess {
         let (status, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
             Ok(Ok(status)) => (status.code(), false),
             Ok(Err(_)) => (None, false),
-            Err(_) => {
-                let _ = child.kill().await;
-                (None, true)
-            }
+            Err(_) => (None, true),
         };
         // Before reading to the end: what is left may hold the pipes open.
-        if let Some(group) = group {
-            kill_group(group).await;
-        }
+        crate::process::reap(&mut child, group).await;
         let stdout = String::from_utf8_lossy(&out.await.unwrap_or_default()).into_owned();
         let stderr = String::from_utf8_lossy(&err.await.unwrap_or_default()).into_owned();
         RawVerifyOutput {
@@ -130,19 +115,6 @@ impl VerifyRunner for VerifyProcess {
             stderr,
         }
     }
-}
-
-/// Kills process group `group` and so whatever `verify` left running.
-/// Through `kill(1)`, as the crate has no unsafe code; a group already
-/// empty is no error.
-async fn kill_group(group: u32) {
-    let _ = tokio::process::Command::new("kill")
-        .args(["-KILL", "--", &format!("-{group}")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
 }
 
 #[cfg(test)]
@@ -192,15 +164,6 @@ mod tests {
         assert!(!raw.missing);
     }
 
-    fn alive(pid: &str) -> bool {
-        std::process::Command::new("kill")
-            .args(["-0", pid])
-            .stderr(Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-    }
-
     /// A check that leaves a server running, as `npm run dev` started and
     /// never stopped: one holding verify's stdout, one not.
     #[tokio::test]
@@ -214,12 +177,10 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10));
         for name in ["quiet.pid", "loud.pid"] {
             let pid = std::fs::read_to_string(dir.path().join(name)).unwrap();
-            let pid = pid.trim();
-            let gone = std::time::Instant::now();
-            while alive(pid) && gone.elapsed() < Duration::from_secs(5) {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-            assert!(!alive(pid), "{name} still running");
+            assert!(
+                crate::testing::gone_within(pid.trim(), Duration::from_secs(5)),
+                "{name} still running"
+            );
         }
     }
 

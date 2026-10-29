@@ -41,6 +41,8 @@ pub struct Deps {
     pub harness: Arc<dyn Harness>,
     pub vcs: Arc<dyn Vcs>,
     pub verify: Arc<dyn VerifyRunner>,
+    /// Runs the heavy jobs builders declare (ADR 0010).
+    pub jobs: Arc<dyn crate::ports::JobRunner>,
     pub clock: Arc<dyn Clock>,
     pub notifier: Arc<dyn Notifier>,
     /// The LLM engine, to check that the model is served before a session.

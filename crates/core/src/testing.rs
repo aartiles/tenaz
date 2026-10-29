@@ -7,6 +7,7 @@
 mod abort;
 mod clock;
 mod harness;
+mod jobs;
 mod notifier;
 mod paced;
 mod player;
@@ -17,6 +18,7 @@ mod verify;
 
 pub use clock::VirtualClock;
 pub use harness::{ScriptedConflict, ScriptedHarness};
+pub use jobs::ScriptedJobs;
 pub use notifier::SilentNotifier;
 pub use player::{OUTSIDE, VERIFY};
 pub use replay::Replay;

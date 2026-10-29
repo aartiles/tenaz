@@ -1,6 +1,7 @@
 # ADR 0010: Heavy jobs between sessions
 
-Status: proposed, 2026-10-29. Not implemented.
+Status: accepted (option D), 2026-10-29. Being implemented: the job runner
+and the lease's cycle are in place; nothing runs a declared job yet.
 
 ## Context
 

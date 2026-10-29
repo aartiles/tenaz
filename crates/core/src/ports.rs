@@ -139,6 +139,39 @@ pub trait VerifyRunner: Send + Sync {
     async fn run(&self, args: &[&str], timeout: Duration) -> RawVerifyOutput;
 }
 
+// ---------- heavy jobs ----------
+
+pub use tokio_util::sync::CancellationToken;
+
+/// How a heavy job a builder declared ended (ADR 0010).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct JobOutcome {
+    /// The exit code; `None` when it was killed or could not start.
+    pub status: Option<i32>,
+    /// It ran past its time limit and was killed.
+    pub timed_out: bool,
+    /// The run was stopping and it was killed.
+    pub stopped: bool,
+    /// Why the job could not run, or what failed around it.
+    pub error: Option<String>,
+}
+
+/// A heavy job to run: a shell command from the project root, its time
+/// limit, and the file its output goes to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JobSpec {
+    pub command: String,
+    pub timeout: Duration,
+    pub log: PathBuf,
+}
+
+/// Runs a builder's heavy job, killed at its time limit or when `stop`
+/// fires.
+#[async_trait]
+pub trait JobRunner: Send + Sync {
+    async fn run(&self, job: &JobSpec, stop: &CancellationToken) -> JobOutcome;
+}
+
 // ---------- time, notifications, memory ----------
 
 /// Wall-clock and monotonic time, and sleeping.

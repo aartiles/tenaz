@@ -18,7 +18,9 @@ use crate::ledger::{HarnessKind, JournalRecord, Launch, ModelConfig};
 use crate::params::RunParams;
 use crate::ports::{Clock, Harness};
 use crate::project::Project;
-use crate::testing::{ScriptedHarness, ScriptedVerify, SilentNotifier, SnapshotVcs, VirtualClock};
+use crate::testing::{
+    ScriptedHarness, ScriptedJobs, ScriptedVerify, SilentNotifier, SnapshotVcs, VirtualClock,
+};
 use crate::write_scope::WriteScope;
 
 /// A project set up with `overrides`, and the repository it was set up in:
@@ -71,6 +73,7 @@ fn deps(
         harness,
         vcs,
         verify: Arc::new(ScriptedVerify::new(project.root())),
+        jobs: Arc::new(ScriptedJobs::default()),
         clock,
         notifier: Arc::new(SilentNotifier),
         engine: None,

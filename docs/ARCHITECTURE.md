@@ -6,7 +6,7 @@ on the core, the core depends on nothing of theirs.
 ```text
 crates/
   core/      tenaz-core      domain + ports + orchestration. No process, network or git code.
-  adapters/  tenaz-adapters  git, verify runner, macOS memory probe, notifier, engine adapters
+  adapters/  tenaz-adapters  git, verify and heavy-job runners, macOS memory probe, notifier, engine adapters
                            (generic commands, a load API as Sushi's), media adapters (ComfyUI, OpenAI Images),
                            Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
@@ -42,11 +42,11 @@ Pure modules, each unit-tested without I/O:
 | `ledger` | `run.json` and the `journal.jsonl` record types. |
 | `metrics` | Engine Prometheus counters, per-request deltas, engine summary. |
 | `memory` | Memory samples and per-session windows. |
-| `lease` | One resident engine: the lease manager state machine over the engine and media ports. |
+| `lease` | One resident engine: the lease manager state machine over the engine and media ports, and the heavy jobs builders declare (ADR 0010). |
 
 `ports` declares the traits the orchestration needs: `Harness` and
-`Session`, `Vcs`, `VerifyRunner`, `Clock`, `Notifier`, `MemoryProbe`,
-`EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
+`Session`, `Vcs`, `VerifyRunner`, `JobRunner`, `Clock`, `Notifier`,
+`MemoryProbe`, `EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
 holds the scripted harness, which plays the happy path of a small goal
 with each recovery opt-in (`every_recovery` is what `tenaz demo` plays),
