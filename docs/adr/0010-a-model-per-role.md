@@ -39,6 +39,8 @@ model. It cannot give the review to another family.
   model's window.
 - A role's model reads images when the run's does (`--vision`): there is
   no flag per role for it.
+- Roles that name the same model give it the same window: the engine
+  holds it with one.
 - One engine serves every model in the map. Before the first session
   Tenaz checks that the engine lists each one as loaded, and names the
   ones that are not. Tenaz does not swap between them: the lease still

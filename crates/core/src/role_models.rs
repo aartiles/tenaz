@@ -65,7 +65,7 @@ pub enum RoleModelError {
     #[error("{} {role} is not a positive number of tokens: {got}", WINDOW.name)]
     BadWindow { role: Role, got: String },
     #[error(
-        "{model} is given to {role} and {other} with different windows; give them the same {}",
+        "{model} is given to {role} and {other} with different windows; give both the same {}, or neither",
         WINDOW.name
     )]
     WindowDiffers {
@@ -309,7 +309,7 @@ mod tests {
         (
             &["reviewer=B", "final-reviewer=B"],
             &["reviewer=65536"],
-            "B is given to reviewer and final-reviewer with different windows; give them the same --context-window-for",
+            "B is given to reviewer and final-reviewer with different windows; give both the same --context-window-for, or neither",
         ),
     ];
 

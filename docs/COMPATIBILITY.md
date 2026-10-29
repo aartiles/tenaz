@@ -107,22 +107,23 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
-- **A model per role** (`--model-for`, ADR 0010). fx is launched with
-  each session's model: its `settings.json` is rewritten before the
-  session starts. Tested with an in-process ACP agent and the scripted
-  harness; not yet run against a real fx with two models served by one
-  engine, nor checked whether fx writes `settings.json` itself. The check
-  that every model is loaded, and the lease freeing and reloading them
-  around an image, are tested with fake engines and a stand-in server for
-  the generic engine's commands, not against Kapitsa, mlx-serve or a
-  generic engine holding two models. TensorFold's scripts have not been
-  run again since a generic engine that still serves its model after an
-  image is no longer started. The preflight's probes (reasoning, cache, a
-  tool call, an image) run on `--model` only, so a role's model is never
-  probed; and every role's model takes the run's `--vision`, so a reviewer
-  that cannot read images is still sent them when the run's model can. Not with
-  Pi: `init` refuses the map, and Pi refuses a session on another model
-  than the one it was set up for.
+- **A model per role** (`--model-for`, ADR 0010). fx is launched with each
+  session's model: its `settings.json` is rewritten before the session
+  starts. Tested with an in-process ACP agent and the scripted harness; not
+  yet run against a real fx with two models served by one engine, nor
+  checked whether fx writes `settings.json` itself. The check that every
+  model is loaded, and the lease freeing and reloading them around an image,
+  are tested with fake engines and a stand-in server for the generic
+  engine's commands, not against Kapitsa, mlx-serve or a generic engine
+  holding two models. TensorFold's scripts have not been run again since a
+  generic engine that still serves its model after an image is no longer
+  started. The preflight's probes (reasoning, cache, a tool call, an image)
+  run on `--model` only, so a role's model is never probed; and every role's
+  model takes the run's `--vision`, so a reviewer that cannot read images is
+  still sent them when the run's model can. Not with Pi: `init` refuses the
+  map, and Pi refuses a session on another model than the one it was set up
+  for.
+
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.
