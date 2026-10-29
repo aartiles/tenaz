@@ -24,6 +24,13 @@ uses [Semantic Versioning](https://semver.org/).
   run the split of T016b read the same 1.5 KB of `verify` output three
   times. `run.json` keeps that failure as `current.verify_failure`
   (`attempt`, `text`).
+- A builder whose previous attempt failed `verify` word for word as an
+  earlier one is told so. If `verify` reports a measurement, nothing done
+  since moved it: change the approach, or say in the notes why the card
+  cannot be done, and stop. In the Lotion Pump run the three attempts of
+  T016b each left the scene at its starting numbers. The task is not
+  escalated any sooner: a check that only says `exit 1` reads the same
+  while real work goes on.
 
 ### Fixed
 

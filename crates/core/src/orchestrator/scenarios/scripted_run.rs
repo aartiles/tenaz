@@ -470,6 +470,26 @@ async fn the_split_reads_a_repeated_verify_failure_once() {
     );
 }
 
+/// An attempt that fails `verify` as the one before did is followed by one
+/// told so, and to change its approach or say why it cannot.
+#[tokio::test(start_paused = true)]
+async fn the_attempt_after_a_repeated_failure_is_told_it_changed_nothing() {
+    let harness = ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    };
+    let run = Played::play(&["maxAttempts=3"], harness).await;
+    let told = "`verify` printed this word for word after attempt 1 too.";
+    let attempt = |n: u32| {
+        run.prompts("builder-T003")
+            .into_iter()
+            .find(|p| p.contains(&format!("Attempt: {n} of 3")))
+            .unwrap_or_else(|| panic!("no attempt {n}:\n{}", run.log))
+    };
+    assert!(!attempt(2).contains(told), "attempt 1 repeated nothing");
+    assert!(attempt(3).contains(told), "{}", attempt(3));
+}
+
 /// A task blocked instead of split keeps its notes too.
 #[tokio::test(start_paused = true)]
 async fn a_blocked_task_keeps_its_notes() {

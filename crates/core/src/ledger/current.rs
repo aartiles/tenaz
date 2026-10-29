@@ -66,27 +66,33 @@ impl CurrentTask {
     /// Records `attempt` as failed `verify` with `verify_failure`, after
     /// the orchestrator `stopped` its session or not. The next attempt is
     /// told both. A failure that repeats the last one word for word is
-    /// named in the history, not repeated: the split reads it once.
+    /// named in the history, not repeated: the split reads it once. The
+    /// next attempt is told it is a repeat.
     pub fn fail(&mut self, attempt: u32, verify_failure: &str, stopped: Option<&str>) {
-        let entry = match &self.verify_failure {
-            Some(last) if last.text == verify_failure => format!(
-                "The same verify failure as attempt {}, word for word.",
-                last.attempt
+        let (entry, told) = match &self.verify_failure {
+            Some(last) if last.text == verify_failure => (
+                format!(
+                    "The same verify failure as attempt {}, word for word.",
+                    last.attempt
+                ),
+                format!("{verify_failure}\n\n{}", repeat_note(last.attempt)),
             ),
             _ => {
-                let entry = clip(verify_failure, HISTORY_CLIP_BYTES);
                 self.verify_failure = Some(VerifyFailure {
                     attempt,
                     text: verify_failure.to_owned(),
                 });
-                entry
+                (
+                    clip(verify_failure, HISTORY_CLIP_BYTES),
+                    verify_failure.to_owned(),
+                )
             }
         };
         self.history.push(format!(
             "Attempt {attempt}: {}",
             with_stop_reason(&entry, stopped)
         ));
-        self.failure = Some(with_stop_reason(verify_failure, stopped));
+        self.failure = Some(with_stop_reason(&told, stopped));
     }
 
     /// Records that the reviewer of `attempt` asked for changes in `text`.
@@ -101,6 +107,18 @@ impl CurrentTask {
         ));
         self.verify_failure = None;
     }
+}
+
+/// What the next attempt is told after a failure that `verify` also
+/// printed after attempt `first`. A check that only says `exit 1` reads the
+/// same while work goes on, so the note does not claim more than that.
+fn repeat_note(first: u32) -> String {
+    format!(
+        "`verify` printed this word for word after attempt {first} too. If it \
+         reports a measurement, nothing done since moved it: do not try the same \
+         approach again. Change it, or, if the card cannot be done as written, \
+         say why in your notes with what you measured, and stop."
+    )
 }
 
 /// An attempt's `failure` after the orchestrator `stopped` its session:
@@ -140,11 +158,31 @@ mod tests {
                 format!("Attempt 3: {same}"),
             ]
         );
-        assert_eq!(
-            task.failure.as_deref(),
-            Some(DARK),
-            "the next attempt is told it whole"
+        let told = task.failure.unwrap();
+        assert!(
+            told.starts_with(DARK),
+            "the next attempt is told it whole: {told}"
         );
+    }
+
+    /// The next attempt is told when the last one repeated an earlier
+    /// failure, after why its session was stopped when it was.
+    #[test]
+    fn the_next_attempt_is_told_its_failure_repeats_an_earlier_one() {
+        let note = "`verify` printed this word for word after attempt 1 too.";
+        let mut task = current();
+        task.fail(1, DARK, None);
+        assert_eq!(task.failure.as_deref(), Some(DARK));
+        task.fail(2, DARK, Some("toolUse"));
+        let told = task.failure.clone().unwrap();
+        assert!(
+            told.starts_with(&format!(
+                "The session was stopped: toolUse.\n{DARK}\n\n{note}"
+            )),
+            "{told}"
+        );
+        task.fail(3, "18.6% dark", None);
+        assert_eq!(task.failure.as_deref(), Some("18.6% dark"));
     }
 
     #[test]
