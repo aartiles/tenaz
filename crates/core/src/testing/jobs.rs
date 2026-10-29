@@ -11,6 +11,8 @@ use crate::ports::{CancellationToken, JobOutcome, JobRunner, JobSpec};
 pub struct ScriptedJobs {
     /// The exit code every job ends with.
     status: i32,
+    /// How long every job takes, on tokio's clock.
+    takes: std::time::Duration,
     stop: Option<Stop>,
     ran: Mutex<Vec<String>>,
 }
@@ -29,6 +31,14 @@ impl ScriptedJobs {
     pub fn exiting(status: i32) -> Self {
         Self {
             status,
+            ..Self::default()
+        }
+    }
+
+    /// Jobs that each take `takes`.
+    pub fn taking(takes: std::time::Duration) -> Self {
+        Self {
+            takes,
             ..Self::default()
         }
     }
@@ -73,6 +83,7 @@ impl JobRunner for ScriptedJobs {
                 ..JobOutcome::default()
             };
         }
+        tokio::time::sleep(self.takes).await;
         // As the real runner does, the log's folder is made if missing.
         if let Some(dir) = job.log.parent() {
             let _ = std::fs::create_dir_all(dir);

@@ -159,12 +159,10 @@ impl Runner {
             "  {task}: running the job its builder declared, with the engine's memory to itself (limit {} min): {}",
             job.minutes, job.command
         ));
-        let started = self.deps.clock.monotonic_ms();
-        let (outcome, engine) = self.run_under_lease(&spec).await;
+        let (outcome, engine, elapsed_ms) = self.run_under_lease(&spec).await;
         if outcome.stopped {
             return Err(self.pause_job(task, attempt)?);
         }
-        let elapsed_ms = self.deps.clock.monotonic_ms().saturating_sub(started);
         self.journal(JournalRecord::JobFinished {
             task: task.clone(),
             attempt,
@@ -208,13 +206,22 @@ impl Runner {
     }
 
     /// The job's outcome, run with the LLM away when the run has a lease,
-    /// and what went wrong with the engine around it. A job that never ran
-    /// while a stop came is stopped, so it runs on resume; one that ran
-    /// keeps its outcome.
-    async fn run_under_lease(&self, spec: &JobSpec) -> (JobOutcome, Option<String>) {
-        let job = self.deps.jobs.run(spec, &self.stop);
+    /// what went wrong with the engine around it, and how long the job
+    /// itself took: the engine's unload and reload are not the job's. A
+    /// job that never ran while a stop came is stopped, so it runs on
+    /// resume; one that ran keeps its outcome.
+    async fn run_under_lease(&self, spec: &JobSpec) -> (JobOutcome, Option<String>, u64) {
+        let job = async {
+            let started = self.deps.clock.monotonic_ms();
+            let outcome = self.deps.jobs.run(spec, &self.stop).await;
+            (
+                outcome,
+                self.deps.clock.monotonic_ms().saturating_sub(started),
+            )
+        };
         let Some(lease) = &self.deps.lease else {
-            return (job.await, None);
+            let (outcome, ms) = job.await;
+            return (outcome, None, ms);
         };
         let ran = lease.run_job(job).await;
         if ran.output.is_none() && self.stopping() {
@@ -222,22 +229,25 @@ impl Runner {
                 stopped: true,
                 ..JobOutcome::default()
             };
-            return (stopped, None);
+            return (stopped, None, 0);
         }
         leased_outcome(ran)
     }
 }
 
-/// A job's outcome from how the lease ran it, and what went wrong with the
-/// engine around it. A job the engine did not free its memory for never
-/// ran.
-fn leased_outcome(ran: JobLease<JobOutcome>) -> (JobOutcome, Option<String>) {
+/// A job's outcome and duration from how the lease ran it, and what went
+/// wrong with the engine around it. A job the engine did not free its
+/// memory for never ran, and took no time.
+fn leased_outcome(ran: JobLease<(JobOutcome, u64)>) -> (JobOutcome, Option<String>, u64) {
     let engine = ran.lease.err().map(|e| e.to_string());
-    let outcome = ran.output.unwrap_or_else(|| JobOutcome {
-        error: Some("the engine could not free its memory, so it did not run".to_owned()),
-        ..JobOutcome::default()
+    let (outcome, ms) = ran.output.unwrap_or_else(|| {
+        let never = JobOutcome {
+            error: Some("the engine could not free its memory, so it did not run".to_owned()),
+            ..JobOutcome::default()
+        };
+        (never, 0)
     });
-    (outcome, engine)
+    (outcome, engine, ms)
 }
 
 #[cfg(test)]
@@ -256,16 +266,16 @@ mod tests {
     #[test]
     fn a_job_the_lease_ran_keeps_its_outcome() {
         let ran = JobLease {
-            output: Some(exited(0)),
+            output: Some((exited(0), 5)),
             lease: Ok(()),
         };
-        assert_eq!(leased_outcome(ran), (exited(0), None));
+        assert_eq!(leased_outcome(ran), (exited(0), None, 5));
     }
 
     #[test]
     fn an_llm_that_did_not_reload_is_named_beside_the_outcome() {
         let ran = JobLease {
-            output: Some(exited(0)),
+            output: Some((exited(0), 5)),
             lease: Err(LeaseError::ReloadFailed(EngineError::Refused(
                 "busy".to_owned(),
             ))),
@@ -274,7 +284,8 @@ mod tests {
             leased_outcome(ran),
             (
                 exited(0),
-                Some("the LLM did not reload after a job: engine refused: busy".to_owned())
+                Some("the LLM did not reload after a job: engine refused: busy".to_owned()),
+                5
             )
         );
     }
@@ -287,11 +298,12 @@ mod tests {
                 "unload".to_owned(),
             ))),
         };
-        let (outcome, engine) = leased_outcome(ran);
+        let (outcome, engine, ms) = leased_outcome(ran);
         assert_eq!(
             outcome.error.as_deref(),
             Some("the engine could not free its memory, so it did not run")
         );
         assert_eq!(engine.as_deref(), Some("engine timed out: unload"));
+        assert_eq!(ms, 0);
     }
 }

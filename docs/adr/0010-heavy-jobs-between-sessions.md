@@ -125,7 +125,8 @@ Taken while implementing D, on the open questions above:
 - **`verify` stays outside the lease.** It is left open, under "Known
   gaps" in COMPATIBILITY.
 - **The journal** records `job-started` (task, attempt, command, minutes)
-  and `job-finished` (exit code, timed out, error, engine, duration). Run
+  and `job-finished` (exit code, timed out, error, engine, and the
+  duration of the job itself, without the engine's unload and reload). Run
   reports can tell from them which runs used jobs. A job a stop cut short
   has a `job-started` and no `job-finished`; a `paused` record follows it.
 - **A stop during a job** pauses the run with the job file kept and the

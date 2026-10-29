@@ -391,6 +391,13 @@ async fn a_builder_rerun_after_the_engine_ran_out_of_memory_is_told_to_declare_a
     );
 }
 
+/// How long the fake LLM takes to load or unload: a large model takes
+/// minutes, and none of it is the job's.
+const ENGINE_SWAP: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// How long a job under the lease takes.
+const JOB_TAKES: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The fake goal's LLM, loaded at first, which refuses its next
 /// `refusals` loads, as an engine short of memory after a job might.
 struct ShortOfMemory {
@@ -424,6 +431,7 @@ impl EngineAdapter for ShortOfMemory {
     }
 
     async fn load(&self, _model: &str) -> Result<(), EngineError> {
+        tokio::time::sleep(ENGINE_SWAP).await;
         let mut refusals = self.refusals.lock().unwrap();
         if *refusals > 0 {
             *refusals -= 1;
@@ -434,6 +442,7 @@ impl EngineAdapter for ShortOfMemory {
     }
 
     async fn unload(&self, _model: &str) -> Result<(), EngineError> {
+        tokio::time::sleep(ENGINE_SWAP).await;
         *self.loaded.lock().unwrap() = false;
         Ok(())
     }
@@ -492,6 +501,7 @@ async fn under_lease_with(
     });
     let mut deps = deps(&project, vcs, harness.clone(), clock);
     deps.lease = Some(lease);
+    deps.jobs = Arc::new(ScriptedJobs::taking(JOB_TAKES));
     run(&project, deps, stop).await;
     let log = project.read(".tenaz/private/orchestrator.log").unwrap();
     let seen = harness.seen.lock().unwrap().clone();
@@ -524,6 +534,7 @@ async fn the_llm_serves_again_before_the_session_after_a_job() {
             [JobFinished {
                 exit_code: Some(0),
                 engine: Some(_),
+                duration_ms: 30_000,
                 ..
             }]
         ),
