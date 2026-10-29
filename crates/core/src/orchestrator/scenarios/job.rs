@@ -200,6 +200,23 @@ async fn a_failed_job_does_not_fail_the_attempt_by_itself() {
     );
 }
 
+/// A job file from before the task started is not its first attempt's:
+/// it is removed unrun, as a conflict is.
+#[tokio::test(start_paused = true)]
+async fn a_job_file_left_from_before_the_attempt_is_not_inherited() {
+    let (_work, project, vcs) = project(&["maxAttempts=3"]);
+    project.write(".tenaz/jobs/T002.json", RENDER).unwrap();
+    let jobs = Arc::new(ScriptedJobs::default());
+    let log = play(&project, &vcs, None, jobs.clone()).await;
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    assert!(jobs.ran().is_empty(), "{log}");
+    assert!(project.read_if(".tenaz/jobs/T002.json").is_none(), "{log}");
+}
+
 /// With jobs off a job file runs nothing and earns no session: it is
 /// removed unread, and the attempt is judged as it stands.
 #[tokio::test(start_paused = true)]
@@ -709,4 +726,82 @@ async fn a_job_the_engine_made_no_room_for_names_no_log() {
     assert!(!report.contains("Its log is"), "{report}");
     assert!(!report.contains("frame 90/180"), "{report}");
     assert!(project.read_if(stale).is_none(), "{log}");
+}
+
+/// A crash costs the attempt: the job file its attempt left is not the
+/// next attempt's. Here a stop cuts the job short, and the attempt is then
+/// counted, as a crash would leave it.
+#[tokio::test(start_paused = true)]
+async fn a_job_file_a_crashed_attempt_left_is_not_inherited() {
+    let (_work, project, vcs) = project(&["maxAttempts=3"]);
+    play(
+        &project,
+        &vcs,
+        Some(first_session_declares(RENDER)),
+        Arc::new(ScriptedJobs::stopped_during()),
+    )
+    .await;
+    assert!(project.read_if(".tenaz/jobs/T002.json").is_some());
+    let t002 = crate::task::TaskId::parse("T002").unwrap();
+    project.set_attempts(&t002, 1).unwrap();
+    let jobs = Arc::new(ScriptedJobs::default());
+    let log = play(&project, &vcs, None, jobs.clone()).await;
+    assert!(jobs.ran().is_empty(), "{log}");
+    assert!(project.read_if(".tenaz/jobs/T002.json").is_none(), "{log}");
+}
+
+/// The scripted harness, which stops the run as the first builder session
+/// of T002 opens: the session still plays, and the run pauses after it.
+struct StopAtFirstBuilder {
+    harness: ScriptedHarness,
+    stop: CancellationToken,
+}
+
+#[async_trait]
+impl Harness for StopAtFirstBuilder {
+    fn info(&self) -> HarnessInfo {
+        self.harness.info()
+    }
+
+    async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
+        if spec.label.ends_with("-builder-T002") {
+            self.stop.cancel();
+        }
+        self.harness.open(spec).await
+    }
+}
+
+/// A stop during the session that declared a job, before the attempt ran
+/// any, gives the attempt back and keeps the file: the job runs first on
+/// resume.
+#[tokio::test(start_paused = true)]
+async fn a_job_file_a_paused_session_wrote_runs_on_resume() {
+    let (_work, project, vcs) = project(&["maxAttempts=3"]);
+    let stop = CancellationToken::new();
+    let harness = StopAtFirstBuilder {
+        harness: ScriptedHarness {
+            job: Some(first_session_declares(RENDER)),
+            ..Default::default()
+        },
+        stop: stop.clone(),
+    };
+    let deps = deps(
+        &project,
+        vcs.clone(),
+        Arc::new(harness),
+        Arc::new(VirtualClock::new()),
+    );
+    run(&project, deps, stop).await;
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    assert!(project.read_if(".tenaz/jobs/T002.json").is_some(), "{log}");
+
+    let jobs = Arc::new(ScriptedJobs::default());
+    let log = play(&project, &vcs, None, jobs.clone()).await;
+    assert_eq!(jobs.ran(), ["sh render.sh"], "{log}");
+    assert!(
+        finished(&project)
+            .iter()
+            .any(|r| matches!(r, JobFinished { attempt: 1, .. })),
+        "{log}"
+    );
 }

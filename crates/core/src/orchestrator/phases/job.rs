@@ -32,6 +32,7 @@ impl Runner {
         attempt: u32,
     ) -> Result<SessionResult, RunError> {
         let task = &loaded.card.id;
+        self.drop_inherited_job(task, attempt)?;
         let mut ran = self.next_job(task, attempt).await?;
         loop {
             if ran {
@@ -69,6 +70,29 @@ impl Runner {
             return Err(RunError::EngineUnavailable(format!(
                 "the LLM did not serve again after {task}'s job: {error}"
             )));
+        }
+        Ok(())
+    }
+
+    /// A job file belongs to the attempt that declared it, as a conflict
+    /// does: one left by an earlier attempt (a crash costs the attempt) is
+    /// removed. The ledger names the attempt the jobs are for from its
+    /// start, and a pause gives the attempt back, so a file a paused
+    /// session wrote, or a job a stop cut short, is kept.
+    fn drop_inherited_job(&mut self, task: &TaskId, attempt: u32) -> Result<(), RunError> {
+        let ours = self
+            .ledger
+            .current
+            .as_ref()
+            .and_then(|c| c.jobs.as_ref())
+            .is_some_and(|jobs| jobs.attempt == attempt);
+        if ours {
+            return Ok(());
+        }
+        self.project.remove(&job_path(task.as_str()))?;
+        if self.params.jobs_on() {
+            self.attempt_jobs(attempt);
+            self.save()?;
         }
         Ok(())
     }
@@ -130,8 +154,6 @@ impl Runner {
                 format!("Your {path} does not stand, and nothing ran: {why}.")
             }
         };
-        // The report is saved before the file goes: a run that dies in
-        // between runs the job again rather than losing what it found.
         let jobs = self.attempt_jobs(attempt);
         jobs.files += 1;
         jobs.report = Some(report);

@@ -133,14 +133,19 @@ Taken while implementing D, on the open questions above:
   reports can tell from them which runs used jobs. A job a stop cut short
   has a `job-started` and no `job-finished`; a `paused` record follows it.
   The lease's own records name the job as holder `job`.
+- **A job file belongs to its attempt**, as a conflict does: one left by
+  an earlier attempt is removed when the next attempt starts. A crash
+  costs the attempt, so it drops the job file and any report no session
+  read. `run.json` names the attempt its jobs are for from the attempt's
+  start, and a pause gives the attempt back, so a file a paused session
+  wrote, or a job a stop cut short, still runs.
 - **A stop during a job** pauses the run with the job file kept and the
   attempt not charged; on resume the job runs again before any session,
   and the next session is not told it continues a stopped one.
 - **The report and the job count live in `run.json`** (`current.jobs`)
   until a session has read the report, so a pause after the job neither
   loses the report nor runs the job again, and a resumed attempt does not
-  get more job files. The report is saved before the job file is removed:
-  a crash between the two runs the job again rather than losing it.
+  get more job files.
 - **The rerun note** goes only to a builder session rerun after an
   engine out-of-memory error, and only while jobs are on
   (`jobMinutes` > 0): only a builder can declare a job, and other engine

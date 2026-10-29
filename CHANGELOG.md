@@ -20,7 +20,8 @@ uses [Semantic Versioning](https://semver.org/).
   `job-finished` records. A file that is not valid runs nothing and the
   next session is told why. A stop during the job pauses the run, and on
   resume the job runs again before any session; a report no session has
-  read yet is kept in `run.json` across a pause. After a job the LLM
+  read yet is kept in `run.json` across a pause. A crash costs the
+  attempt: the job file it left is removed unrun. After a job the LLM
   serves again before the next session; one that does not come back
   blocks the run as "engine unavailable". `jobMinutes=0` turns jobs off:
   a job file is removed unread and the attempt is judged. In the Lotion
