@@ -77,11 +77,8 @@ pub struct ScriptedHarness {
     /// first time the orchestrator asks it for its checks; with
     /// `forget_checks_task` naming the same task, so that it is asked.
     pub crash_on_checks_task: Option<String>,
-    /// The first builder session of this task (the first of the pair)
-    /// declares a conflict with this check (the second) and stops; the
-    /// first replan shown it adds `T005` (for R3, after T001, as T003 is),
-    /// which amends the check, and drops the task.
-    pub conflict: Option<(String, String)>,
+    /// A builder that declares a conflict, and the replan that resolves it.
+    pub conflict: Option<ScriptedConflict>,
     /// The first builder session for this task reasons until its reply is
     /// cut at the output limit, and the harness exits, as fx does.
     pub truncate_task: Option<String>,
@@ -381,4 +378,13 @@ mod tests {
         session.close(Duration::ZERO).await;
         assert!(!dir.path().join("src/T001.txt").exists());
     }
+}
+
+/// The first builder session of `task` declares a conflict with `check`
+/// and stops. The first replan shown it adds `T005` (for R3, after T001,
+/// as the fake goal's T003 is), which amends the check, and drops `task`.
+#[derive(Clone, Debug)]
+pub struct ScriptedConflict {
+    pub task: String,
+    pub check: String,
 }

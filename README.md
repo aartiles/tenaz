@@ -56,11 +56,12 @@ and a fresh session of the same model reviews the diff. A review asks for
 changes only for a problem that matters for the requirements. A task that
 passes is committed; one that fails is undone and retried, split into
 smaller tasks or marked blocked. Its notes are kept, so a split knows what
-the failed attempts tried. A builder that finds its task cannot pass without
-changing a check of a done task says so in `.tenaz/conflicts/<TASK>.md`;
-the task is blocked at once, and a replan may add a card that amends those
-checks, judged against the spec (ADR 0009). When every task is done, a final review
-checks the whole goal against the brief.
+the failed attempts tried. A builder that finds its task cannot pass
+without changing a check of a done task says so in
+`.tenaz/conflicts/<TASK>.md`; the task is blocked at once, and a replan
+may add a card that amends those checks, judged against the spec (ADR
+0009). When every task is done, a final review checks the whole goal
+against the brief.
 
 **`verify` decides when the work is done.** It is an executable at the
 project root, in any language, that runs every check and ends its output

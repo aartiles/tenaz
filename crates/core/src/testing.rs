@@ -16,7 +16,7 @@ pub mod vcs_contract;
 mod verify;
 
 pub use clock::VirtualClock;
-pub use harness::ScriptedHarness;
+pub use harness::{ScriptedConflict, ScriptedHarness};
 pub use notifier::SilentNotifier;
 pub use player::{OUTSIDE, VERIFY};
 pub use replay::Replay;

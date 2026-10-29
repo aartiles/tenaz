@@ -52,11 +52,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 - A harness that dies in a later prompt of its session, such as the one
   that asks a builder for its task's checks or the note that resumes an
-  interrupted turn, is rerun without charging
-  an attempt, as one that dies in the first prompt is. The session
-  counted as settled from its first answer, so the crash failed the
-  attempt: in the Lotion Pump run fx lost its engine connection while
-  T016b's builder was adding its check, and the task lost attempt 2.
+  interrupted turn, is rerun without charging an attempt, as one that
+  dies in the first prompt is. The session counted as settled from its
+  first answer, so the crash failed the attempt: in the Lotion Pump run
+  fx lost its engine connection while T016b's builder was adding its
+  check, and the task lost attempt 2.
 - The preflight no longer fails an engine that does not report cached
   prompt tokens. LM Studio 0.4 reuses the prompt prefix but leaves
   `cached_tokens` out of its usage, which looked like no cache and needed

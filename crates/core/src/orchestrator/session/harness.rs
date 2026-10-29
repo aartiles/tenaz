@@ -168,7 +168,7 @@ impl SessionLoop<'_> {
     /// for a passing check would talk it out of the conflict (ADR 0009).
     async fn own_checks_prompt(&mut self) -> Option<String> {
         let task = self.own_checks.take()?;
-        if self.runner.project.conflict_text(task).is_some() {
+        if self.runner.project.conflict_text(task.as_str()).is_some() {
             return None;
         }
         let own = self.runner.run_verify(&["--task", task.as_str()]).await;

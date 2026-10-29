@@ -12,7 +12,7 @@ use crate::role::Role;
 use crate::spec::coverage;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 
-use super::PromptParts;
+use super::{CONFLICTS_TITLE, PromptParts};
 
 /// A planner session about one task (split).
 pub(super) struct PlannerTask {
@@ -20,6 +20,9 @@ pub(super) struct PlannerTask {
     card_text: String,
     history: Vec<String>,
 }
+
+/// The section of a split's briefing with the failed attempts' notes.
+const SPLIT_NOTES_TITLE: &str = "Builder notes from the failed attempts";
 
 /// The journal entries of the recent orchestrator journal a planner is shown.
 const RECENT_JOURNAL: usize = 12;
@@ -86,7 +89,7 @@ impl Runner {
         if let (Role::Split, Some(task)) = (role, task) {
             extra.push(("Failure history".to_owned(), task.history.join("\n\n")));
             if let Some(notes) = self.clipped_note(task.id.as_str()) {
-                extra.push(("Builder notes from the failed attempts".to_owned(), notes));
+                extra.push((SPLIT_NOTES_TITLE.to_owned(), notes));
             }
         }
         extra.push(self.card_sizing());
@@ -192,12 +195,9 @@ impl Runner {
             "  {} declares a conflict with done checks {checks}; a replan may amend them",
             task.id
         ));
-        let mut history = self
-            .ledger
-            .current
-            .as_ref()
-            .map(|c| c.history.clone())
-            .unwrap_or_default();
+        // The attempt's verify failure is already in the history; this line
+        // says what came of it.
+        let mut history = self.current_history();
         history.push(format!(
             "Attempt {attempt}: declared a conflict with {checks}"
         ));
@@ -211,7 +211,7 @@ impl Runner {
         self.ledger.current = None;
         self.save()?;
         let why = format!(
-            "{} declared a conflict with checks of done tasks ({checks}) and is blocked. See \"Declared conflicts\".",
+            "{} declared a conflict with checks of done tasks ({checks}) and is blocked. See \"{CONFLICTS_TITLE}\".",
             task.id
         );
         self.planner_session(Role::Replan, None, &why).await?;

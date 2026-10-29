@@ -56,10 +56,10 @@ act on them.
 - Tenaz checks that the file names checks that exist, then takes the task
   out of its attempt loop at once and starts a replan with the file.
   Without a valid file the attempt fails as now.
-- The replan may write one card with `amends: [<check IDs>]`. Its builder
+- The replan may write cards with `amends: [<check IDs>]`. Their builders
   may change those checks, and only those, as long as each still tests its
-  requirement. The reviewer is told which checks were amended and judges
-  every change against the spec, not against the old number. The count of
+  requirement. The reviewer is told which checks may be amended and
+  judges every change against the spec, not against the old number. The count of
   passed checks may not drop.
 - This keeps "never weaken a check" for everyone else. The spec decides
   between two invented thresholds, and a session that cites the spec

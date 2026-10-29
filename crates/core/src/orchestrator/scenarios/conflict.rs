@@ -11,8 +11,7 @@ use tokio_util::sync::CancellationToken;
 use super::{deps, fake_project, run};
 use crate::ledger::{JournalRecord, Phase};
 use crate::project::Project;
-use crate::task::TaskId;
-use crate::testing::{ScriptedHarness, VirtualClock};
+use crate::testing::{ScriptedConflict, ScriptedHarness, VirtualClock};
 
 /// Plays the fake goal with T003's first builder declaring a conflict with
 /// `check`; the project, its log and the work directory.
@@ -20,7 +19,10 @@ async fn declaring(check: &str) -> (tempfile::TempDir, Project, String) {
     let work = tempfile::tempdir().unwrap();
     let (project, vcs) = fake_project(work.path(), &["maxAttempts=3"]);
     let harness = ScriptedHarness {
-        conflict: Some(("T003".into(), check.into())),
+        conflict: Some(ScriptedConflict {
+            task: "T003".into(),
+            check: check.into(),
+        }),
         ..Default::default()
     };
     let clock = Arc::new(VirtualClock::new());
@@ -53,7 +55,7 @@ fn status(project: &Project, id: &str) -> String {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_declared_conflict_blocks_the_task_and_a_replan_amends_the_check() {
+async fn a_declared_conflict_blocks_the_task_and_a_replan_routes_it_to_an_amending_card() {
     let (_work, project, log) = declaring("T001.exists").await;
     assert_eq!(
         project.load_ledger().unwrap().phase,
@@ -80,12 +82,14 @@ async fn a_declared_conflict_blocks_the_task_and_a_replan_amends_the_check() {
     );
     assert_eq!(status(&project, "T003"), "dropped");
     assert_eq!(status(&project, "T005"), "done");
-    assert!(
-        project
-            .conflict_text(&TaskId::parse("T003").unwrap())
-            .is_some(),
-        "the conflict went with the revert of T003's work"
-    );
+}
+
+/// The conflict outlives the revert of the blocked task's work: later
+/// replans and the amending card read it.
+#[tokio::test(start_paused = true)]
+async fn a_declared_conflict_outlives_the_revert_of_its_task_s_work() {
+    let (_work, project, log) = declaring("T001.exists").await;
+    assert!(project.conflict_text("T003").is_some(), "{log}");
 }
 
 /// The replan is shown the conflict, and the amending card's builder and
@@ -130,9 +134,7 @@ async fn a_conflict_with_the_task_s_own_check_does_not_stand() {
     );
     assert_eq!(status(&project, "T003"), "done");
     assert!(
-        project
-            .conflict_text(&TaskId::parse("T003").unwrap())
-            .is_none(),
+        project.conflict_text("T003").is_none(),
         "a conflict that did not stand was kept, and could license an amend"
     );
     let builders = prompts(&project, "builder-T003");

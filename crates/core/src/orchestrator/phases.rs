@@ -41,7 +41,7 @@ struct PromptParts<'a> {
 const AMENDS_TITLE: &str = "Checks this card may amend";
 
 /// The briefing section that shows a replan the conflicts that stood.
-pub const CONFLICTS_TITLE: &str = "Declared conflicts";
+pub(crate) const CONFLICTS_TITLE: &str = "Declared conflicts";
 
 impl Runner {
     /// `./verify` with `args`, judged as its contract says.
@@ -108,10 +108,10 @@ impl Runner {
             .map(|check| format!("- `{check}`"))
             .collect::<Vec<_>>()
             .join("\n");
-        let backlog = self.project.load_backlog().backlog;
         let conflicts = self
             .project
-            .conflicts(&backlog)
+            .load_backlog()
+            .conflicts
             .iter()
             .filter(|conflict| {
                 card.amends
@@ -140,8 +140,7 @@ impl Runner {
     /// The section that shows a replan the conflicts that stood, so one
     /// that did not see it happen still does (ADR 0009); `None` without any.
     fn conflicts_section(&self) -> Option<(String, String)> {
-        let backlog = self.project.load_backlog().backlog;
-        let conflicts = self.project.conflicts(&backlog);
+        let conflicts = self.project.load_backlog().conflicts;
         (!conflicts.is_empty()).then(|| {
             (
                 CONFLICTS_TITLE.to_owned(),

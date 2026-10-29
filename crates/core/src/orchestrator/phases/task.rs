@@ -167,15 +167,19 @@ impl Runner {
     /// Splits or blocks `task` with the history of its attempts, and
     /// leaves it.
     async fn escalate_current(&mut self, task: &TaskCard, why: &str) -> Result<(), RunError> {
-        let history = self
-            .ledger
-            .current
-            .as_ref()
-            .map(|c| c.history.clone())
-            .unwrap_or_default();
+        let history = self.current_history();
         self.escalate(task, history, why).await?;
         self.ledger.current = None;
         self.save()
+    }
+
+    /// The history of the current task's attempts.
+    pub(super) fn current_history(&self) -> Vec<String> {
+        self.ledger
+            .current
+            .as_ref()
+            .map(|c| c.history.clone())
+            .unwrap_or_default()
     }
 
     /// Records a failed attempt: the next one is told its failure.
@@ -194,7 +198,7 @@ impl Runner {
     /// The conflict the task's builder declared, when it stands. One that
     /// does not is logged and removed, and the next attempt is told why.
     fn declared_conflict(&mut self, id: &TaskId) -> Result<Option<Conflict>, RunError> {
-        let Some(text) = self.project.conflict_text(id) else {
+        let Some(text) = self.project.conflict_text(id.as_str()) else {
             return Ok(None);
         };
         let backlog = self.project.load_backlog().backlog;

@@ -316,6 +316,7 @@ impl Project {
             return LoadedBacklog {
                 backlog: Backlog::default(),
                 errors: vec![".tenaz/tasks/ does not exist".to_owned()],
+                conflicts: Vec::new(),
             };
         };
         let mut files: Vec<(String, String)> = entries
@@ -331,27 +332,29 @@ impl Project {
             files.iter().map(|(n, t)| (n.as_str(), t.as_str())),
             &self.requirements(),
         );
-        let conflicts = self.conflicts(&loaded.backlog);
+        loaded.conflicts = self.conflicts(&loaded.backlog);
         loaded
             .errors
-            .extend(conflict::amend_errors(&loaded.backlog, &conflicts));
+            .extend(conflict::amend_errors(&loaded.backlog, &loaded.conflicts));
         loaded
     }
 
     /// The conflicts that stood (ADR 0009): those of the tasks of `backlog`
     /// that are blocked, or dropped once a replan routed around them. A
     /// conflict file of any other task is not one.
-    pub fn conflicts(&self, backlog: &Backlog) -> Vec<Conflict> {
+    fn conflicts(&self, backlog: &Backlog) -> Vec<Conflict> {
         backlog
             .cards()
             .filter(|card| matches!(card.status, TaskStatus::Blocked | TaskStatus::Dropped))
-            .filter_map(|card| Conflict::read(&card.id, &self.conflict_text(&card.id)?).ok())
+            .filter_map(|card| {
+                Conflict::read(&card.id, &self.conflict_text(card.id.as_str())?).ok()
+            })
             .collect()
     }
 
     /// The conflict `id`'s builder declared, as written (ADR 0009).
-    pub fn conflict_text(&self, id: &TaskId) -> Option<String> {
-        self.read_if(&conflict_path(id.as_str()))
+    pub fn conflict_text(&self, id: &str) -> Option<String> {
+        self.read_if(&conflict_path(id))
     }
 
     pub fn card_text(&self, id: &TaskId) -> io::Result<String> {

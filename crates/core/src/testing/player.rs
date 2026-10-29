@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::ScriptedHarness;
 use super::abort::Abort;
 use super::paced::PacedSender;
+use super::{ScriptedConflict, ScriptedHarness};
 use crate::session::{SessionEvent, StopReason, Usage};
 
 /// One tool call of the scripted model: the tool, its arguments, what it
@@ -347,7 +347,7 @@ impl Player {
     /// check in the way and does the blocked task's work, and drops the
     /// blocked task.
     async fn amend(&mut self, prompt: &str) -> bool {
-        let Some((task, check)) = self.script.conflict.clone() else {
+        let Some(ScriptedConflict { task, check }) = self.script.conflict.clone() else {
             return false;
         };
         let shown = format!("## {}", crate::orchestrator::CONFLICTS_TITLE);
@@ -717,7 +717,7 @@ impl Player {
     /// The first session of the script's conflict task declares its
     /// conflict and stops.
     async fn conflicting(&mut self, task: &str) -> bool {
-        let Some((at, check)) = self.script.conflict.clone() else {
+        let Some(ScriptedConflict { task: at, check }) = self.script.conflict.clone() else {
             return false;
         };
         if !self.first(Some(&at), "conflict", task) {
