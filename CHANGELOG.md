@@ -57,6 +57,18 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An engine that runs out of memory part way through a reply is reported
+  as such. Sushi sends the error inside a stream that started with status
+  200, which the proxy ignored, so the session read as a harness exit:
+  `failed (toolUse)` in the log and `cause: harness` in the journal. The
+  proxy now reads an `error` sent inside the stream and reports it as it
+  arrives; the session's log line says `failed (engine out of memory)` and
+  the rerun's log line says another program may be using the GPU. The
+  journal's `engine-retry` keeps its values: an engine error stated before
+  the harness exits is now `cause: engine`, not `harness`, out of memory
+  included. An engine that sends an `error` object in a `data:` chunk is
+  reported the same way. In the Lotion Pump run
+  seven sessions ended this way while Blender rendered on the same GPU.
 - A harness that dies in a later prompt of its session, such as the one
   that asks a builder for its task's checks or the note that resumes an
   interrupted turn, is rerun without charging an attempt, as one that

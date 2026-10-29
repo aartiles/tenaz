@@ -11,7 +11,7 @@ use futures::Stream;
 
 use crate::events::{
     ProxyEvent, classify_error, finish_reason_from_json, output_limit, reported_finish_reason,
-    usage_from_json,
+    stream_error, usage_from_json,
 };
 use crate::sse::SseFramer;
 use crate::{Proxy, elapsed_ms};
@@ -36,6 +36,9 @@ pub(crate) struct Tap {
     /// The output limit the request ran under, when known.
     max_output: Option<u64>,
     sent: Option<Box<RequestSettings>>,
+    /// The engine sent an error inside a stream that started well; it was
+    /// reported when it arrived.
+    stream_failed: bool,
     done: bool,
 }
 
@@ -67,6 +70,7 @@ impl Tap {
             timings: None,
             max_output: None,
             sent: None,
+            stream_failed: false,
             done: false,
         }
     }
@@ -110,20 +114,56 @@ impl Tap {
                 continue;
             }
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                if let Some(usage) = usage_from_json(&json) {
-                    self.usage = Some(usage);
-                }
-                if let Some(reason) = finish_reason_from_json(&json) {
-                    self.finish_reason = Some(reason);
-                }
-                if let Some(timings) = json
-                    .get("timings")
-                    .and_then(tenaz_core::session::ServerTimings::from_json)
-                {
-                    self.timings = Some(timings);
-                }
+                self.sse_chunk(&json);
             }
         }
+    }
+
+    /// What one streamed chunk adds: the latest usage, finish reason and
+    /// timings, or the first error the engine sent in the stream. That one
+    /// is reported at once: the harness may exit on it before the stream
+    /// ends, and its exit must not reach the runner first.
+    fn sse_chunk(&mut self, json: &serde_json::Value) {
+        if !self.stream_failed
+            && let Some((message, kind)) = stream_error(json)
+        {
+            self.stream_failed = true;
+            self.report_error(message, kind);
+        }
+        if let Some(usage) = usage_from_json(json) {
+            self.usage = Some(usage);
+        }
+        if let Some(reason) = finish_reason_from_json(json) {
+            self.finish_reason = Some(reason);
+        }
+        if let Some(timings) = json
+            .get("timings")
+            .and_then(tenaz_core::session::ServerTimings::from_json)
+        {
+            self.timings = Some(timings);
+        }
+    }
+
+    fn report_error(&self, message: String, kind: crate::EngineErrorKind) {
+        self.proxy.observe(ProxyEvent::EngineError {
+            request: self.id,
+            status: Some(self.status),
+            message,
+            kind,
+        });
+    }
+
+    /// The usage, finish reason and timings of a completion that was not
+    /// streamed, from its whole body.
+    fn read_body(&mut self) {
+        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&self.body) else {
+            return;
+        };
+        self.usage = usage_from_json(&json);
+        self.finish_reason = finish_reason_from_json(&json);
+        self.timings = json
+            .get("timings")
+            .and_then(tenaz_core::session::ServerTimings::from_json);
     }
 
     fn finish(&mut self) {
@@ -137,21 +177,13 @@ impl Tap {
         }
         if self.status >= 400 {
             let (message, kind) = classify_error(&self.body);
-            self.proxy.observe(ProxyEvent::EngineError {
-                request: self.id,
-                status: Some(self.status),
-                message,
-                kind,
-            });
-        } else if !self.stream
-            && self.completion
-            && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&self.body)
-        {
-            self.usage = usage_from_json(&json);
-            self.finish_reason = finish_reason_from_json(&json);
-            self.timings = json
-                .get("timings")
-                .and_then(tenaz_core::session::ServerTimings::from_json);
+            self.report_error(message, kind);
+        }
+        if self.status >= 400 || self.stream_failed {
+            // The request failed: its partial usage is not a reply's.
+            self.usage = None;
+        } else if !self.stream && self.completion {
+            self.read_body();
         }
         self.proxy.observe(ProxyEvent::Completed {
             request: self.id,

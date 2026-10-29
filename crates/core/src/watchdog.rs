@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::params::RunParams;
 use crate::session::{
     SECOND_COMPACTION, SessionEvent, SessionMetrics, StopReason, WatchdogEvent, capacity_limit,
-    is_image_refusal, is_read_tool, is_write_tool,
+    is_image_refusal, is_out_of_memory, is_read_tool, is_write_tool,
 };
 use crate::util::{approx_tokens, sha256_hex};
 use crate::write_scope::WriteScope;
@@ -556,26 +556,35 @@ impl Watchdog {
             thinking: thinking_chars,
         });
         if *stop_reason == StopReason::Error {
-            self.metrics.provider_errors += 1;
-            let message = error_message.unwrap_or("");
-            self.event("provider-error", Some(message), elapsed_ms);
-            if let Some(limit) = capacity_limit(message) {
-                self.metrics.capacity_limits.push(limit);
-            }
-            if is_image_refusal(message) {
-                self.metrics.image_refusal = Some(message.to_owned());
-            }
-            if self.watch.is_some()
-                && self.metrics.provider_errors >= self.params.provider_error_abort
-            {
-                self.abort(
-                    &format!("{} provider errors", self.metrics.provider_errors),
-                    elapsed_ms,
-                    actions,
-                );
-            }
+            self.provider_error(error_message.unwrap_or(""), elapsed_ms, actions);
+        } else {
+            // A reply after the error: it no longer says how the session ends.
+            self.metrics.engine_out_of_memory = false;
         }
         self.context_rules(stop_reason, elapsed_ms, actions);
+    }
+
+    /// A request the engine failed: what its `message` says (a capacity
+    /// limit, a refused image, memory run out), and the abort after
+    /// `providerErrorAbort` of them.
+    fn provider_error(&mut self, message: &str, elapsed_ms: u64, actions: &mut Vec<Action>) {
+        self.metrics.provider_errors += 1;
+        self.event("provider-error", Some(message), elapsed_ms);
+        if let Some(limit) = capacity_limit(message) {
+            self.metrics.capacity_limits.push(limit);
+        }
+        if is_image_refusal(message) {
+            self.metrics.image_refusal = Some(message.to_owned());
+        }
+        self.metrics.engine_out_of_memory = is_out_of_memory(message);
+        if self.watch.is_some() && self.metrics.provider_errors >= self.params.provider_error_abort
+        {
+            self.abort(
+                &format!("{} provider errors", self.metrics.provider_errors),
+                elapsed_ms,
+                actions,
+            );
+        }
     }
 
     /// The context stop and the steers before it, after each reply.
@@ -1026,6 +1035,47 @@ mod tests {
         );
         assert!(m.engine_failed());
         assert_eq!(m.last_stop_reason, Some(StopReason::Error));
+        assert!(!m.engine_out_of_memory);
+    }
+
+    /// Sushi's error when Metal cannot get the memory, often because a
+    /// render shares the GPU: an engine failure, marked as such.
+    #[test]
+    fn an_engine_out_of_memory_is_marked() {
+        let mut w = watched();
+        message(
+            &mut w,
+            0,
+            StopReason::Error,
+            Some("error.GenerationOutOfMemory"),
+        );
+        let m = w.metrics();
+        assert!(m.engine_out_of_memory);
+        assert!(m.engine_failed());
+        assert!(m.capacity_limits.is_empty(), "not a prompt too large");
+    }
+
+    /// A harness that retries got past the engine's memory error: a later
+    /// reply, or another error, no longer says the session ran out.
+    #[test]
+    fn only_the_last_engine_error_says_whether_memory_ran_out() {
+        let mut w = watched();
+        message(
+            &mut w,
+            0,
+            StopReason::Error,
+            Some("error.GenerationOutOfMemory"),
+        );
+        message(&mut w, 0, StopReason::ToolUse, None);
+        assert!(!w.metrics().engine_out_of_memory);
+        message(
+            &mut w,
+            0,
+            StopReason::Error,
+            Some("error.GenerationOutOfMemory"),
+        );
+        message(&mut w, 0, StopReason::Error, Some("boom"));
+        assert!(!w.metrics().engine_out_of_memory);
     }
 
     #[test]

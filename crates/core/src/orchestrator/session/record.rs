@@ -217,10 +217,14 @@ fn outcome(ok: bool, metrics: &SessionMetrics) -> String {
     if ok {
         return "settled".to_owned();
     }
-    let why = metrics
-        .stop_cause()
-        .or_else(|| metrics.exit_code.map(|c| c.to_string()))
-        .unwrap_or_default();
+    let why = if metrics.engine_out_of_memory && metrics.abort_reason.is_none() {
+        "engine out of memory".to_owned()
+    } else {
+        metrics
+            .stop_cause()
+            .or_else(|| metrics.exit_code.map(|c| c.to_string()))
+            .unwrap_or_default()
+    };
     format!("failed ({why})")
 }
 
@@ -277,6 +281,24 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(outcome(false, &metrics), "failed (error)");
+    }
+
+    /// In the Lotion Pump run such sessions read "failed (toolUse)": fx
+    /// exited after the engine failed, mid tool-use turn.
+    #[test]
+    fn a_session_whose_engine_ran_out_of_memory_says_so() {
+        let metrics = SessionMetrics {
+            last_stop_reason: Some(crate::session::StopReason::ToolUse),
+            engine_out_of_memory: true,
+            exit_code: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(outcome(false, &metrics), "failed (engine out of memory)");
+        let aborted = SessionMetrics {
+            abort_reason: Some("loop".to_owned()),
+            ..metrics
+        };
+        assert_eq!(outcome(false, &aborted), "failed (loop)");
     }
 
     #[test]

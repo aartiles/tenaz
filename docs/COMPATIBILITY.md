@@ -105,6 +105,15 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **An engine error inside a stream** (Sushi's `GenerationOutOfMemory`).
+  Its shape, `data: {"error":{"message":…},"choices":[{"finish_reason":
+  "error"}]}`, was read from Sushi 1.4.0's binary, not captured from a real
+  failure, and no real out-of-memory failure has gone through the proxy
+  yet. If Sushi sends it otherwise, the session is rerun as before, as a
+  harness exit. The proxy reports the error when the chunk arrives, before
+  fx can exit on it. Only that shape, an `error` object in a `data:`
+  chunk, is read; how llama.cpp, vLLM or Ollama send an error inside a
+  stream has not been checked.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.
@@ -271,6 +280,18 @@ These are not runner bugs, but they decide whether a run gets far:
 - **Lost tool arguments.** The engine sometimes streamed `{}` as a tool
   call's arguments; the harness rejects them and the watchdog stops the
   session.
+- **The engine running out of memory part way through a reply.** In the
+  Lotion Pump run (Sushi 1.4.0, fx 0.0.15, Blender rendering on the same
+  GPU) seven sessions ended this way: Sushi logged `Command buffer
+  execution failed: Insufficient Memory` and `streaming error:
+  error.GenerationOutOfMemory`, and fx stopped at once (`ProviderError`,
+  `saw_content=false`, no retry) and exited. The run log said `failed
+  (toolUse)`. Each time the model had just started a render or a
+  `verify` that renders, often left running in the background. The proxy
+  now reads an error the engine sends inside a stream that started with
+  status 200, and the session says `failed (engine out of memory)` and is
+  rerun as an engine failure (journal `engine-retry` cause `engine`). See
+  "Known gaps" for what is not verified.
 - **Engines that report draft acceptance** in llama.cpp's
   `draft_n` / `draft_n_accepted` layout get it in `requests.jsonl` and
   `tenaz status`. Sushi 1.2.4 reports it only in its log.

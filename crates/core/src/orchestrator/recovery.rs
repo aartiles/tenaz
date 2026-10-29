@@ -6,7 +6,7 @@
 use crate::briefing::{CONTINUATION, TURN_CONTINUATION, image_continuation};
 use crate::params::RunParams;
 use crate::role::Role;
-use crate::session::SessionMetrics;
+use crate::session::{SessionMetrics, StopReason};
 
 /// Why a fresh session continues the same work.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,13 +26,17 @@ pub(crate) enum FailureCause {
     Harness,
     /// The engine returned an error.
     Engine,
+    /// The engine ran out of memory on a request. Journaled as `engine`,
+    /// so a script that counts engine reruns still counts it; the log line
+    /// and the session's `provider-error` event name the memory.
+    OutOfMemory,
 }
 
 impl FailureCause {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Harness => "harness",
-            Self::Engine => "engine",
+            Self::Engine | Self::OutOfMemory => "engine",
         }
     }
 }
@@ -148,10 +152,16 @@ impl Recovery {
             });
         }
         self.retry += 1;
-        let cause = if metrics.harness_exit.is_some() {
-            FailureCause::Harness
-        } else {
+        // What the engine said comes first: fx exits after an engine
+        // error, and that exit is its consequence, not its cause.
+        let cause = if metrics.engine_out_of_memory {
+            FailureCause::OutOfMemory
+        } else if metrics.harness_exit.is_none()
+            || metrics.last_stop_reason == Some(StopReason::Error)
+        {
             FailureCause::Engine
+        } else {
+            FailureCause::Harness
         };
         Step::Retry { retry, cause }
     }
@@ -480,6 +490,39 @@ mod tests {
                 Step::GiveUp(GiveUp::Engine { sessions: 4 })
             ]
         );
+    }
+
+    /// The session's `harness_exit` after `engine`: fx exits once the engine
+    /// fails a request.
+    fn after_harness_exit(engine: SessionMetrics) -> SessionMetrics {
+        SessionMetrics {
+            harness_exit: Some("the agent connection ended: ProviderError".to_owned()),
+            ..engine
+        }
+    }
+
+    /// The engine's error names the cause, not the exit that followed it.
+    #[test]
+    fn an_engine_error_before_the_harness_exit_is_the_cause() {
+        let (_, steps) = steps(Role::Builder, &[after_harness_exit(engine_error())]);
+        assert_eq!(steps, [engine_retry(0)]);
+    }
+
+    #[test]
+    fn an_engine_out_of_memory_before_the_harness_exit_is_named() {
+        let out_of_memory = SessionMetrics {
+            engine_out_of_memory: true,
+            ..engine_error()
+        };
+        let (_, steps) = steps(Role::Builder, &[after_harness_exit(out_of_memory)]);
+        assert_eq!(steps, [retry(0, FailureCause::OutOfMemory)]);
+    }
+
+    /// `cause` in the journal is read by scripts: an out-of-memory rerun
+    /// keeps the value they count engine reruns by.
+    #[test]
+    fn an_out_of_memory_rerun_is_journaled_as_engine() {
+        assert_eq!(FailureCause::OutOfMemory.as_str(), "engine");
     }
 
     #[test]
