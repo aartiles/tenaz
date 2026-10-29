@@ -138,7 +138,13 @@ Taken while implementing D, on the open questions above:
   costs the attempt, so it drops the job file and any report no session
   read. `run.json` names the attempt its jobs are for from the attempt's
   start, and a pause gives the attempt back, so a file a paused session
-  wrote, or a job a stop cut short, still runs.
+  wrote, or a job a stop cut short, still runs. A job's log is
+  `.tenaz/private/jobs/<TASK>-<attempt>-<n>.log`, `n` counting the
+  attempt's job files.
+- **A crash of Tenaz during a job leaves the job running**: it runs in a
+  process group of its own, which only a live Tenaz kills. The next run
+  reloads the LLM beside it. Stop the job before resuming; recording its
+  group in `run.json` to kill it on start is left for later.
 - **A stop during a job** pauses the run with the job file kept and the
   attempt not charged; on resume the job runs again before any session,
   and the next session is not told it continues a stopped one.
@@ -164,6 +170,7 @@ Taken while implementing D, on the open questions above:
   duration), the protocol, builder prompt, SKILL.md, README and
   COMPATIBILITY updated, and the note to a builder session rerun after an
   engine out-of-memory error.
-- Tested with the scripted harness, a fake job runner and, in three runs,
-  a lease over a fake LLM whose reload fails; whether a small model
-  declares jobs at the right times is unknown until a run.
+- Tested with the scripted harness, a fake job runner and, in whole runs,
+  a lease over a fake LLM whose reload fails or that cannot unload;
+  whether a small model declares jobs at the right times is unknown until
+  a run.
