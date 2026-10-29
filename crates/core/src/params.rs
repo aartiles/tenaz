@@ -94,6 +94,8 @@ pub struct RunParams {
     pub note_clip_bytes: usize,
     /// The repository map is clipped to this.
     pub map_clip_bytes: usize,
+    /// A list of changed files (a diff's stat) is clipped to this.
+    pub stat_clip_bytes: usize,
     /// Memory sampling period (0 disables).
     pub memory_sample_sec: u64,
     /// Desktop notifications when a run starts, waits on the engine, blocks, ends or crashes.
@@ -169,6 +171,7 @@ impl Default for RunParams {
             verify_clip_bytes: 4000,
             note_clip_bytes: 1500,
             map_clip_bytes: 8000,
+            stat_clip_bytes: 8000,
             memory_sample_sec: 30,
             notify: true,
             existing_project: None,

@@ -7,6 +7,7 @@ use crate::orchestrator::{RunError, Runner};
 use crate::project::{only_minor_findings, verdict_in};
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId};
+use crate::util::clip_lines;
 use crate::verify::VerifyOutcome;
 
 use super::PromptParts;
@@ -89,12 +90,14 @@ impl Runner {
         Ok(self.review_outcome(task, reviewed))
     }
 
-    /// The diff since `base`, clipped to `diffLimitBytes` after its stat.
+    /// The diff since `base`, clipped to `diffLimitBytes` after its stat
+    /// (clipped to `statClipBytes`).
     fn review_diff(&self, base: &str) -> Result<ReviewDiff, RunError> {
         let mut diff = self.deps.vcs.diff(base, "HEAD", true)?;
         let images = briefing::changed_images(&diff);
         if diff.len() > self.params.diff_limit_bytes {
             let stat = self.deps.vcs.diff_stat(base, Some("HEAD"), false)?;
+            let stat = clip_lines(stat.trim(), self.params.stat_clip_bytes);
             diff = clip_diff(&diff, &stat, self.params.diff_limit_bytes);
         }
         Ok(ReviewDiff { text: diff, images })
@@ -156,11 +159,15 @@ impl Runner {
                 "Images this change adds or replaces".to_owned(),
                 format!(
                     "{}\n\nLook at each one before you judge the task (see the role prompt).",
-                    diff.images
-                        .iter()
-                        .map(|path| format!("- {path}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    clip_lines(
+                        &diff
+                            .images
+                            .iter()
+                            .map(|path| format!("- {path}"))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        self.params.stat_clip_bytes
+                    )
                 ),
             ));
         }

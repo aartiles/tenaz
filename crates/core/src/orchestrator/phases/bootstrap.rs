@@ -12,6 +12,7 @@ use crate::project::BRIEF;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::spec::{Requirement, coverage};
+use crate::util::clip_lines;
 
 use super::PromptParts;
 
@@ -290,7 +291,7 @@ impl Runner {
         }
         Ok(Some(format!(
             "{}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right.",
-            stat.trim()
+            clip_lines(stat.trim(), self.params.stat_clip_bytes)
         )))
     }
 }

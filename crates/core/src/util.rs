@@ -17,6 +17,24 @@ pub fn clip(text: &str, limit: usize) -> String {
     format!("{}\n[... clipped {} bytes]", &text[..cut], text.len() - cut)
 }
 
+/// Cuts `text` to the whole lines that fit in `limit` bytes and says how
+/// many lines were left out, for a list such as a diff's file stat.
+pub fn clip_lines(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_owned();
+    }
+    let (mut kept, mut left_out) = (0, 0);
+    for line in text.split_inclusive('\n') {
+        if left_out == 0 && kept + line.len() <= limit {
+            kept += line.len();
+        } else {
+            left_out += 1;
+        }
+    }
+    let lines = if left_out == 1 { "line" } else { "lines" };
+    format!("{}[... clipped {left_out} {lines}]", &text[..kept])
+}
+
 /// `program args...` started through `wrapper` (a program and its leading
 /// arguments, such as the sandbox launcher); unchanged when `wrapper` is empty.
 pub fn wrap_command(
@@ -95,6 +113,18 @@ mod tests {
     fn clip_never_splits_a_character() {
         let clipped = clip("ééé", 3);
         assert!(clipped.starts_with("é\n"));
+    }
+
+    #[test]
+    fn clip_lines_keeps_whole_lines_and_counts_the_rest() {
+        assert_eq!(clip_lines("a\nb\n", 10), "a\nb\n");
+        assert_eq!(
+            clip_lines("ab\ncd\nef\n", 7),
+            "ab\ncd\n[... clipped 1 line]"
+        );
+        assert_eq!(clip_lines("abcdef\ng", 3), "[... clipped 2 lines]");
+        // Lines are cut whole, so a character is never split.
+        assert_eq!(clip_lines("é\r\nü\r\n", 5), "é\r\n[... clipped 1 line]");
     }
 
     #[test]

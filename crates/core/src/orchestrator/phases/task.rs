@@ -10,6 +10,7 @@ use crate::orchestrator::{RunError, Runner};
 use crate::project::conflict_path;
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId, TaskStatus};
+use crate::util::clip_lines;
 use crate::verify::{VerifyOutcome, judge_attempt};
 
 use super::PromptParts;
@@ -569,7 +570,7 @@ impl Runner {
         if !diff.trim().is_empty() {
             extra.push((
                 "Changes already made since the task started (kept)".to_owned(),
-                diff.trim().to_owned(),
+                clip_lines(diff.trim(), self.params.stat_clip_bytes),
             ));
         }
         Ok(extra)

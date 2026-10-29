@@ -95,6 +95,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A list of changed files put in a prompt is clipped to `statClipBytes`
+  (8000 bytes, a new parameter), at a whole line, with the number of lines
+  left out. Such lists went in whole: the reviewer's (ahead of a diff
+  clipped to `diffLimitBytes`) and its list of changed images, the files
+  an earlier bootstrap session left, and a retried builder's changes so
+  far. In the Digger 3D run of 2026-10-29 a task had committed 3,265
+  `node_modules` files: their list alone was about 200 KB, and fx refused
+  the review before sending it, as over the reviewer model's 65,536-token
+  window. Every rerun sent the same prompt.
 - With fx, an engine that runs out of memory part way through a reply is
   reported as such. Sushi sends the error inside a stream that started
   with status 200, which the proxy ignored, so the session read as a
