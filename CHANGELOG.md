@@ -20,8 +20,10 @@ uses [Semantic Versioning](https://semver.org/).
   `job-finished` records. A file that is not valid runs nothing and the
   next session is told why. A stop during the job pauses the run, and on
   resume the job runs again before any session; a report no session has
-  read yet is kept in `run.json` across a pause. `jobMinutes=0` turns
-  jobs off. In the Lotion Pump run a 25-minute Blender render next to the
+  read yet is kept in `run.json` across a pause. After a job the LLM
+  serves again before the next session; one that does not come back
+  blocks the run as "engine unavailable". `jobMinutes=0` turns jobs off.
+  In the Lotion Pump run a 25-minute Blender render next to the
   model's engine failed for memory, and so did the engine; the operator
   had to run it with the run blocked. See ADR 0010.
 - A builder session rerun after the engine ran out of memory is told why

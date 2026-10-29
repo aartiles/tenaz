@@ -4,13 +4,21 @@
 //! not stand runs nothing, and the next session is told why. A pause
 //! loses neither the job nor its report.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
 
 use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, run};
 use crate::briefing::OUT_OF_MEMORY;
+use crate::lease::{Gate, LeaseManager};
+use crate::ledger::JournalRecord::JobFinished;
 use crate::ledger::{JournalRecord, Phase};
+use crate::ports::{
+    Clock, EngineAdapter, EngineError, Harness, HarnessError, HarnessInfo, ModelState, Session,
+    SessionSpec,
+};
 use crate::project::Project;
 use crate::testing::{ScriptedHarness, ScriptedJob, ScriptedJobs, SnapshotVcs, VirtualClock};
 
@@ -381,4 +389,228 @@ async fn a_builder_rerun_after_the_engine_ran_out_of_memory_is_told_to_declare_a
         "{}",
         prompts[1]
     );
+}
+
+/// The fake goal's LLM, loaded at first, which refuses its next
+/// `refusals` loads, as an engine short of memory after a job might.
+struct ShortOfMemory {
+    loaded: Mutex<bool>,
+    refusals: Mutex<u32>,
+}
+
+impl ShortOfMemory {
+    fn refusing(refusals: u32) -> Arc<Self> {
+        Arc::new(Self {
+            loaded: Mutex::new(true),
+            refusals: Mutex::new(refusals),
+        })
+    }
+}
+
+#[async_trait]
+impl EngineAdapter for ShortOfMemory {
+    fn name(&self) -> &str {
+        "short-of-memory"
+    }
+
+    async fn models(&self) -> Result<Vec<ModelState>, EngineError> {
+        let loaded = *self.loaded.lock().unwrap();
+        Ok(vec![ModelState {
+            id: "fake".into(),
+            loaded,
+            ready: loaded,
+            context_length: Some(131_072),
+        }])
+    }
+
+    async fn load(&self, _model: &str) -> Result<(), EngineError> {
+        let mut refusals = self.refusals.lock().unwrap();
+        if *refusals > 0 {
+            *refusals -= 1;
+            return Err(EngineError::Refused("no memory".into()));
+        }
+        *self.loaded.lock().unwrap() = true;
+        Ok(())
+    }
+
+    async fn unload(&self, _model: &str) -> Result<(), EngineError> {
+        *self.loaded.lock().unwrap() = false;
+        Ok(())
+    }
+}
+
+/// The scripted harness, noting whether the lease's gate was open as each
+/// session opened: a request of a session opened at a closed gate waits.
+struct GateAtOpen {
+    harness: ScriptedHarness,
+    lease: Arc<LeaseManager>,
+    seen: Mutex<Vec<(String, bool)>>,
+}
+
+#[async_trait]
+impl Harness for GateAtOpen {
+    fn info(&self) -> HarnessInfo {
+        self.harness.info()
+    }
+
+    async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
+        let open = self.lease.gate().is_open();
+        self.seen.lock().unwrap().push((spec.label.clone(), open));
+        self.harness.open(spec).await
+    }
+}
+
+/// Plays the fake goal with T002's first builder declaring a job, under a
+/// lease over `llm`; the project, its log and the gate as each session
+/// opened.
+async fn under_lease(
+    llm: Arc<ShortOfMemory>,
+) -> (tempfile::TempDir, Project, String, Vec<(String, bool)>) {
+    under_lease_with(llm, Arc::new(VirtualClock::new()), CancellationToken::new()).await
+}
+
+/// [`under_lease`] with `clock` and `stop`.
+async fn under_lease_with(
+    llm: Arc<ShortOfMemory>,
+    clock: Arc<dyn Clock>,
+    stop: CancellationToken,
+) -> (tempfile::TempDir, Project, String, Vec<(String, bool)>) {
+    let (work, project, vcs) = project(&["maxAttempts=3"]);
+    let lease = Arc::new(LeaseManager::new(
+        llm,
+        "fake",
+        Gate::new(),
+        Arc::new(|_| {}),
+    ));
+    let harness = Arc::new(GateAtOpen {
+        harness: ScriptedHarness {
+            job: Some(first_session_declares(RENDER)),
+            ..Default::default()
+        },
+        lease: lease.clone(),
+        seen: Mutex::new(Vec::new()),
+    });
+    let mut deps = deps(&project, vcs, harness.clone(), clock);
+    deps.lease = Some(lease);
+    run(&project, deps, stop).await;
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let seen = harness.seen.lock().unwrap().clone();
+    (work, project, log, seen)
+}
+
+/// A reload that failed after the job leaves the gate closed; the LLM is
+/// loaded and the gate opened before the next session opens. The report
+/// names what the engine did.
+#[tokio::test(start_paused = true)]
+async fn the_llm_serves_again_before_the_session_after_a_job() {
+    let (_work, project, log, seen) = under_lease(ShortOfMemory::refusing(1)).await;
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    let builders: Vec<_> = seen
+        .iter()
+        .filter(|(label, _)| label.ends_with("-builder-T002"))
+        .collect();
+    assert_eq!(builders.len(), 2, "{seen:?}");
+    assert!(
+        builders[1].1,
+        "the session after the job opened at a closed gate"
+    );
+    assert!(
+        matches!(
+            finished(&project).as_slice(),
+            [JobFinished {
+                exit_code: Some(0),
+                engine: Some(_),
+                ..
+            }]
+        ),
+        "{log}"
+    );
+    assert!(
+        builder_prompts(&project)[1].contains("Around it, the engine: the LLM did not reload"),
+        "{log}"
+    );
+}
+
+/// An LLM that does not come back after the job blocks the run, with the
+/// engine's error, the attempt given back and the report kept for the
+/// session after a resume.
+#[tokio::test(start_paused = true)]
+async fn an_llm_that_does_not_serve_again_after_a_job_blocks_the_run() {
+    let (_work, project, log, seen) = under_lease(ShortOfMemory::refusing(u32::MAX)).await;
+    let ledger = project.load_ledger().unwrap();
+    assert_eq!(ledger.phase, Phase::Blocked, "{log}");
+    let reason = ledger.blocked_reason.clone().unwrap_or_default();
+    assert!(
+        reason.contains("the LLM did not serve again after T002's job")
+            && reason.contains("no memory"),
+        "{reason}"
+    );
+    assert!(
+        log.contains("waiting for the LLM to serve again after T002's job"),
+        "{log}"
+    );
+    let builders = seen
+        .iter()
+        .filter(|(label, _)| label.ends_with("-builder-T002"))
+        .count();
+    assert_eq!(builders, 1, "a session ran after the job: {seen:?}");
+    let card = project.read(".tenaz/tasks/T002.md").unwrap();
+    assert!(card.contains("attempts: 0"), "{card}");
+    let jobs = ledger.current.unwrap().jobs.unwrap();
+    assert!(jobs.report.is_some_and(|r| r.contains("sh render.sh")));
+}
+
+/// The virtual clock, except that the first wait for the engine stops the
+/// run, as a person stopping it during that wait.
+struct StopOnEngineWait {
+    clock: VirtualClock,
+    stop: CancellationToken,
+}
+
+#[async_trait]
+impl Clock for StopOnEngineWait {
+    fn now_rfc3339(&self) -> String {
+        self.clock.now_rfc3339()
+    }
+
+    fn monotonic_ms(&self) -> u64 {
+        self.clock.monotonic_ms()
+    }
+
+    async fn sleep(&self, duration: std::time::Duration) {
+        if duration == std::time::Duration::from_secs(20) {
+            self.stop.cancel();
+        }
+        self.clock.sleep(duration).await;
+    }
+}
+
+/// A stop while the run waits for the LLM after a job pauses the run, with
+/// the attempt given back and the report kept, rather than blocking it.
+#[tokio::test(start_paused = true)]
+async fn a_stop_while_waiting_for_the_llm_after_a_job_pauses_the_run() {
+    let stop = CancellationToken::new();
+    let clock = Arc::new(StopOnEngineWait {
+        clock: VirtualClock::new(),
+        stop: stop.clone(),
+    });
+    let (_work, project, log, _) =
+        under_lease_with(ShortOfMemory::refusing(u32::MAX), clock, stop).await;
+    let ledger = project.load_ledger().unwrap();
+    assert_eq!(ledger.phase, Phase::Loop, "paused, not blocked:\n{log}");
+    assert!(
+        project.journal().iter().any(|e| matches!(
+            &e.record,
+            JournalRecord::Paused { label: Some(l), .. } if l == "T002's job"
+        )),
+        "{log}"
+    );
+    let card = project.read(".tenaz/tasks/T002.md").unwrap();
+    assert!(card.contains("attempts: 0"), "{card}");
+    let jobs = ledger.current.unwrap().jobs.unwrap();
+    assert!(jobs.report.is_some_and(|r| r.contains("sh render.sh")));
 }

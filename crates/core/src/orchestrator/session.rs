@@ -82,7 +82,9 @@ impl Runner {
                     if self.stopping() {
                         return Err(self.pause(&label, role, ctx)?);
                     }
-                    self.wait_for_engine().await;
+                    // The next session meets the engine as it is: a failure
+                    // there counts toward the same retries.
+                    let _ = self.wait_for_engine("after an engine error").await;
                 }
                 Step::GiveUp(why) => return Err(self.give_up(&label, why)),
             }

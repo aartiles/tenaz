@@ -34,10 +34,8 @@ impl Runner {
         let task = &loaded.card.id;
         let mut ran = self.next_job(task, attempt).await?;
         loop {
-            // A stop that came as a job ended pauses before the next
-            // session; the job's report waits in the ledger.
-            if ran && self.stopping() {
-                return Err(self.pause_job(task, attempt)?);
+            if ran {
+                self.after_job(task, attempt).await?;
             }
             let prompt = self.builder_prompt(backlog, loaded, attempt).await?;
             let session = self.builder_session(&loaded.card, attempt, &prompt).await?;
@@ -51,6 +49,28 @@ impl Runner {
                 return Ok(session);
             }
         }
+    }
+
+    /// Between a job and the next session. A stop that came as the job
+    /// ended pauses the run; the job's report waits in the ledger. The LLM
+    /// must serve again first: a reload that failed leaves the gate
+    /// closed, and the session's requests would wait there. An engine that
+    /// does not come back blocks the run, as after engine failures.
+    async fn after_job(&mut self, task: &TaskId, attempt: u32) -> Result<(), RunError> {
+        if self.stopping() {
+            return Err(self.pause_job(task, attempt)?);
+        }
+        let unserved = self.wait_for_engine(&format!("after {task}'s job")).await;
+        if self.stopping() {
+            return Err(self.pause_job(task, attempt)?);
+        }
+        if let Some(error) = unserved {
+            self.project.set_attempts(task, attempt - 1)?;
+            return Err(RunError::EngineUnavailable(format!(
+                "the LLM did not serve again after {task}'s job: {error}"
+            )));
+        }
+        Ok(())
     }
 
     /// The section on the job of `attempt` no session has read yet, if any.

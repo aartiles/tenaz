@@ -105,14 +105,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
-- **Heavy jobs** (ADR 0010). Tested with the scripted harness, a fake job
-  runner and fake engines; the job runner itself with `sh`. No real model
-  has declared a job yet, so whether a small model declares one at the
-  right moment, rather than running the work in the background, is
-  unknown. With an engine that cannot unload (`--engine generic` without
-  stop/start scripts) the job runs next to the resident LLM, with only the
-  request gate closed, and may still fail for memory. `verify` still runs
-  with the LLM loaded, so checks that render can clash the same way.
+- **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
+  job runner; the lease cycle with fake engines, and whole runs with a
+  lease over a fake LLM whose reload after the job fails; the job runner
+  itself with `sh`. No real model has declared a job yet, so whether a
+  small model declares one at the right moment, rather than running the
+  work in the background, is unknown. With an engine that cannot unload
+  (`--engine generic` without stop/start scripts) the job runs next to the
+  resident LLM, with only the request gate closed, and may still fail for
+  memory. `verify` still runs with the LLM loaded, so checks that render
+  can clash the same way.
 - **An engine error inside a stream** (Sushi's `GenerationOutOfMemory`),
   with fx; Pi reports engine errors itself. Its shape, `data: {"error":
   {"message":…},"choices":[{"finish_reason":"error"}]}`, was read from

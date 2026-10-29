@@ -111,8 +111,13 @@ Taken while implementing D, on the open questions above:
   may write it. A file that is not valid is removed, runs nothing, and the
   next session is told why.
 - **Engines that cannot unload**: the job runs next to the LLM with the
-  gate closed, as a media job does. The report says what went wrong with
-  the engine around it.
+  gate closed (a media job, which runs inside a tool call, leaves it
+  open). The report says what went wrong with the engine around it.
+- **After a job the LLM serves again before the next session.** A reload
+  that failed leaves the gate closed, and the session's requests would
+  wait at it. The run waits for the engine as after engine failures; one
+  that does not come back blocks the run as "engine unavailable", with
+  the attempt given back and the report kept.
 - **`jobMinutes`**, 60 by default, is the most a job may ask for, and
   **`jobsPerAttempt`**, 3, the most job files one attempt may have,
   valid or not; one past them is removed unread and the attempt is judged
@@ -149,5 +154,6 @@ Taken while implementing D, on the open questions above:
   duration), the protocol, builder prompt, SKILL.md, README and
   COMPATIBILITY updated, and the note to a builder session rerun after an
   engine out-of-memory error.
-- Tested with the scripted harness and a fake engine adapter; whether a
-  small model declares jobs at the right times is unknown until a run.
+- Tested with the scripted harness, a fake job runner and, in one run, a
+  lease over a fake LLM whose reload fails; whether a small model declares
+  jobs at the right times is unknown until a run.

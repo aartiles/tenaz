@@ -231,23 +231,30 @@ impl Runner {
         Ok(())
     }
 
-    /// Waits for the engine to serve the pinned model (up to 30 tries, 20 s apart), unless stopping.
-    async fn wait_for_engine(&self) -> bool {
-        for _ in 0..30 {
+    /// Waits for the engine to serve the pinned model (up to 30 tries, 20 s apart), and logs
+    /// the wait, `why`, once the first try fails. The last error when it still does not
+    /// serve; `None` once it serves, or when the run is stopping, which callers check.
+    async fn wait_for_engine(&self, why: &str) -> Option<RunError> {
+        const TRIES: u32 = 30;
+        for tried in 1..=TRIES {
             if self.stopping() {
-                return false;
+                return None;
             }
-            match self.engine_serving().await {
-                Ok(()) => return true,
-                Err(_) => {
-                    self.deps
-                        .clock
-                        .sleep(std::time::Duration::from_secs(20))
-                        .await;
-                }
+            let error = self.engine_serving().await.err()?;
+            if tried == TRIES {
+                return Some(error);
             }
+            if tried == 1 {
+                self.log(&format!(
+                    "  waiting for the LLM to serve again {why}: {error}"
+                ));
+            }
+            self.deps
+                .clock
+                .sleep(std::time::Duration::from_secs(20))
+                .await;
         }
-        false
+        None
     }
 
     /// Whether the engine lists the pinned model as loaded and ready. With a
