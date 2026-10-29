@@ -170,9 +170,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - **Linux and NVIDIA memory.** Memory pressure, swap and the engine's
   footprint are sampled on macOS only.
 - **The sandbox** (`sandbox=true`) has been tested on macOS, with `verify`
-  and a Pi session against a local model. The Landlock version for Linux
-  compiles and its rules are unit-tested, but it has not run on a Linux
-  kernel yet; neither has fx in the sandbox.
+  and a Pi session against a local model, and with fx in the Lotion Pump
+  run (2026-10-28, Blender 5.2 on Metal). Before that run, with the
+  default write roots, Blender could not write Metal's shader cache in the
+  per-user cache (`getconf DARWIN_USER_CACHE_DIR`) and every `./blender`
+  call took about 10 s longer (a 256-pixel, 16-sample render: 11 s against
+  0.9 s); the run added the directory to `sandboxAllowWrite`, which brought
+  it back to 0.9 s. That directory is now a default write root on macOS,
+  but Blender has not run with the new default yet.
+  The Landlock version for Linux compiles and its rules are unit-tested,
+  but it has not run on a Linux kernel yet.
 - **Writes outside the project** without the sandbox (ADR 0008). Only the
   write tools' own path argument is checked (`path`, `file_path`); a shell
   command that writes elsewhere is not seen. Symbolic links are not

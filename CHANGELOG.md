@@ -34,6 +34,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- On macOS the sandbox lets the agent and `verify` write the per-user cache
+  (`getconf DARWIN_USER_CACHE_DIR`), as they could already write the
+  temporary directory beside it. Metal keeps its compiled shaders there:
+  without it every program that draws with Metal compiles them again on
+  each start, and in a Blender benchmark each `./blender` call took about
+  10 s longer (a small render took 11 s instead of 0.9 s).
 - In the failure history a split is shown, an attempt whose `verify`
   failure repeats the one before word for word says so and names the
   attempt that has the text, instead of repeating it. In the Lotion Pump

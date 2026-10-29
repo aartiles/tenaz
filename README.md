@@ -426,11 +426,12 @@ macOS, Landlock on Linux (5.13 or later). Nothing to install. Everything
 they start inherits it.
 
 - They can write only to the project, its git directory (for a worktree,
-  the repository's shared `.git` too), the temporary directories, `/dev`
-  and the existing directories in `sandboxAllowWrite` (by default the
-  package caches `~/.cargo/registry`, `~/.cargo/git`, `~/.npm`, `~/.cache`
-  and `~/Library/Caches`). Writing elsewhere fails with `Operation not
-  permitted`.
+  the repository's shared `.git` too), the temporary directories, on macOS
+  the per-user cache (`getconf DARWIN_USER_CACHE_DIR`, where Metal keeps
+  its shaders), `/dev` and the existing directories in `sandboxAllowWrite`
+  (by default the package caches `~/.cargo/registry`, `~/.cargo/git`,
+  `~/.npm`, `~/.cache` and `~/Library/Caches`). Writing elsewhere fails
+  with `Operation not permitted`.
 - They cannot change what Tenaz runs or trusts outside the sandbox: the
   git hooks and config, a worktree's `.git` file and `.tenaz/run.json`. On
   macOS the sandbox refuses those writes. Landlock cannot refuse a path
