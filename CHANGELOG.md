@@ -16,7 +16,8 @@ uses [Semantic Versioning](https://semver.org/).
   `tenaz status` names the roles it covers and gives the builder's context
   budget, and `status --json` has `role_models`. An unknown or repeated
   role, the run's own model, and a window for a role with no model of its
-  own are refused, and so is a map with `--harness pi`.
+  own are refused, and so are one model given different windows for two
+  roles and a map with `--harness pi`.
 
   fx is launched with each session's model, and the session's context
   budget is the `contextBudget` share of that model's window; the

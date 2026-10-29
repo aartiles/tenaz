@@ -355,8 +355,8 @@ tenaz init --project my-goal --brief brief.md --model my-model --base-url http:/
 model family; the other roles keep `--model`. Repeat it for more roles
 (bootstrap, builder, reviewer, split, replan, final-reviewer), and add
 `--context-window-for ROLE=N` when that model's window is not
-`--context-window`. The engine serves every model named, all loaded at
-once: Tenaz does not swap between them. Not with `--harness pi` yet. See
+`--context-window`; roles that name the same model get the same window.
+The engine serves every model named, all loaded at once: Tenaz does not swap between them. Not with `--harness pi` yet. See
 [ADR 0010](docs/adr/0010-a-model-per-role.md).
 
 `--vision` says the model reads images. `--set key=value` overrides a

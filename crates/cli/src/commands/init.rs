@@ -100,7 +100,7 @@ pub(crate) struct InitArgs {
     #[arg(long = "model-for", value_name = "ROLE=ID")]
     pub(crate) models_for: Vec<String>,
     /// The context window of a --model-for model, `ROLE=N` (repeatable;
-    /// default: the --model's window).
+    /// default: the --model's window; the same for roles on one model).
     #[arg(long = "context-window-for", value_name = "ROLE=N")]
     pub(crate) context_windows_for: Vec<String>,
     /// The model reads images (with --harness pi, read from models.json when listed there).

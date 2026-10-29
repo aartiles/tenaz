@@ -64,6 +64,15 @@ pub enum RoleModelError {
     WindowWithoutModel(Role),
     #[error("{} {role} is not a positive number of tokens: {got}", WINDOW.name)]
     BadWindow { role: Role, got: String },
+    #[error(
+        "{model} is given to {role} and {other} with different windows; give them the same {}",
+        WINDOW.name
+    )]
+    WindowDiffers {
+        model: String,
+        role: Role,
+        other: Role,
+    },
 }
 
 /// A flag of `ROLE=VALUE` pairs, and what its errors call VALUE.
@@ -96,8 +105,9 @@ pub struct RoleFlags<'a> {
 impl RoleFlags<'_> {
     /// The picks these flags make. A pair that is not `ROLE=VALUE`, an
     /// unknown role, a role given twice, a model the same as the run's
-    /// `default_id`, a window for a role with no model of its own, and a
-    /// window that is not a positive number are errors.
+    /// `default_id`, a window for a role with no model of its own, a
+    /// window that is not a positive number, and one model given different
+    /// windows for two roles are errors.
     pub fn picks(self, default_id: &str) -> Result<BTreeMap<Role, RolePick>, RoleModelError> {
         let mut picks = BTreeMap::new();
         for (role, id) in pairs(&MODEL, self.models)? {
@@ -115,8 +125,28 @@ impl RoleFlags<'_> {
         for (role, raw) in pairs(&WINDOW, self.windows)? {
             add_window(&mut picks, role, &raw)?;
         }
+        one_window_per_model(&picks)?;
         Ok(picks)
     }
+}
+
+/// The engine holds a model with one window: roles that name the same
+/// model must give it the same one.
+fn one_window_per_model(picks: &BTreeMap<Role, RolePick>) -> Result<(), RoleModelError> {
+    let mut first: BTreeMap<&str, (Role, Option<u64>)> = BTreeMap::new();
+    for (role, pick) in picks {
+        let (other, window) = *first
+            .entry(pick.id.as_str())
+            .or_insert((*role, pick.context_window));
+        if window != pick.context_window {
+            return Err(RoleModelError::WindowDiffers {
+                model: pick.id.clone(),
+                role: other,
+                other: *role,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn add_window(
@@ -210,7 +240,7 @@ mod tests {
     fn picks_name_a_model_per_role_and_an_optional_window() {
         let flags = RoleFlags {
             models: &["reviewer=B", "final-reviewer=B", "split=C"].map(String::from),
-            windows: &["reviewer=65536"].map(String::from),
+            windows: &["reviewer=65536", "final-reviewer=65536"].map(String::from),
         };
         let picks = flags.picks("A").unwrap();
         assert_eq!(
@@ -218,13 +248,13 @@ mod tests {
             vec![
                 (Role::Reviewer, pick("B", Some(65536))),
                 (Role::Split, pick("C", None)),
-                (Role::FinalReviewer, pick("B", None)),
+                (Role::FinalReviewer, pick("B", Some(65536))),
             ]
         );
     }
 
     /// `--model-for` and `--context-window-for` pairs, and the error each gives.
-    const WRONG: [(&[&str], &[&str], &str); 11] = [
+    const WRONG: [(&[&str], &[&str], &str); 12] = [
         (
             &["reviewer"],
             &[],
@@ -276,7 +306,27 @@ mod tests {
             &["reviewer=0"],
             "--context-window-for reviewer is not a positive number of tokens: 0",
         ),
+        (
+            &["reviewer=B", "final-reviewer=B"],
+            &["reviewer=65536"],
+            "B is given to reviewer and final-reviewer with different windows; give them the same --context-window-for",
+        ),
     ];
+
+    /// Two roles on one model with no window of their own both take the
+    /// run's.
+    #[test]
+    fn roles_on_one_model_may_both_leave_the_window_out() {
+        let flags = RoleFlags {
+            models: &["reviewer=B", "final-reviewer=B"].map(String::from),
+            windows: &[],
+        };
+        let picks = flags.picks("A").unwrap();
+        assert_eq!(
+            picks.into_values().collect::<Vec<_>>(),
+            vec![pick("B", None), pick("B", None)]
+        );
+    }
 
     #[test]
     fn a_wrong_pair_is_refused_with_what_is_wrong() {
