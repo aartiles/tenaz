@@ -54,11 +54,15 @@ with each recovery opt-in (`every_recovery` is what `tenaz demo` plays),
 `VirtualClock`, which runs on tokio's paused time (ADR 0006), `Replay`,
 which answers for the memory probe and the engine counters with readings
 a test gives it, `ScriptedVerify`, which judges the scripted harness's
-checks without a shell, and `SnapshotVcs`, a repository kept as snapshots
+checks without a shell, `ScriptedJobs`, which runs heavy jobs without a
+shell (ADR 0010), and `SnapshotVcs`, a repository kept as snapshots
 in memory; `vcs_contract_tests!` holds it and
 `GitRepo` to the same checks (ADR 0005). They serve the core's own tests
 and the crates above it. `tenaz-adapters` has a `testing` feature too:
-`write_executable`, for a test that writes a script and then runs it.
+`write_executable`, for a test that writes a script and then runs it, and
+`gone_within`, which checks that a process is gone, zombies included.
+Its private `process` module starts and stops the process groups that
+`verify` and heavy jobs run in.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations
@@ -67,7 +71,8 @@ what a failed bootstrap attempt tells the next one and whether it counts
 (the pure `orchestrator::bootstrap`),
 the task attempt loop with review, split and block, and pause and resume.
 Each phase has a module under `orchestrator/phases/` (`bootstrap`, `task`,
-`review`, `planner` for split and replan, `task_loop`, `final_review`);
+`job` for the heavy jobs between a builder's sessions, `review`, `planner`
+for split and replan, `task_loop`, `final_review`);
 `phases.rs` keeps what they share, the `verify` call and the briefing.
 `orchestrator/session.rs` is the wrapper; one session, start to journal
 record, is `session/record.rs`, the harness run `session/harness.rs`, and
@@ -106,8 +111,8 @@ protocol without a model: the adapter's integration tests spawn it.
 - Unit tests next to each core module.
 - Adapter conformance tests against fakes or a temporary git repository.
 - Whole runs in `orchestrator/scenarios.rs` and `orchestrator/scenarios/`
-  drive the loop with the scripted harness, `SnapshotVcs` and
-  `ScriptedVerify`: no git or shell (ADR 0005).
+  drive the loop with the scripted harness, `SnapshotVcs`,
+  `ScriptedVerify` and `ScriptedJobs`: no git or shell (ADR 0005).
   They run with tokio's time paused (`start_paused = true`) on
   `VirtualClock`, so waits take no real time and timers fire in the order
   of their deadlines (ADR 0006).

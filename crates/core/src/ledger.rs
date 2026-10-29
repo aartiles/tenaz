@@ -813,6 +813,34 @@ mod tests {
         assert_eq!(serde_json::to_string(&entry).unwrap(), line);
     }
 
+    /// Scripts read the job records by these names (ADR 0010).
+    #[test]
+    fn job_records_are_journaled_with_stable_fields() {
+        for line in [
+            r#"{"at":"t","type":"job-started","task":"T017","attempt":1,"command":"sh render.sh","minutes":40}"#,
+            r#"{"at":"t","type":"job-finished","task":"T017","attempt":1,"exit_code":0,"duration_ms":1503000}"#,
+            r#"{"at":"t","type":"job-finished","task":"T017","attempt":2,"timed_out":true,"error":"cannot run","engine":"the LLM did not reload after a job: refused","duration_ms":5}"#,
+        ] {
+            let entry: JournalEntry = serde_json::from_str(line).unwrap();
+            assert_eq!(serde_json::to_string(&entry).unwrap(), line);
+        }
+    }
+
+    /// `run.json` keeps an attempt's jobs, and a report no session read.
+    #[test]
+    fn an_attempt_s_jobs_are_kept_in_run_json_by_these_names() {
+        let jobs = AttemptJobs {
+            attempt: 2,
+            files: 1,
+            report: Some("`sh render.sh` exited with 0".into()),
+        };
+        let text = r#"{"attempt":2,"files":1,"report":"`sh render.sh` exited with 0"}"#;
+        assert_eq!(serde_json::to_string(&jobs).unwrap(), text);
+        assert_eq!(serde_json::from_str::<AttemptJobs>(text).unwrap(), jobs);
+        let read = serde_json::from_str::<AttemptJobs>(r#"{"attempt":1,"files":0}"#).unwrap();
+        assert_eq!(read.report, None);
+    }
+
     fn config() -> ModelConfig {
         ModelConfig {
             harness: HarnessKind::Fx,

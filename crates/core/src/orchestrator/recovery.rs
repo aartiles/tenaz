@@ -166,10 +166,6 @@ impl Recovery {
         // session's log line ranks an abort reason higher (`outcome` in
         // session/record.rs): it says why the session stopped, this says
         // why it is rerun.
-        if metrics.engine_out_of_memory {
-            // Only a builder can declare a job, and only while jobs are on.
-            self.out_of_memory |= role == Role::Builder && params.jobs_on();
-        }
         let cause = if metrics.engine_out_of_memory {
             FailureCause::OutOfMemory
         } else if metrics.harness_exit.is_none()
@@ -179,6 +175,9 @@ impl Recovery {
         } else {
             FailureCause::Harness
         };
+        // Only a builder can declare a job, and only while jobs are on.
+        self.out_of_memory |=
+            cause == FailureCause::OutOfMemory && role == Role::Builder && params.jobs_on();
         Step::Retry { retry, cause }
     }
 }
