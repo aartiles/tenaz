@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, run};
+use crate::briefing::OUT_OF_MEMORY;
 use crate::ledger::{JournalRecord, Phase};
 use crate::project::Project;
 use crate::testing::{ScriptedHarness, ScriptedJob, ScriptedJobs, SnapshotVcs, VirtualClock};
@@ -347,4 +348,37 @@ async fn a_stop_as_a_resumed_job_ends_pauses_before_any_session() {
     let resumed = &builder_prompts(&project)[before];
     assert!(resumed.contains(REPORT), "{resumed}");
     assert!(!resumed.contains("was stopped because"), "{resumed}");
+}
+
+/// A builder session the engine failed for memory is rerun, not charged,
+/// and the rerun is told to declare heavy work as a job.
+#[tokio::test(start_paused = true)]
+async fn a_builder_rerun_after_the_engine_ran_out_of_memory_is_told_to_declare_a_job() {
+    let (_work, project, vcs) = project(&["maxAttempts=3"]);
+    let harness = ScriptedHarness {
+        out_of_memory_task: Some("T002".into()),
+        ..Default::default()
+    };
+    let deps = deps(
+        &project,
+        vcs,
+        Arc::new(harness),
+        Arc::new(VirtualClock::new()),
+    );
+    run(&project, deps, CancellationToken::new()).await;
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    assert!(log.contains("T002 done (1 attempt)"), "{log}");
+    let prompts = builder_prompts(&project);
+    assert_eq!(prompts.len(), 2, "{log}");
+    assert!(!prompts[0].contains(OUT_OF_MEMORY), "{}", prompts[0]);
+    assert!(
+        prompts[1].trim_end().ends_with(OUT_OF_MEMORY),
+        "{}",
+        prompts[1]
+    );
 }

@@ -24,6 +24,10 @@ uses [Semantic Versioning](https://semver.org/).
   jobs off. In the Lotion Pump run a 25-minute Blender render next to the
   model's engine failed for memory, and so did the engine; the operator
   had to run it with the run blocked. See ADR 0010.
+- A builder session rerun after the engine ran out of memory is told why
+  and asked not to leave heavy work running in the background, but to
+  declare it as a job. Other roles, other engine errors and runs with
+  `jobMinutes=0` get no such note. See ADR 0010.
 - A builder whose task cannot pass without changing a check of a done task
   writes `.tenaz/conflicts/<TASK>.md` naming those checks and stops. Tenaz
   blocks the task at once, without more attempts or a split, journals a

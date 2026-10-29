@@ -215,6 +215,11 @@ pub enum ParamError {
 }
 
 impl RunParams {
+    /// Builders may declare heavy jobs (ADR 0010): `jobMinutes` is not 0.
+    pub fn jobs_on(&self) -> bool {
+        self.job_minutes > 0
+    }
+
     /// The pause before a rerun after the context budget was lowered.
     pub fn capacity_retry_wait(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.capacity_retry_wait_sec)

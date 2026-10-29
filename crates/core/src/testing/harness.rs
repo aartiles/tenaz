@@ -81,6 +81,9 @@ pub struct ScriptedHarness {
     pub conflict: Option<ScriptedConflict>,
     /// A builder that declares a heavy job.
     pub job: Option<ScriptedJob>,
+    /// The engine runs out of memory in the first builder session of this
+    /// task, as Sushi does with a render beside it.
+    pub out_of_memory_task: Option<String>,
     /// The first builder session for this task reasons until its reply is
     /// cut at the output limit, and the harness exits, as fx does.
     pub truncate_task: Option<String>,

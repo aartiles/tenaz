@@ -411,6 +411,15 @@ impl Player {
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
+    /// The engine runs out of memory on the turn's request, and the harness
+    /// exits on the error, as fx does with Sushi.
+    async fn out_of_memory(&mut self) {
+        self.emit(SessionEvent::TurnStart);
+        self.engine_error("error.GenerationOutOfMemory");
+        self.events.handled().await;
+        self.emit(SessionEvent::Exited { code: Some(1) });
+    }
+
     /// A shell call that runs until the turn is aborted, as a script in an
     /// endless loop would.
     async fn hang(&mut self) {
@@ -773,6 +782,8 @@ impl Player {
             self.crash(true).await;
         } else if self.first(self.script.truncate_task.as_deref(), "truncate", task) {
             self.truncate().await;
+        } else if self.first(self.script.out_of_memory_task.as_deref(), "oom", task) {
+            self.out_of_memory().await;
         } else {
             return false;
         }

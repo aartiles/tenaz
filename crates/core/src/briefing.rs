@@ -175,6 +175,10 @@ pub fn card_sizing(budget_tokens: u64) -> String {
 /// The note a fresh session gets when it continues work stopped at the context budget.
 pub const CONTINUATION: &str = "## Continuation\n\nAn earlier session on this same work was stopped because it ran out of context. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Do not reread large files whole. The repository map is `.tenaz/map.md`, if you need it.";
 
+/// The note a builder session gets when it is rerun after the engine ran
+/// out of memory (ADR 0010).
+pub const OUT_OF_MEMORY: &str = "## The engine ran out of memory\n\nAn earlier session on this same work failed because the engine that runs you ran out of memory, most likely while other work used the machine's memory or GPU. Do not leave heavy work running in the background (a render, a long build, a server that loads a model). If the task needs it, write `.tenaz/jobs/<TASK>.json` (see the protocol, \"Heavy jobs\") and stop: the orchestrator runs it with the engine's memory freed, and your next session gets its result.";
+
 /// The note a fresh session gets when it continues work stopped at the turn budget.
 pub const TURN_CONTINUATION: &str = "## Continuation\n\nAn earlier session on this same work was stopped because it used up its turn budget. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then finish from there in few turns: do not explore again what it already read. The repository map is `.tenaz/map.md`, if you need it.";
 

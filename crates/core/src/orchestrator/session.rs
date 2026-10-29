@@ -61,11 +61,7 @@ impl Runner {
             if resumed {
                 self.save()?;
             }
-            let text = if recovery.has_continued() || resumed {
-                format!("{}\n\n{}", without_map(prompt), recovery.note())
-            } else {
-                prompt.to_owned()
-            };
+            let text = session_prompt(prompt, &recovery, resumed);
             let result = self.session_once(role, &text, ctx).await?;
             let label = result.record.label.clone();
             if self.stopping() {
@@ -330,6 +326,21 @@ fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
         raised
     };
     Some(raised)
+}
+
+/// The prompt of a session: `prompt`, with the note a session that
+/// continues earlier work gets, and the one a builder rerun after the
+/// engine ran out of memory gets.
+fn session_prompt(prompt: &str, recovery: &Recovery, resumed: bool) -> String {
+    let mut text = if recovery.has_continued() || resumed {
+        format!("{}\n\n{}", without_map(prompt), recovery.note())
+    } else {
+        prompt.to_owned()
+    };
+    if let Some(note) = recovery.memory_note() {
+        text = format!("{text}\n\n{note}");
+    }
+    text
 }
 
 #[cfg(test)]

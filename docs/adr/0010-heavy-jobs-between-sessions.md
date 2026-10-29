@@ -1,7 +1,6 @@
 # ADR 0010: Heavy jobs between sessions
 
-Status: accepted (option D), 2026-10-29. Implemented, but for the note
-to a session rerun after an engine out-of-memory error; see "Decisions".
+Status: accepted (option D), 2026-10-29. Implemented; see "Decisions".
 
 ## Context
 
@@ -132,6 +131,15 @@ Taken while implementing D, on the open questions above:
   loses the report nor runs the job again, and a resumed attempt does not
   get more job files. The report is saved before the job file is removed:
   a crash between the two runs the job again rather than losing it.
+- **The rerun note** goes only to a builder session rerun after an
+  engine out-of-memory error, and only while jobs are on
+  (`jobMinutes` > 0): only a builder can declare a job, and other engine
+  errors say nothing about memory. It is added at the end of the rerun's
+  prompt, and of every later session of that loop, beside a continuation
+  note; the rerun still costs no attempt. A rerun at a lowered context
+  budget gets no note: the prompt was too large, not crowded out. A
+  session resumed after a pause during the rerun's wait gets no note
+  either, since the reason is not kept in `run.json`.
 
 ## Consequences
 
@@ -139,7 +147,7 @@ Taken while implementing D, on the open questions above:
   builder of its task), a validator, a lease method for a command job,
   journal records (`job-started`, `job-finished` with exit code and
   duration), the protocol, builder prompt, SKILL.md, README and
-  COMPATIBILITY updated. Still to come: the note to a session rerun after
-  an engine out-of-memory error.
+  COMPATIBILITY updated, and the note to a builder session rerun after an
+  engine out-of-memory error.
 - Tested with the scripted harness and a fake engine adapter; whether a
   small model declares jobs at the right times is unknown until a run.

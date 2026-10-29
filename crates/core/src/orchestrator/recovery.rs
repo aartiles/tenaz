@@ -3,7 +3,7 @@
 //! accept the result, or give up. None of these charge an attempt. The
 //! runner journals, logs and waits; this module only decides.
 
-use crate::briefing::{CONTINUATION, TURN_CONTINUATION, image_continuation};
+use crate::briefing::{CONTINUATION, OUT_OF_MEMORY, TURN_CONTINUATION, image_continuation};
 use crate::params::RunParams;
 use crate::role::Role;
 use crate::session::{SessionMetrics, StopReason};
@@ -86,6 +86,9 @@ pub(crate) struct Recovery {
     capacity: u32,
     retry: u32,
     note: Note,
+    /// The engine ran out of memory in a builder session, and jobs are on:
+    /// every later session of this loop gets the memory note.
+    out_of_memory: bool,
 }
 
 impl Recovery {
@@ -101,6 +104,12 @@ impl Recovery {
             Note::Turns => TURN_CONTINUATION.to_owned(),
             Note::Plain => CONTINUATION.to_owned(),
         }
+    }
+
+    /// The note the sessions after an engine out-of-memory get, when they
+    /// can move heavy work into a job (ADR 0010).
+    pub fn memory_note(&self) -> Option<&'static str> {
+        self.out_of_memory.then_some(OUT_OF_MEMORY)
     }
 
     /// Decides what follows a session of `role` that ended with `metrics`,
@@ -120,7 +129,7 @@ impl Recovery {
         // rerun after a pause; a tiny maximum means something else holds it, so back off.
         match metrics.capacity_limit() {
             Some(limit) if limit >= params.context_floor => self.lower_cap(limit, params),
-            _ => self.retry(metrics, params),
+            _ => self.retry(metrics, role, params),
         }
     }
 
@@ -144,7 +153,7 @@ impl Recovery {
         }
     }
 
-    fn retry(&mut self, metrics: &SessionMetrics, params: &RunParams) -> Step {
+    fn retry(&mut self, metrics: &SessionMetrics, role: Role, params: &RunParams) -> Step {
         let retry = self.retry;
         if retry >= params.engine_retries {
             return Step::GiveUp(GiveUp::Engine {
@@ -157,6 +166,10 @@ impl Recovery {
         // session's log line ranks an abort reason higher (`outcome` in
         // session/record.rs): it says why the session stopped, this says
         // why it is rerun.
+        if metrics.engine_out_of_memory {
+            // Only a builder can declare a job, and only while jobs are on.
+            self.out_of_memory |= role == Role::Builder && params.jobs_on();
+        }
         let cause = if metrics.engine_out_of_memory {
             FailureCause::OutOfMemory
         } else if metrics.harness_exit.is_none()
@@ -304,10 +317,19 @@ mod tests {
 
     /// Runs `sessions` through one recovery and returns the steps.
     fn steps(role: Role, sessions: &[SessionMetrics]) -> (Recovery, Vec<Step>) {
+        steps_with(&params(), role, sessions)
+    }
+
+    /// [`steps`] with `params`.
+    fn steps_with(
+        params: &RunParams,
+        role: Role,
+        sessions: &[SessionMetrics],
+    ) -> (Recovery, Vec<Step>) {
         let mut recovery = Recovery::default();
         let steps = sessions
             .iter()
-            .map(|m| recovery.next(m, role, &params()))
+            .map(|m| recovery.next(m, role, params))
             .collect();
         (recovery, steps)
     }
@@ -519,6 +541,56 @@ mod tests {
         };
         let (_, steps) = steps(Role::Builder, &[after_harness_exit(out_of_memory)]);
         assert_eq!(steps, [retry(0, FailureCause::OutOfMemory)]);
+    }
+
+    fn out_of_memory() -> SessionMetrics {
+        SessionMetrics {
+            engine_out_of_memory: true,
+            ..engine_error()
+        }
+    }
+
+    /// In the Lotion Pump run the engine ran out of memory beside a render
+    /// the builder left in the background. Its rerun is told to declare a
+    /// job instead.
+    #[test]
+    fn a_builder_rerun_after_an_out_of_memory_is_told_to_declare_a_job() {
+        let (builder, _) = steps(Role::Builder, &[out_of_memory()]);
+        assert_eq!(builder.memory_note(), Some(OUT_OF_MEMORY));
+    }
+
+    /// The note stays for the rest of the loop: a continuation of the rerun
+    /// gets it beside its own note, as the heavy work is still to do.
+    #[test]
+    fn the_memory_note_stays_beside_a_later_continuation() {
+        let (builder, _) = steps(Role::Builder, &[out_of_memory(), context_stop()]);
+        assert_eq!(builder.memory_note(), Some(OUT_OF_MEMORY));
+        assert_eq!(builder.note(), CONTINUATION);
+    }
+
+    /// Only a builder can declare a job.
+    #[test]
+    fn a_reviewer_rerun_after_an_out_of_memory_is_told_nothing() {
+        let (reviewer, _) = steps(Role::Reviewer, &[out_of_memory()]);
+        assert_eq!(reviewer.memory_note(), None);
+    }
+
+    #[test]
+    fn a_builder_rerun_after_another_engine_error_is_told_nothing() {
+        let (builder, _) = steps(Role::Builder, &[engine_error()]);
+        assert_eq!(builder.memory_note(), None);
+    }
+
+    /// With `jobMinutes=0` a job would not run, so none is asked for.
+    #[test]
+    fn with_jobs_off_a_builder_rerun_is_told_nothing() {
+        let off = RunParams {
+            job_minutes: 0,
+            ..params()
+        };
+        let (builder, steps) = steps_with(&off, Role::Builder, &[out_of_memory()]);
+        assert_eq!(steps, [retry(0, FailureCause::OutOfMemory)]);
+        assert_eq!(builder.memory_note(), None);
     }
 
     /// `cause` in the journal is read by scripts: an out-of-memory rerun
