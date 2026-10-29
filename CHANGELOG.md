@@ -16,6 +16,15 @@ uses [Semantic Versioning](https://semver.org/).
   says where the files went. The write is not stopped, and shell commands
   are not checked. See ADR 0008.
 
+### Changed
+
+- In the failure history a split is shown, an attempt whose `verify`
+  failure repeats the one before word for word says so and names the
+  attempt that has the text, instead of repeating it. In the Lotion Pump
+  run the split of T016b read the same 1.5 KB of `verify` output three
+  times. `run.json` keeps that failure as `current.verify_failure`
+  (`attempt`, `text`).
+
 ### Fixed
 
 - The preflight no longer fails an engine that does not report cached

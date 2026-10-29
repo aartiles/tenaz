@@ -442,6 +442,34 @@ async fn the_split_is_told_the_notes_of_the_failed_attempts_and_they_are_kept() 
     );
 }
 
+/// Every attempt of T003 fails `verify` the same way: the split reads that
+/// failure once, and is told the later attempts repeated it.
+#[tokio::test(start_paused = true)]
+async fn the_split_reads_a_repeated_verify_failure_once() {
+    let run = Played::with(ScriptedHarness {
+        failing_task: Some("T003".into()),
+        ..Default::default()
+    })
+    .await;
+    let split_prompt = run.prompts("split-T003").concat();
+    let history = split_prompt
+        .split("## Failure history")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the split prompt has a Failure history section");
+    assert_eq!(
+        history
+            .matches("./verify --all fails after the attempt")
+            .count(),
+        1,
+        "{history}"
+    );
+    assert!(
+        history.contains("Attempt 2: The same verify failure as attempt 1, word for word."),
+        "{history}"
+    );
+}
+
 /// A task blocked instead of split keeps its notes too.
 #[tokio::test(start_paused = true)]
 async fn a_blocked_task_keeps_its_notes() {

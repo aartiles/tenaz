@@ -8,8 +8,7 @@ use crate::orchestrator::session::{SessionCtx, SessionResult};
 use crate::orchestrator::{RunError, Runner};
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId, TaskStatus};
-use crate::util::clip;
-use crate::verify::{VerifyOutcome, judge_attempt, with_stop_reason};
+use crate::verify::{VerifyOutcome, judge_attempt};
 
 use super::PromptParts;
 use super::review::{Review, ReviewInput};
@@ -41,9 +40,12 @@ struct Work {
 /// How a builder attempt ended.
 enum Attempt {
     Passed(Box<Built>),
-    /// `outgrown`: its session used up the context continuations.
     Failed {
-        failure: String,
+        /// What `verify` said.
+        verify_failure: String,
+        /// Why the orchestrator stopped the builder, if it did.
+        stopped: Option<String>,
+        /// Its session used up the context continuations.
         outgrown: bool,
     },
 }
@@ -71,8 +73,12 @@ impl Runner {
                 return self.escalate_current(task, &why).await;
             };
             match outcome {
-                Attempt::Failed { failure, outgrown } => {
-                    self.record_failure(attempt, failure)?;
+                Attempt::Failed {
+                    verify_failure,
+                    stopped,
+                    outgrown,
+                } => {
+                    self.record_failure(attempt, &verify_failure, stopped.as_deref())?;
                     // Another attempt would meet the same budget: the task is too big for it.
                     if outgrown && self.splits_when_outgrown(&task.id) {
                         let why = format!(
@@ -143,14 +149,7 @@ impl Runner {
             .deps
             .vcs
             .commit_all(&format!("tenaz: start {}", task.id))?;
-        self.ledger.current = Some(CurrentTask {
-            task: task.id.clone(),
-            base,
-            history: Vec::new(),
-            failure: None,
-            stopped: Vec::new(),
-            in_review: None,
-        });
+        self.ledger.current = Some(CurrentTask::new(task.id.clone(), base));
         self.save()
     }
 
@@ -175,12 +174,14 @@ impl Runner {
     }
 
     /// Records a failed attempt: the next one is told its failure.
-    fn record_failure(&mut self, attempt: u32, failure: String) -> Result<(), RunError> {
+    fn record_failure(
+        &mut self,
+        attempt: u32,
+        verify_failure: &str,
+        stopped: Option<&str>,
+    ) -> Result<(), RunError> {
         if let Some(current) = &mut self.ledger.current {
-            current
-                .history
-                .push(format!("Attempt {attempt}: {}", clip(&failure, 1500)));
-            current.failure = Some(failure);
+            current.fail(attempt, verify_failure, stopped);
         }
         self.save()
     }
@@ -245,14 +246,7 @@ impl Runner {
         text: &str,
     ) -> Result<(), RunError> {
         if let Some(current) = &mut self.ledger.current {
-            current.failure = Some(format!(
-                "The reviewer requested changes:\n{}",
-                clip(text, 3000)
-            ));
-            current.history.push(format!(
-                "Attempt {attempt}: review requested changes:\n{}",
-                clip(text, 1500)
-            ));
+            current.request_changes(attempt, text);
         }
         self.deps
             .vcs
@@ -330,11 +324,8 @@ impl Runner {
         } = work;
         let all = self.run_verify(&["--all"]).await;
         let own = self.run_verify(&["--task", task.id.as_str()]).await;
-        let failure = with_stop_reason(
-            judge_attempt(task.id.as_str(), &all, &own, self.ledger.passed_checks),
-            stopped.as_deref(),
-        );
-        if let (Some(stopped), None) = (&stopped, &failure) {
+        let verify_failure = judge_attempt(task.id.as_str(), &all, &own, self.ledger.passed_checks);
+        if let (Some(stopped), None) = (&stopped, &verify_failure) {
             self.record_stopped(attempt, stopped);
         }
         self.journal(JournalRecord::Verify {
@@ -346,8 +337,12 @@ impl Runner {
             all: all.json.clone(),
             task_json: own.json.clone(),
         });
-        Ok(match failure {
-            Some(failure) => Attempt::Failed { failure, outgrown },
+        Ok(match verify_failure {
+            Some(verify_failure) => Attempt::Failed {
+                verify_failure,
+                stopped,
+                outgrown,
+            },
             None => Attempt::Passed(Box::new(Built {
                 loaded,
                 all,
