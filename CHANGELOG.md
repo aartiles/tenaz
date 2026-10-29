@@ -67,7 +67,8 @@ uses [Semantic Versioning](https://semver.org/).
   `failed (engine out of memory)` and the rerun's log line says another
   program may be using the GPU. In the Lotion Pump run seven sessions
   ended this way while Blender rendered on the same GPU. Pi reports
-  engine errors itself; the proxy is not on its path.
+  engine errors itself, without the proxy; an out-of-memory error it
+  reports is named the same way.
 - Any engine error stated before the harness exits now journals the
   rerun as `cause: engine` rather than `harness`: the exit follows the
   error. The journal's `cause` keeps its two values; out of memory is

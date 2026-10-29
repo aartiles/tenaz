@@ -106,15 +106,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
 ## Known gaps
 
 - **An engine error inside a stream** (Sushi's `GenerationOutOfMemory`),
-  with fx; Pi reports engine errors itself.
-  Its shape, `data: {"error":{"message":…},"choices":[{"finish_reason":
-  "error"}]}`, was read from Sushi 1.4.0's binary, not captured from a real
-  failure, and no real out-of-memory failure has gone through the proxy
-  yet. If Sushi sends it otherwise, the session is rerun as before, as a
-  harness exit. The proxy reports the error when the chunk arrives, before
-  fx can exit on it. Only that shape, an `error` object or string in a
-  `data:` chunk, is read; how llama.cpp, vLLM or Ollama send an error inside a
-  stream has not been checked.
+  with fx; Pi reports engine errors itself. Its shape, `data: {"error":
+  {"message":…},"choices":[{"finish_reason":"error"}]}`, was read from
+  Sushi 1.4.0's binary, not captured from a real failure, and no real
+  out-of-memory failure has gone through the proxy yet. If Sushi sends it
+  otherwise, the session is rerun as before, as a harness exit. The proxy
+  reports the error when the chunk arrives, before fx can exit on it.
+  Only that shape, an `error` object or string in a `data:` chunk, is
+  read; how llama.cpp, vLLM or Ollama send an error inside a stream has
+  not been checked. With Pi, an out-of-memory error is tested only with
+  the scripted harness's own wording; no real one has been seen.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.

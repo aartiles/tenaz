@@ -369,8 +369,12 @@ impl SessionMetrics {
 static CAPACITY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Maximum context[^:]*:\s*(\d+) tokens").expect("static regex"));
 static OUT_OF_MEMORY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\b|Generation)out[ _-]?of[ _-]?memory|\binsufficient memory\b")
-        .expect("static regex")
+    // `OutOfMemory` in CamelCase, as Sushi and Metal name it, is matched
+    // case-sensitively: without case it would match `layoutOfMemory`.
+    Regex::new(
+        r"(?i:\bout[ _-]?of[ _-]?memory|\binsufficient memory\b|\bnot enough (?:\w+ )?memory\b)|OutOfMemory",
+    )
+    .expect("static regex")
 });
 static IMAGE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)at most \d+ images|image tokens|\bimage \d+ |images need|does not decode")
@@ -407,11 +411,20 @@ mod tests {
             "error.GenerationOutOfMemory",
             "CUDA out of memory",
             "Insufficient Memory (kIOGPUCommandBufferCallbackErrorOutOfMemory)",
+            "kIOGPUCommandBufferCallbackErrorOutOfMemory",
             "out_of_memory",
+            "400: not enough GPU memory",
+            "not enough memory",
         ] {
             assert!(is_out_of_memory(message), "{message}");
         }
-        for message in ["timeout of memory check", "layout of memory map", "boom"] {
+        for message in [
+            "timeout of memory check",
+            "layout of memory map",
+            "layoutOfMemory",
+            "not enough tokens",
+            "boom",
+        ] {
             assert!(!is_out_of_memory(message), "{message}");
         }
     }
