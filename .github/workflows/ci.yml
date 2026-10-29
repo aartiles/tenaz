@@ -1,8 +1,26 @@
 name: CI
 
+# CI ran on every push and on every pull request, so a push to a branch
+# with a pull request started two runs, each with a macos-14 job. Several
+# macos-14 jobs ended cancelled after 15 minutes with no runner and no
+# steps (pull request #14; main on 2026-10-28, where no other CI macOS job
+# was queued ahead of it), so the cause is not known. Pushes now run CI
+# only on main and on v* tags, pull requests on their own event, and a
+# newer push to a pull request cancels the older run. Any branch can be
+# run by hand from the Actions tab.
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
+
+# One group per pull request (`refs/pull/N/merge`); every other run has a
+# group of its own, so a push to main is never queued behind or cancelled
+# by another.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
