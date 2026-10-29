@@ -256,6 +256,10 @@ pub struct SessionMetrics {
     pub capacity_limits: Vec<u64>,
     pub big_outputs: u32,
     pub image_refusal: Option<String>,
+    /// The session's last engine error said the engine ran out of memory
+    /// ([`is_out_of_memory`]), and no reply came after it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub engine_out_of_memory: bool,
     pub events: Vec<WatchdogEvent>,
     pub texts: Vec<String>,
     pub assistant: Vec<AssistantTurn>,
@@ -364,6 +368,14 @@ impl SessionMetrics {
 
 static CAPACITY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Maximum context[^:]*:\s*(\d+) tokens").expect("static regex"));
+static OUT_OF_MEMORY: LazyLock<Regex> = LazyLock::new(|| {
+    // `OutOfMemory` in CamelCase, as Sushi and Metal name it, is matched
+    // case-sensitively: without case it would match `layoutOfMemory`.
+    Regex::new(
+        r"(?i:\bout[ _-]?of[ _-]?memory|\binsufficient memory\b|\bnot enough (?:\w+ )?memory\b)|OutOfMemory",
+    )
+    .expect("static regex")
+});
 static IMAGE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)at most \d+ images|image tokens|\bimage \d+ |images need|does not decode")
         .expect("static regex")
@@ -375,6 +387,15 @@ pub fn capacity_limit(error: &str) -> Option<u64> {
     CAPACITY.captures(error).and_then(|c| c[1].parse().ok())
 }
 
+/// The engine ran out of memory while it worked on a request. Sushi sends
+/// `GenerationOutOfMemory` when Metal cannot get the memory, typically
+/// because another program is using the GPU at the same time. This is not
+/// a prompt too large for the engine (`capacity_limit`): the same prompt
+/// fits again once the memory is back.
+pub fn is_out_of_memory(error: &str) -> bool {
+    OUT_OF_MEMORY.is_match(error)
+}
+
 /// A vision engine refused an image the session read.
 pub fn is_image_refusal(error: &str) -> bool {
     IMAGE.is_match(error)
@@ -383,6 +404,30 @@ pub fn is_image_refusal(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_engine_out_of_memory_is_told_from_other_errors() {
+        for message in [
+            "error.GenerationOutOfMemory",
+            "CUDA out of memory",
+            "Insufficient Memory (kIOGPUCommandBufferCallbackErrorOutOfMemory)",
+            "kIOGPUCommandBufferCallbackErrorOutOfMemory",
+            "out_of_memory",
+            "400: not enough GPU memory",
+            "not enough memory",
+        ] {
+            assert!(is_out_of_memory(message), "{message}");
+        }
+        for message in [
+            "timeout of memory check",
+            "layout of memory map",
+            "layoutOfMemory",
+            "not enough tokens",
+            "boom",
+        ] {
+            assert!(!is_out_of_memory(message), "{message}");
+        }
+    }
 
     #[test]
     fn request_settings_read_what_the_request_carries() {

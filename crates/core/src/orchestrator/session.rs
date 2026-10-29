@@ -276,13 +276,15 @@ impl Runner {
             wait_s: wait,
             cause: Some(cause.as_str().to_owned()),
         });
-        let what = if cause == FailureCause::Harness {
-            "the harness ended before the turn settled"
-        } else {
-            "engine error"
+        let what = match cause {
+            FailureCause::Harness => "the harness ended before the turn settled",
+            FailureCause::Engine => "engine error",
+            FailureCause::OutOfMemory => {
+                "the engine ran out of memory (another program may be using the GPU)"
+            }
         };
         self.log(&format!("  {label}: {what}; retrying the same session in {wait} s ({}/{}, not counted as an attempt)", retry + 1, self.params.engine_retries));
-        if retry == 0 && cause == FailureCause::Engine {
+        if retry == 0 && cause != FailureCause::Harness {
             self.notify("The engine is failing (often memory). Free memory; the run retries the same session.");
         }
         self.sleep_unless_stopped(Duration::from_secs(wait)).await;

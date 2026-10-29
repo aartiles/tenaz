@@ -1,12 +1,13 @@
 //! The proxy against a fake engine: usage from JSON and SSE answers, error
-//! classification, holding requests while the gate is closed, and replies
-//! cut at the output limit.
+//! classification (also of an error sent inside a stream), holding requests
+//! while the gate is closed, and replies cut at the output limit.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::response::IntoResponse;
+use futures::StreamExt;
 use tenaz_core::lease::Gate;
 use tenaz_proxy::{EngineErrorKind, Proxy, ProxyEvent, ProxyUsage};
 
@@ -19,6 +20,17 @@ async fn fake_engine() -> SocketAddr {
                 let content = body["messages"][0]["content"].as_str().unwrap_or("").to_owned();
                 if content == "too big" {
                     return (axum::http::StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": {"message": "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}))).into_response();
+                }
+                if content == "out of memory, stream kept open" {
+                    let error = "data: {\"error\":{\"message\":\"error.GenerationOutOfMemory\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n";
+                    let body = futures::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from(error))])
+                        .chain(futures::stream::pending());
+                    return ([("content-type", "text/event-stream")], axum::body::Body::from_stream(body)).into_response();
+                }
+                if content == "out of memory mid stream" {
+                    // Sushi 1.4.0 when Metal cannot get the memory part way through.
+                    let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"error\":{\"message\":\"error.GenerationOutOfMemory\",\"type\":\"server_error\",\"param\":null,\"code\":null},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\ndata: {\"error\":{\"message\":\"a later error\"}}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":67373,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n";
+                    return ([("content-type", "text/event-stream")], sse).into_response();
                 }
                 if content == "cut in a tool call" {
                     let sse = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"write\",\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":16}}\n\ndata: [DONE]\n\n";
@@ -262,6 +274,91 @@ async fn an_unreachable_engine_is_a_502_with_an_event() {
             ..
         }
     ));
+    handle.stop().await;
+}
+
+/// An engine that runs out of memory part way through a stream (status
+/// 200) is reported as an engine error, and the request's partial usage is
+/// not reported as a reply: the runner sees one failed request.
+#[tokio::test]
+async fn an_error_inside_a_stream_is_an_engine_error() {
+    let upstream = fake_engine().await;
+    let (handle, events) = start(upstream, Gate::new()).await;
+    let response = reqwest::Client::new()
+        .post(format!("{}/chat/completions", handle.base_url()))
+        .json(&serde_json::json!({
+            "stream": true,
+            "messages": [{"role": "user", "content": "out of memory mid stream"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    response.text().await.unwrap();
+    let events = settle(&events, 2).await;
+    let errors = events
+        .iter()
+        .filter(|e| matches!(e, ProxyEvent::EngineError { .. }))
+        .count();
+    assert_eq!(errors, 1, "only the first error is reported: {events:?}");
+    assert!(
+        matches!(
+            &events[0],
+            ProxyEvent::EngineError {
+                status: Some(200),
+                kind: EngineErrorKind::OutOfMemory,
+                message,
+                ..
+            } if message == "error.GenerationOutOfMemory"
+        ),
+        "{events:?}"
+    );
+    assert!(
+        matches!(&events[1], ProxyEvent::Completed { usage: None, .. }),
+        "{events:?}"
+    );
+    handle.stop().await;
+}
+
+/// The error is reported when its chunk arrives, while the stream is still
+/// open: fx may exit on it before the stream ends.
+#[tokio::test]
+async fn an_error_inside_a_stream_is_reported_before_the_stream_ends() {
+    let upstream = fake_engine().await;
+    let (handle, events) = start(upstream, Gate::new()).await;
+    let mut response = reqwest::Client::new()
+        .post(format!("{}/chat/completions", handle.base_url()))
+        .json(&serde_json::json!({
+            "stream": true,
+            "messages": [{"role": "user", "content": "out of memory, stream kept open"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.chunk().await.unwrap().is_some());
+    let open = settle(&events, 1).await;
+    assert!(
+        matches!(
+            open.as_slice(),
+            [ProxyEvent::EngineError {
+                status: Some(200),
+                kind: EngineErrorKind::OutOfMemory,
+                ..
+            }]
+        ),
+        "{open:?}"
+    );
+    drop(response);
+    let closed = settle(&events, 2).await;
+    assert_eq!(
+        closed.len(),
+        2,
+        "no completion once the client left: {closed:?}"
+    );
+    assert!(
+        matches!(&closed[1], ProxyEvent::Completed { usage: None, .. }),
+        "{closed:?}"
+    );
     handle.stop().await;
 }
 

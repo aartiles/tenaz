@@ -124,6 +124,17 @@ above), so a 32k context is the practical floor (`contextFloor`).
   map, and Pi refuses a session on another model than the one it was set up
   for.
 
+- **An engine error inside a stream** (Sushi's `GenerationOutOfMemory`),
+  with fx; Pi reports engine errors itself. Its shape, `data: {"error":
+  {"message":…},"choices":[{"finish_reason":"error"}]}`, was read from
+  Sushi 1.4.0's binary, not captured from a real failure, and no real
+  out-of-memory failure has gone through the proxy yet. If Sushi sends it
+  otherwise, the session is rerun as before, as a harness exit. The proxy
+  reports the error when the chunk arrives, before fx can exit on it.
+  Only that shape, an `error` object or string in a `data:` chunk, is
+  read; how llama.cpp, vLLM or Ollama send an error inside a stream has
+  not been checked. With Pi, an out-of-memory error is tested only with
+  the scripted harness's own wording; no real one has been seen.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.
@@ -189,9 +200,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - **Linux and NVIDIA memory.** Memory pressure, swap and the engine's
   footprint are sampled on macOS only.
 - **The sandbox** (`sandbox=true`) has been tested on macOS, with `verify`
-  and a Pi session against a local model. The Landlock version for Linux
-  compiles and its rules are unit-tested, but it has not run on a Linux
-  kernel yet; neither has fx in the sandbox.
+  and a Pi session against a local model, and with fx in the Lotion Pump
+  run (2026-10-28, Blender 5.2 on Metal). Before that run, with the
+  default write roots, Blender could not write Metal's shader cache in the
+  per-user cache (`getconf DARWIN_USER_CACHE_DIR`) and every `./blender`
+  call took about 10 s longer (a 256-pixel, 16-sample render: 11 s against
+  0.9 s); the run added the directory to `sandboxAllowWrite`, which brought
+  it back to 0.9 s. That directory is now a default write root on macOS,
+  but Blender has not run with the new default yet.
+  The Landlock version for Linux compiles and its rules are unit-tested,
+  but it has not run on a Linux kernel yet.
 - **Writes outside the project** without the sandbox (ADR 0008). Only the
   write tools' own path argument is checked (`path`, `file_path`); a shell
   command that writes elsewhere is not seen. Symbolic links are not
@@ -283,6 +301,18 @@ These are not runner bugs, but they decide whether a run gets far:
 - **Lost tool arguments.** The engine sometimes streamed `{}` as a tool
   call's arguments; the harness rejects them and the watchdog stops the
   session.
+- **The engine running out of memory part way through a reply.** In the
+  Lotion Pump run (Sushi 1.4.0, fx 0.0.15, Blender rendering on the same
+  GPU) seven sessions ended this way: Sushi logged `Command buffer
+  execution failed: Insufficient Memory` and `streaming error:
+  error.GenerationOutOfMemory`, and fx stopped at once (`ProviderError`,
+  `saw_content=false`, no retry) and exited. The run log said `failed
+  (toolUse)`. Each time the model had just started a render or a
+  `verify` that renders, often left running in the background. The proxy
+  now reads an error the engine sends inside a stream that started with
+  status 200, and the session says `failed (engine out of memory)` and is
+  rerun as an engine failure (journal `engine-retry` cause `engine`). See
+  "Known gaps" for what is not verified.
 - **Engines that report draft acceptance** in llama.cpp's
   `draft_n` / `draft_n_accepted` layout get it in `requests.jsonl` and
   `tenaz status`. Sushi 1.2.4 reports it only in its log.
