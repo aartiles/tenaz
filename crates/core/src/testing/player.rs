@@ -237,6 +237,13 @@ impl Player {
             .nth(1)
             .and_then(|rest| rest.split('.').next())
         {
+            if self.first(
+                self.script.crash_on_checks_task.as_deref(),
+                "crash-checks",
+                task,
+            ) {
+                return self.crash(false).await;
+            }
             self.write_check(task).await;
             return self.finish("Added the check.");
         }

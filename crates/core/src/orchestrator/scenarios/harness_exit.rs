@@ -53,6 +53,35 @@ async fn run_with(
     (work, project, log)
 }
 
+/// A harness that dies in a later prompt of its session, here the one that
+/// asks for the task's checks, is rerun the same way: the session had
+/// settled once, which is not the end of it. In the Lotion Pump run of
+/// 2026-10-28 such a crash charged T016b an attempt.
+#[tokio::test(start_paused = true)]
+async fn a_harness_exit_in_a_later_prompt_is_rerun_without_charging_the_task() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            forget_checks_task: Some("T001".into()),
+            crash_on_checks_task: Some("T001".into()),
+            ..Default::default()
+        },
+        1, // one attempt: a charged crash would leave T001 undone
+    )
+    .await;
+    let crashed = project
+        .journal()
+        .into_iter()
+        .find_map(|e| match e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-builder-T001") => Some(s),
+            _ => None,
+        })
+        .expect("T001's first builder is journaled");
+    assert!(crashed.harness_exit.is_some(), "{log}");
+    assert!(log.contains("not counted as an attempt"), "{log}");
+    let card = project.read(".tenaz/tasks/T001.md").unwrap();
+    assert!(card.contains("status: done"), "{card}\n{log}");
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_harness_exit_mid_turn_is_rerun_without_charging_the_task() {
     let (_work, project, log) = run(

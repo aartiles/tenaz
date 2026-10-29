@@ -73,6 +73,10 @@ pub struct ScriptedHarness {
     /// The first builder session for this task that does the work leaves
     /// out its check, and adds it when the orchestrator asks.
     pub forget_checks_task: Option<String>,
+    /// The harness of this task's builder dies, between tool calls, the
+    /// first time the orchestrator asks it for its checks; with
+    /// `forget_checks_task` naming the same task, so that it is asked.
+    pub crash_on_checks_task: Option<String>,
     /// The first builder session for this task reasons until its reply is
     /// cut at the output limit, and the harness exits, as fx does.
     pub truncate_task: Option<String>,
