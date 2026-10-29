@@ -346,6 +346,11 @@ scripts and CI. With llama.cpp's server on its default port:
 tenaz init --project my-goal --brief brief.md --model my-model --base-url http://127.0.0.1:8080/v1 --context-window 65536
 ```
 
+`--model-for ROLE=ID` (repeatable, with `--context-window-for ROLE=N`)
+pins another model for a role (bootstrap, builder, reviewer, split,
+replan or final-reviewer) in `run.json`; sessions do not use it yet
+([ADR 0010](docs/adr/0010-a-model-per-role.md)).
+
 `--vision` says the model reads images. `--set key=value` overrides a
 parameter; `tenaz params` lists them. Tenaz does not set the sampling
 temperature, so each engine uses its own default; `--set temperature=0`

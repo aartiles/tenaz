@@ -58,6 +58,8 @@ For the `init` line, take the engine address and the model id from what
 doctor found, or ask the user when it lists several. A person at a
 terminal can instead run `tenaz init` with no `--model` and answer the
 setup wizard's questions; you cannot, because it needs a terminal.
+`--model-for ROLE=ID` only pins a model per role for now; sessions do not
+use it yet, so leave it out.
 
 ## Write the brief
 

@@ -55,19 +55,6 @@ impl Templates {
     }
 }
 
-impl PartialOrd for Role {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Role {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let index = |r: &Role| Role::ALL.iter().position(|x| x == r).unwrap_or(0);
-        index(self).cmp(&index(other))
-    }
-}
-
 /// What `init` needs.
 #[derive(Clone, Debug)]
 pub struct InitOptions {

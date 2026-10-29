@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::metrics::EngineSummary;
 use crate::params::RunParams;
 use crate::role::Role;
+use crate::role_models::RoleModel;
 use crate::session::{StopReason, Usage, WatchdogEvent};
 use crate::spec::Coverage;
 use crate::task::TaskId;
@@ -119,6 +120,9 @@ pub struct ModelConfig {
     pub input: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+    /// Roles played by another model than this one (ADR 0010).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_models: BTreeMap<Role, RoleModel>,
 }
 
 impl ModelConfig {
@@ -798,6 +802,7 @@ mod tests {
             context_window: 131072,
             input: vec!["text".into(), "image".into()],
             thinking: Some("medium".into()),
+            role_models: BTreeMap::new(),
         }
     }
 
@@ -827,6 +832,39 @@ mod tests {
         let back: Ledger = serde_json::from_value(json).unwrap();
         assert_eq!(back, ledger);
         assert!(back.config.supports_images());
+    }
+
+    #[test]
+    fn role_models_are_pinned_in_the_config_and_left_out_when_none() {
+        let mut ledger = Ledger::new(
+            "t".into(),
+            "b".into(),
+            "s".into(),
+            "0".into(),
+            config(),
+            RunParams::default(),
+            vec![],
+        );
+        let json = serde_json::to_value(&ledger).unwrap();
+        assert!(json["config"].get("roleModels").is_none(), "{json}");
+        ledger.config.role_models.insert(
+            Role::Reviewer,
+            RoleModel {
+                model: "sushi/r".into(),
+                id: "r".into(),
+                context_window: 65536,
+                input: vec!["text".into()],
+            },
+        );
+        let json = serde_json::to_value(&ledger).unwrap();
+        assert_eq!(
+            json["config"]["roleModels"],
+            serde_json::json!({"reviewer": {
+                "model": "sushi/r", "id": "r", "contextWindow": 65536, "input": ["text"]
+            }})
+        );
+        let back: Ledger = serde_json::from_value(json).unwrap();
+        assert_eq!(back, ledger);
     }
 
     #[test]

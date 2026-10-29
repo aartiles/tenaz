@@ -18,6 +18,7 @@ pub mod params;
 pub mod ports;
 pub mod project;
 pub mod role;
+pub mod role_models;
 pub mod session;
 pub mod spec;
 pub mod task;

@@ -8,6 +8,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `tenaz init --model-for ROLE=ID` pins another model than `--model` for
+  a role, for example a reviewer of another model family. It is
+  repeatable, one role each, and `--context-window-for ROLE=N` sets that
+  model's window (default: the run's). The map is kept in `run.json`
+  under `config.roleModels`; `tenaz status` names the roles it covers, and
+  `status --json` has `role_models`. An unknown or repeated role, the
+  run's own model, and a window for a role with no model of its own are
+  refused, and so is a map with `--harness pi`.
+  Sessions do not use the map yet. See ADR 0010.
 - A builder whose task cannot pass without changing a check of a done task
   writes `.tenaz/conflicts/<TASK>.md` naming those checks and stops. Tenaz
   blocks the task at once, without more attempts or a split, journals a

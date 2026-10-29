@@ -36,6 +36,7 @@ Pure modules, each unit-tested without I/O:
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal). |
 | `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |
 | `role` | The session roles, their prompt paths and what a steered session is asked to write before it stops. |
+| `role_models` | The `--model-for ROLE=ID` map: its checks at `init` and the models pinned in `run.json` (ADR 0010). |
 | `cache_report` | Whether the engine's usage names its cached tokens, noted by the engine proxy for the preflight. |
 | `effort` | The dial that lowers the reasoning effort for one session after a reply cut at the output limit. |
 | `ownership` | Which paths each role may write; the rest is reverted. |
