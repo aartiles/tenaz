@@ -136,8 +136,10 @@ engine for memory, and both fail. Instead, its builder writes
 ```
 
 The orchestrator then runs the command with `sh -c` from the project
-root, with the engine's memory to itself, for at most `minutes` (1 to 60
-by default). A fresh session of the same attempt starts with how it
+root, for at most `minutes` (1 to 60 by default). The engine frees its
+memory for the job where it can; some engines cannot, and then the job
+runs beside the model. The job runs under the same sandbox as your
+sessions, when the run has one: it may write only where you may. A fresh session of the same attempt starts with how it
 ended, how long it took, and the end of its log; the job does not cost an
 attempt. A file that is not valid runs nothing, and the next session is
 told why. An attempt has at most 3 job files by default (`jobsPerAttempt`);
