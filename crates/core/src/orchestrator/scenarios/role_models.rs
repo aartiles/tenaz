@@ -385,7 +385,7 @@ async fn a_run_does_not_start_until_every_role_s_model_is_loaded() {
 /// Without a lease the engine's list is checked, and the message says
 /// every model must be loaded at once.
 #[tokio::test(start_paused = true)]
-async fn the_missing_models_are_named_with_the_engine_s_address() {
+async fn the_missing_models_are_named_from_the_engine_s_list() {
     let (_work, project, result) = run_on(OnEngine::critic(false, false)).await;
     let message = refusal(result);
     assert!(

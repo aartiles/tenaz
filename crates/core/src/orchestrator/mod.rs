@@ -258,48 +258,45 @@ impl Runner {
             Some(lease) => lease.ensure_llm().await.err(),
             None => None,
         };
-        let refused = |why: String| RunError::Precondition(why);
+        let missing = self.models_not_listed().await?;
+        match (missing.is_empty(), load_error) {
+            (true, None) => Ok(()),
+            (true, Some(e)) => Err(RunError::Precondition(format!(
+                "the run's models could not be loaded: {e}"
+            ))),
+            (false, load_error) => Err(RunError::Precondition(
+                self.not_served(&missing, load_error),
+            )),
+        }
+    }
+
+    /// The run's models the engine does not list as loaded; none without
+    /// an engine to ask.
+    async fn models_not_listed(&self) -> Result<Vec<String>, RunError> {
         let Some(engine) = &self.deps.engine else {
-            return load_error.map_or(Ok(()), |e| {
-                Err(refused(format!(
-                    "the run's models could not be loaded: {e}"
-                )))
-            });
+            return Ok(Vec::new());
         };
         let ids = self.ledger.config.model_ids();
         let listed = engine.models().await.map_err(|e| {
-            refused(format!(
+            RunError::Precondition(format!(
                 "{} not being served ({e}). Start the inference server first.",
                 models_are(&ids)
             ))
         })?;
-        let several = ids.len() > 1;
         // Listed as loaded is enough, as before: where the lease loaded a
-        // model it has already waited for it to be ready.
-        let missing: Vec<String> = ids
+        // model it has already waited for it to be ready (`ports::serves`).
+        Ok(ids
             .into_iter()
             .filter(|id| !listed.iter().any(|m| &m.id == id && m.loaded))
-            .collect();
-        match (missing.is_empty(), load_error) {
-            (true, None) => Ok(()),
-            (true, Some(e)) => Err(refused(format!(
-                "the run's models could not be loaded: {e}"
-            ))),
-            (false, load_error) => Err(refused(self.not_served(&missing, several, load_error))),
-        }
+            .collect())
     }
 
     /// The refusal for `missing` models, with why loading them failed.
-    fn not_served(
-        &self,
-        missing: &[String],
-        several: bool,
-        load_error: Option<LeaseError>,
-    ) -> String {
+    fn not_served(&self, missing: &[String], load_error: Option<LeaseError>) -> String {
         let why = load_error
             .map(|e| format!(" (loading failed: {e})"))
             .unwrap_or_default();
-        let at_once = if several {
+        let at_once = if self.ledger.config.model_ids().len() > 1 {
             ", with every model of the run loaded at once"
         } else {
             ""
