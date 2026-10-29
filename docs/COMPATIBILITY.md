@@ -117,7 +117,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   the generic engine's commands, not against Kapitsa, mlx-serve or a
   generic engine holding two models. TensorFold's scripts have not been
   run again since a generic engine that still serves its model after an
-  image is no longer started. Not with
+  image is no longer started. The preflight's probes (reasoning, cache, a
+  tool call, an image) run on `--model` only, so a role's model is never
+  probed; and every role's model takes the run's `--vision`, so a reviewer
+  that cannot read images is still sent them when the run's model can. Not with
   Pi: `init` refuses the map, and Pi refuses a session on another model
   than the one it was set up for.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with

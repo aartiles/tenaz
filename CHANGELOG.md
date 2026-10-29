@@ -65,7 +65,12 @@ uses [Semantic Versioning](https://semver.org/).
     the engine still serves the model.
   - When the run's model is not served before the first session,
     `tenaz run` says `Model <id> is not being served at <url>`, with why
-    loading it failed, instead of `the LLM could not be loaded: ...`.
+    loading it failed, instead of `the LLM could not be loaded: ...`
+    (`Model <id> is not being served (<error>)` when the engine does not
+    answer, as before).
+  - When freeing the LLM for an image fails and the engine still answers
+    without it, Tenaz loads it back at once (a generic engine's start
+    command runs) instead of leaving it to the engine retry.
 - In the failure history a split is shown, an attempt whose `verify`
   failure repeats the one before word for word says so and names the
   attempt that has the text, instead of repeating it. In the Lotion Pump
