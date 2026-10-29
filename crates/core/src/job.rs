@@ -49,8 +49,9 @@ pub struct JobRun<'a> {
     pub job: &'a DeclaredJob,
     pub outcome: &'a JobOutcome,
     pub elapsed_ms: u64,
-    /// Where its log is, relative to the project root.
-    pub log_path: &'a str,
+    /// Where its log is, relative to the project root; `None` when it has
+    /// none, as for a job that never started.
+    pub log_path: Option<&'a str>,
     /// The end of its log, at most [`LOG_TAIL_BYTES`].
     pub log_tail: &'a str,
     /// What went wrong with the engine around it, if anything.
@@ -72,11 +73,13 @@ impl JobRun<'_> {
             (None, None) => "was killed by a signal (out of memory?)".to_owned(),
         };
         let mut report = format!(
-            "`{}` {ended} after {}. Its log is {}.",
+            "`{}` {ended} after {}.",
             self.job.command,
-            duration(self.elapsed_ms),
-            self.log_path
+            duration(self.elapsed_ms)
         );
+        if let Some(log) = self.log_path {
+            let _ = write!(report, " Its log is {log}.");
+        }
         if let Some(engine) = self.engine {
             let _ = write!(report, " Around it, the engine: {engine}.");
         }
@@ -144,7 +147,7 @@ mod tests {
             job,
             outcome,
             elapsed_ms: 1_503_000,
-            log_path: ".tenaz/private/jobs/T017-1-1.log",
+            log_path: Some(".tenaz/private/jobs/T017-1-1.log"),
             log_tail: tail,
             engine: None,
         }
@@ -226,6 +229,26 @@ mod tests {
         assert!(
             report.ends_with("Around it, the engine: the LLM did not reload after a job: refused."),
             "{report}"
+        );
+    }
+
+    /// A job the engine made no room for never started, and has no log.
+    #[test]
+    fn a_job_with_no_log_names_none() {
+        let job = render();
+        let never = JobOutcome {
+            error: Some("the engine could not free its memory for it".to_owned()),
+            ..JobOutcome::default()
+        };
+        let report = JobRun {
+            log_path: None,
+            elapsed_ms: 0,
+            ..run(&job, &never, "")
+        }
+        .report();
+        assert_eq!(
+            report,
+            "`sh render/loop.sh` failed: the engine could not free its memory for it after 0s."
         );
     }
 

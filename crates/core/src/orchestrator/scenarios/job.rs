@@ -437,6 +437,8 @@ const JOB_TAKES: std::time::Duration = std::time::Duration::from_secs(30);
 struct ShortOfMemory {
     loaded: Mutex<bool>,
     refusals: Mutex<u32>,
+    /// It cannot unload either: a job never gets its memory.
+    stuck: bool,
 }
 
 impl ShortOfMemory {
@@ -444,6 +446,16 @@ impl ShortOfMemory {
         Arc::new(Self {
             loaded: Mutex::new(true),
             refusals: Mutex::new(refusals),
+            stuck: false,
+        })
+    }
+
+    /// An LLM that cannot unload, so no job gets its memory.
+    fn stuck() -> Arc<Self> {
+        Arc::new(Self {
+            loaded: Mutex::new(true),
+            refusals: Mutex::new(0),
+            stuck: true,
         })
     }
 }
@@ -477,6 +489,9 @@ impl EngineAdapter for ShortOfMemory {
 
     async fn unload(&self, _model: &str) -> Result<(), EngineError> {
         tokio::time::sleep(ENGINE_SWAP).await;
+        if self.stuck {
+            return Err(EngineError::Refused("busy".into()));
+        }
         *self.loaded.lock().unwrap() = false;
         Ok(())
     }
@@ -509,16 +524,25 @@ impl Harness for GateAtOpen {
 async fn under_lease(
     llm: Arc<ShortOfMemory>,
 ) -> (tempfile::TempDir, Project, String, Vec<(String, bool)>) {
-    under_lease_with(llm, Arc::new(VirtualClock::new()), CancellationToken::new()).await
+    under_lease_with(
+        llm,
+        Arc::new(VirtualClock::new()),
+        CancellationToken::new(),
+        |_| {},
+    )
+    .await
 }
 
-/// [`under_lease`] with `clock` and `stop`.
+/// [`under_lease`] with `clock` and `stop`, after `before` prepares the
+/// project.
 async fn under_lease_with(
     llm: Arc<ShortOfMemory>,
     clock: Arc<dyn Clock>,
     stop: CancellationToken,
+    before: impl FnOnce(&Project),
 ) -> (tempfile::TempDir, Project, String, Vec<(String, bool)>) {
     let (work, project, vcs) = project(&["maxAttempts=3"]);
+    before(&project);
     let lease = Arc::new(LeaseManager::new(
         llm,
         "fake",
@@ -644,7 +668,7 @@ async fn a_stop_while_waiting_for_the_llm_after_a_job_pauses_the_run() {
         stop: stop.clone(),
     });
     let (_work, project, log, _) =
-        under_lease_with(ShortOfMemory::refusing(u32::MAX), clock, stop).await;
+        under_lease_with(ShortOfMemory::refusing(u32::MAX), clock, stop, |_| {}).await;
     let ledger = project.load_ledger().unwrap();
     assert_eq!(ledger.phase, Phase::Loop, "paused, not blocked:\n{log}");
     assert!(
@@ -658,4 +682,31 @@ async fn a_stop_while_waiting_for_the_llm_after_a_job_pauses_the_run() {
     assert!(card.contains("attempts: 0"), "{card}");
     let jobs = ledger.current.unwrap().jobs.unwrap();
     assert!(jobs.report.is_some_and(|r| r.contains("sh render.sh")));
+}
+
+/// A job the engine made no room for never ran: its report says so and
+/// names no log, not even one an earlier, stopped run of it left.
+#[tokio::test(start_paused = true)]
+async fn a_job_the_engine_made_no_room_for_names_no_log() {
+    let stale = ".tenaz/private/jobs/T002-1-1.log";
+    let (_work, project, log, _) = under_lease_with(
+        ShortOfMemory::stuck(),
+        Arc::new(VirtualClock::new()),
+        CancellationToken::new(),
+        |project| project.write(stale, "frame 90/180 (stopped)\n").unwrap(),
+    )
+    .await;
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    let report = &builder_prompts(&project)[1];
+    assert!(
+        report.contains("failed: the engine could not free its memory for it"),
+        "{report}"
+    );
+    assert!(!report.contains("Its log is"), "{report}");
+    assert!(!report.contains("frame 90/180"), "{report}");
+    assert!(project.read_if(stale).is_none(), "{log}");
 }

@@ -156,6 +156,8 @@ impl Runner {
             timeout: Duration::from_secs(job.minutes.saturating_mul(60)),
             log: self.project.path(&log_path),
         };
+        // A job run again after a stop must not report the stopped run's log.
+        self.project.remove(&log_path)?;
         self.journal(JournalRecord::JobStarted {
             task: task.clone(),
             attempt,
@@ -179,16 +181,15 @@ impl Runner {
             engine: engine.clone(),
             duration_ms: elapsed_ms,
         });
-        let log_tail = self
-            .project
-            .tail(&log_path, LOG_TAIL_BYTES)
-            .unwrap_or_default();
+        // A job that never started, or whose log could not be opened, has
+        // none to point to.
+        let log_tail = self.project.tail(&log_path, LOG_TAIL_BYTES);
         let report = JobRun {
             job,
             outcome: &outcome,
             elapsed_ms,
-            log_path: &log_path,
-            log_tail: &log_tail,
+            log_path: log_tail.is_some().then_some(log_path.as_str()),
+            log_tail: log_tail.as_deref().unwrap_or_default(),
             engine: engine.as_deref(),
         }
         .report();

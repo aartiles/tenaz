@@ -122,7 +122,9 @@ Taken while implementing D, on the open questions above:
   **`jobsPerAttempt`**, 3, the most job files one attempt may have,
   valid or not; one past them is removed unread and the attempt is judged
   by `verify`. `jobMinutes=0` turns jobs off: a job file is removed
-  unread in the same way.
+  unread in the same way. A job the engine could not make room for still
+  counts: an engine that never can would otherwise give the builder a
+  fresh session after every declaration.
 - **`verify` stays outside the lease.** It is left open, under "Known
   gaps" in COMPATIBILITY.
 - **The journal** records `job-started` (task, attempt, command, minutes)
