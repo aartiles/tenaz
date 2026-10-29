@@ -34,6 +34,14 @@ impl JobProcess {
 #[async_trait]
 impl JobRunner for JobProcess {
     async fn run(&self, job: &JobSpec, stop: &CancellationToken) -> JobOutcome {
+        // A stop that came while the engine made room: a job started now
+        // would only be killed, and a render may clear its output first.
+        if stop.is_cancelled() {
+            return JobOutcome {
+                stopped: true,
+                ..JobOutcome::default()
+            };
+        }
         let failed = |why: String| JobOutcome {
             error: Some(why),
             ..JobOutcome::default()
@@ -195,6 +203,26 @@ mod tests {
             gone_within(pid.trim(), Duration::from_secs(5)),
             "the background sleep still runs"
         );
+    }
+
+    /// A job asked for after the run was stopped does not start.
+    #[tokio::test]
+    async fn a_job_after_the_stop_does_not_start() {
+        let (dir, job, log) = job();
+        let stop = CancellationToken::new();
+        stop.cancel();
+        let outcome = job
+            .run(&spec("touch made", Duration::from_secs(5), &log), &stop)
+            .await;
+        assert_eq!(
+            outcome,
+            JobOutcome {
+                stopped: true,
+                ..JobOutcome::default()
+            }
+        );
+        assert!(!dir.path().join("made").exists());
+        assert!(!log.exists(), "its log was opened");
     }
 
     /// A job that cannot start says why, and so does its log.
