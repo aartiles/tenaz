@@ -142,6 +142,7 @@ ended, how long it took, and the end of its log; the job does not cost an
 attempt. A file that is not valid runs nothing, and the next session is
 told why. An attempt has at most 3 job files by default (`jobsPerAttempt`);
 one past them is removed unread, and the attempt is judged by `verify` as
-it stands. If the run is stopped during a job, the job runs again when it
+it stands. With `jobMinutes=0` jobs are off: a job file is removed unread
+in the same way. If the run is stopped during a job, the job runs again when it
 resumes, so write it to be safe to run twice: skip the frames already
 made, overwrite rather than append.

@@ -22,10 +22,11 @@ uses [Semantic Versioning](https://semver.org/).
   resume the job runs again before any session; a report no session has
   read yet is kept in `run.json` across a pause. After a job the LLM
   serves again before the next session; one that does not come back
-  blocks the run as "engine unavailable". `jobMinutes=0` turns jobs off.
-  In the Lotion Pump run a 25-minute Blender render next to the
-  model's engine failed for memory, and so did the engine; the operator
-  had to run it with the run blocked. See ADR 0010.
+  blocks the run as "engine unavailable". `jobMinutes=0` turns jobs off:
+  a job file is removed unread and the attempt is judged. In the Lotion
+  Pump run a 25-minute Blender render next to the model's engine failed
+  for memory, and so did the engine; the operator had to run it with the
+  run blocked. See ADR 0010.
 - A builder session rerun after the engine ran out of memory is told why
   and asked not to leave heavy work running in the background, but to
   declare it as a job. Other roles, other engine errors and runs with

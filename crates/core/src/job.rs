@@ -20,8 +20,10 @@ pub struct DeclaredJob {
 }
 
 impl DeclaredJob {
-    /// Reads a declared job; it may ask for at most `max_minutes`.
+    /// Reads a declared job; it may ask for at most `max_minutes`, which is
+    /// at least 1: with jobs off, callers do not read the file.
     pub fn read(text: &str, max_minutes: u64) -> Result<Self, String> {
+        debug_assert!(max_minutes > 0, "jobs are off: the file is not read");
         let job: Self = serde_json::from_str(text).map_err(|e| {
             format!("it is not {{\"command\": …, \"minutes\": …, \"why\": …}}: {e}")
         })?;
@@ -30,9 +32,6 @@ impl DeclaredJob {
         }
         if job.why.trim().is_empty() {
             return Err("its `why` is empty".to_owned());
-        }
-        if max_minutes == 0 {
-            return Err("jobs are off in this run (jobMinutes=0)".to_owned());
         }
         if !(1..=max_minutes).contains(&job.minutes) {
             return Err(format!(
@@ -138,8 +137,6 @@ mod tests {
             let error = DeclaredJob::read(&text, 60).unwrap_err();
             assert!(error.contains(why), "{text}: {error}");
         }
-        let off = DeclaredJob::read(RENDER, 0).unwrap_err();
-        assert!(off.contains("jobs are off"), "{off}");
     }
 
     fn run<'a>(job: &'a DeclaredJob, outcome: &'a JobOutcome, tail: &'a str) -> JobRun<'a> {

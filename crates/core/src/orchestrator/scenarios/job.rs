@@ -199,6 +199,39 @@ async fn a_failed_job_does_not_fail_the_attempt_by_itself() {
     );
 }
 
+/// With jobs off a job file runs nothing and earns no session: it is
+/// removed unread, and the attempt is judged as it stands.
+#[tokio::test(start_paused = true)]
+async fn with_jobs_off_a_job_file_is_ignored() {
+    let (_work, project, vcs) = project(&["maxAttempts=3", "jobMinutes=0"]);
+    let jobs = Arc::new(ScriptedJobs::default());
+    let log = play(
+        &project,
+        &vcs,
+        Some(first_session_declares(RENDER)),
+        jobs.clone(),
+    )
+    .await;
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    assert!(jobs.ran().is_empty(), "{log}");
+    assert!(
+        log.contains("T002: .tenaz/jobs/T002.json ignored: jobs are off"),
+        "{log}"
+    );
+    assert!(log.contains("T002 done (2 attempts)"), "{log}");
+    assert!(
+        builder_prompts(&project)
+            .iter()
+            .all(|p| !p.contains("## The job you declared")),
+        "{log}"
+    );
+    assert!(project.read_if(".tenaz/jobs/T002.json").is_none());
+}
+
 /// A builder that declares a job in every session runs `jobsPerAttempt`
 /// of them; the next file is removed unread and the attempt is judged.
 #[tokio::test(start_paused = true)]

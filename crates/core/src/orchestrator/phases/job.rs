@@ -100,14 +100,21 @@ impl Runner {
 
     /// Runs the job `task`'s builder declared, if any, and keeps its report
     /// for the next session; true when there is one. A job file that does
-    /// not stand runs nothing, and the report says why. Past
-    /// `jobsPerAttempt` job files, the file is removed and the attempt is
-    /// judged as it stands.
+    /// not stand runs nothing, and the report says why. With jobs off, or
+    /// past `jobsPerAttempt` job files, the file is removed and the attempt
+    /// is judged as it stands.
     async fn next_job(&mut self, task: &TaskId, attempt: u32) -> Result<bool, RunError> {
         let path = job_path(task.as_str());
         let Some(text) = self.project.read_if(&path) else {
             return Ok(false);
         };
+        if !self.params.jobs_on() {
+            self.log(&format!(
+                "  {task}: {path} ignored: jobs are off (jobMinutes=0)"
+            ));
+            self.project.remove(&path)?;
+            return Ok(false);
+        }
         let files = self.attempt_jobs(attempt).files;
         if files >= self.params.jobs_per_attempt {
             self.log(&format!(

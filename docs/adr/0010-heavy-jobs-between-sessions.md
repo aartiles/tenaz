@@ -121,7 +121,8 @@ Taken while implementing D, on the open questions above:
 - **`jobMinutes`**, 60 by default, is the most a job may ask for, and
   **`jobsPerAttempt`**, 3, the most job files one attempt may have,
   valid or not; one past them is removed unread and the attempt is judged
-  by `verify`.
+  by `verify`. `jobMinutes=0` turns jobs off: a job file is removed
+  unread in the same way.
 - **`verify` stays outside the lease.** It is left open, under "Known
   gaps" in COMPATIBILITY.
 - **The journal** records `job-started` (task, attempt, command, minutes)
