@@ -4,6 +4,10 @@ Thanks for looking. Issues and pull requests are welcome.
 
 ## Before you open a pull request
 
+CI runs on pull requests, on pushes to `main` and to `v*` tags, and by
+hand from the Actions tab; a push to any other branch does not run it.
+The hooks run the same checks on your own OS only.
+
 Enable the repository's git hooks once; `pre-commit` checks formatting and
 the crate boundaries (`scripts/check-architecture.sh`), `pre-push` runs
 everything CI runs:
