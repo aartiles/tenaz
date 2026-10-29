@@ -19,6 +19,8 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 pub use init::{InitOptions, Templates, init};
+// Only the scripted harness (`testing`) reads this.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) use phases::CONFLICTS_TITLE;
 pub use preflight::TOOL_PROBE_FILE;
 pub use sampler::Sampler;
