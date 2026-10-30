@@ -26,6 +26,7 @@ pub use preflight::TOOL_PROBE_FILE;
 pub use sampler::Sampler;
 pub use status::{TOOL_REPAIRS, status_json, status_text};
 
+use crate::lease::LeaseError;
 use crate::ledger::{JournalRecord, Ledger, Phase, Preflight};
 use crate::params::RunParams;
 use crate::ports::{
@@ -120,7 +121,7 @@ impl std::fmt::Debug for Runner {
     }
 }
 
-/// The pause between two checks that the engine serves the pinned model.
+/// The pause between two checks that the engine serves the run's models.
 pub(crate) const ENGINE_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 impl Runner {
@@ -234,8 +235,8 @@ impl Runner {
         Ok(())
     }
 
-    /// Waits for the engine to serve the pinned model (up to 30 tries,
-    /// [`ENGINE_WAIT`] apart), and logs the wait, `why`, once the first try
+    /// Waits for the engine to serve every model of the run (up to 30
+    /// tries, [`ENGINE_WAIT`] apart), and logs the wait, `why`, once the first try
     /// fails. The last error when it still does not serve; `None` once it
     /// serves, or when the run is stopping, which callers check.
     async fn wait_for_engine(&self, why: &str) -> Option<RunError> {
@@ -250,7 +251,7 @@ impl Runner {
             }
             if tried == 1 {
                 self.log(&format!(
-                    "  waiting for the LLM to serve again {why}: {error}"
+                    "  waiting for the LLMs to serve again {why}: {error}"
                 ));
             }
             self.deps.clock.sleep(ENGINE_WAIT).await;
@@ -258,33 +259,64 @@ impl Runner {
         None
     }
 
-    /// Whether the engine lists the pinned model as loaded and ready. With a
-    /// lease, the LLM is loaded first when it is not resident (after a media
-    /// job whose reload failed, for example).
+    /// Whether the engine lists every model of the run as loaded: the
+    /// run's and each role's, all resident at once (ADR 0011). With a
+    /// lease, the LLMs are loaded first when they are not resident (after a
+    /// media job whose reload failed, for example); when that fails, the
+    /// refusal names the models still missing and says why.
     async fn engine_serving(&self) -> Result<(), RunError> {
-        if let Some(lease) = &self.deps.lease {
-            lease
-                .ensure_llm()
-                .await
-                .map_err(|e| RunError::Precondition(format!("the LLM could not be loaded: {e}")))?;
-        }
-        let Some(engine) = &self.deps.engine else {
-            return Ok(());
+        let load_error = match &self.deps.lease {
+            Some(lease) => lease.ensure_llm().await.err(),
+            None => None,
         };
-        let id = &self.ledger.config.id;
-        let models = engine.models().await.map_err(|e| {
+        let missing = self.models_not_listed().await?;
+        match (missing.is_empty(), load_error) {
+            (true, None) => Ok(()),
+            (true, Some(e)) => Err(RunError::Precondition(format!(
+                "the run's models could not be loaded: {e}"
+            ))),
+            (false, load_error) => Err(RunError::Precondition(
+                self.not_served(&missing, load_error),
+            )),
+        }
+    }
+
+    /// The run's models the engine does not list as loaded; none without
+    /// an engine to ask.
+    async fn models_not_listed(&self) -> Result<Vec<String>, RunError> {
+        let Some(engine) = &self.deps.engine else {
+            return Ok(Vec::new());
+        };
+        let ids = self.ledger.config.model_ids();
+        let listed = engine.models().await.map_err(|e| {
             RunError::Precondition(format!(
-                "Model {id} is not being served ({e}). Start the inference server first."
+                "{} not being served ({e}). Start the inference server first.",
+                models_are(&ids)
             ))
         })?;
-        if models.iter().any(|m| &m.id == id && m.loaded) {
-            Ok(())
+        // Listed as loaded is enough, as before: where the lease loaded a
+        // model it has already waited for it to be ready (`ports::serves`).
+        Ok(ids
+            .into_iter()
+            .filter(|id| !listed.iter().any(|m| &m.id == id && m.loaded))
+            .collect())
+    }
+
+    /// The refusal for `missing` models, with why loading them failed.
+    fn not_served(&self, missing: &[String], load_error: Option<LeaseError>) -> String {
+        let why = load_error
+            .map(|e| format!(" (loading failed: {e})"))
+            .unwrap_or_default();
+        let at_once = if self.ledger.config.model_ids().len() > 1 {
+            ", with every model of the run loaded at once"
         } else {
-            Err(RunError::Precondition(format!(
-                "Model {id} is not being served at {}. Start the inference server first.",
-                self.ledger.config.base_url.clone().unwrap_or_default()
-            )))
-        }
+            ""
+        };
+        format!(
+            "{} not being served at {}{why}. Start the inference server first{at_once}.",
+            models_are(missing),
+            self.ledger.config.base_url.clone().unwrap_or_default(),
+        )
     }
 
     /// Writes and commits the given templates, then checks that the protocol
@@ -528,4 +560,23 @@ fn take_run_lock(project: &Project) -> Result<RunLock, RunError> {
             "Another tenaz run is working on this project{pid}; stop it with Ctrl-C or wait for it to end"
         ))
     })
+}
+
+/// `Model A is` or `Models A, B are`.
+fn models_are(ids: &[String]) -> String {
+    match ids {
+        [one] => format!("Model {one} is"),
+        _ => format!("Models {} are", ids.join(", ")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::models_are;
+
+    #[test]
+    fn missing_models_are_named_in_one_sentence() {
+        assert_eq!(models_are(&["a".into()]), "Model a is");
+        assert_eq!(models_are(&["a".into(), "b".into()]), "Models a, b are");
+    }
 }

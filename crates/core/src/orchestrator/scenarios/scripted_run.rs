@@ -787,3 +787,56 @@ async fn without_context_split_an_outgrown_attempt_is_retried() {
     let run = run_outgrowing(false).await;
     assert_eq!(run.verifies("T003"), vec![1, 2, 3]);
 }
+
+/// A clipped review diff starts with the list of changed files, and that
+/// list is clipped too, to `statClipBytes`, at a whole line. In the Digger
+/// 3D run of 2026-10-29 the list alone was about 200 KB (3,265
+/// `node_modules` files committed with the task), more than the reviewer's
+/// model could take.
+#[tokio::test(start_paused = true)]
+async fn a_review_s_list_of_changed_files_is_clipped() {
+    // The list's first line, `.tenaz/notes/T001.md | changed`, fits in 40
+    // bytes; the next would not.
+    let run = Played::play(
+        &["diffLimitBytes=1", "statClipBytes=40"],
+        ScriptedHarness::default(),
+    )
+    .await;
+    let log = &run.log;
+    assert!(run.has(completed), "{log}");
+    let review = run.prompts("reviewer-T001").concat();
+    assert!(
+        review.contains(".tenaz/notes/T001.md | changed\n[... clipped 3 lines]"),
+        "{review}"
+    );
+    assert!(!review.contains("src/T001.txt | changed"), "{review}");
+}
+
+/// A builder retried after a failed attempt is told what the earlier
+/// attempts changed, clipped the same way. The failing builder only adds
+/// files, which a diff against the working tree shows once the session
+/// before commits them: the third attempt is the first to see them.
+#[tokio::test(start_paused = true)]
+async fn a_retried_builder_s_list_of_changes_is_clipped() {
+    let run = Played::play(
+        &["maxAttempts=3", "replanEvery=2", "statClipBytes=1"],
+        ScriptedHarness {
+            failing_task: Some("T003".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let retried = run
+        .prompts("builder-T003")
+        .into_iter()
+        .find(|p| p.contains("Changes already made since the task started"))
+        .expect("the third attempt is told what the earlier ones changed");
+    let changes = retried
+        .split("Changes already made since the task started (kept)")
+        .nth(1)
+        .unwrap();
+    assert!(
+        changes.trim_start().starts_with("[... clipped"),
+        "{retried}"
+    );
+}

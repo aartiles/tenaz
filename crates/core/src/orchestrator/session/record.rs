@@ -6,7 +6,7 @@ use crate::memory::MemoryWindow;
 use crate::metrics::{RequestRecord, engine_summary};
 use crate::orchestrator::{RunError, Runner};
 use crate::ownership;
-use crate::ports::Vcs;
+use crate::ports::{SessionModel, Vcs};
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
@@ -20,6 +20,7 @@ struct Started<'a> {
     role: Role,
     ctx: &'a SessionCtx,
     prompt: &'a str,
+    model: SessionModel,
     watch: WatchConfig,
 }
 
@@ -44,6 +45,7 @@ impl Runner {
                 label: &started.label,
                 prompts: &[started.prompt.to_owned()],
                 cwd: self.project.root().to_path_buf(),
+                model: started.model.clone(),
                 watch: Some(started.watch),
                 persist: true,
                 own_checks: started
@@ -83,9 +85,12 @@ impl Runner {
         self.project
             .write(&format!(".tenaz/private/{label}.prompt.md"), prompt)?;
         self.log(&format!("Session {label} started"));
+        let model = self.ledger.config.model_for(role);
         let watch = WatchConfig {
             turns: ctx.turns.unwrap_or(self.params.turn_budget),
-            context_tokens: self.ledger.context_budget_tokens(ctx.context_tokens),
+            context_tokens: self
+                .ledger
+                .context_budget_tokens(model.context_window, ctx.context_tokens),
             idle: role.edits_code(),
             wrap_up: role.wrap_up(),
         };
@@ -105,6 +110,7 @@ impl Runner {
             role,
             ctx,
             prompt,
+            model,
             watch,
         })
     }
@@ -183,6 +189,7 @@ fn session_record(started: &Started<'_>, metrics: &SessionMetrics, left: Left) -
     SessionRecord {
         label: started.label.clone(),
         role: started.role,
+        model: Some(started.model.name.clone()),
         task: started.ctx.task.clone(),
         attempt: started.ctx.attempt,
         ok: metrics.ok(),
@@ -313,6 +320,12 @@ mod tests {
             role: Role::Builder,
             ctx: &ctx,
             prompt: "build it",
+            model: SessionModel {
+                name: "p/m".to_owned(),
+                id: "m".to_owned(),
+                context_window: 65536,
+                supports_images: false,
+            },
             watch: WatchConfig {
                 turns: 40,
                 context_tokens: 32_000,
@@ -335,6 +348,7 @@ mod tests {
             (record.context_budget, record.prompt_chars, record.attempt),
             (32_000, 8, Some(2))
         );
+        assert_eq!(record.model.as_deref(), Some("p/m"));
         assert_eq!(record.task, ctx.task);
         assert_eq!(record.reverted, ["README.md"]);
         assert!(record.ok);

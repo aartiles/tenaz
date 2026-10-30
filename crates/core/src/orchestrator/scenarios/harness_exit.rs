@@ -314,6 +314,38 @@ async fn the_next_bootstrap_is_told_which_files_the_previous_one_left() {
     assert!(left.contains("Do not start over"), "{second}");
 }
 
+/// The files a bootstrap left are listed up to `statClipBytes`.
+#[tokio::test(start_paused = true)]
+async fn the_files_a_bootstrap_left_are_clipped() {
+    let (_work, project, _log) = run_with(
+        ScriptedHarness {
+            partial_bootstrap: true,
+            ..Default::default()
+        },
+        2,
+        &["statClipBytes=1"],
+    )
+    .await;
+    let last = project
+        .journal()
+        .iter()
+        .rev()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-bootstrap") => Some(s.label.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let prompt = project
+        .read(&format!(".tenaz/private/{last}.prompt.md"))
+        .unwrap();
+    let left = prompt
+        .split("Files the previous bootstrap sessions left (kept)")
+        .nth(1)
+        .expect("the second bootstrap gets the files the first one left");
+    assert!(left.trim_start().starts_with("[... clipped"), "{prompt}");
+    assert!(!left.contains("index.html"), "{prompt}");
+}
+
 #[tokio::test(start_paused = true)]
 async fn the_bootstrap_runs_one_session_per_step() {
     let (_work, project, log) = run(
@@ -448,6 +480,38 @@ async fn a_review_with_minor_findings_only_accepts_the_task() {
         )
         .count();
     assert_eq!(reviews, 1, "no further attempt for a MINOR finding:\n{log}");
+}
+
+/// The list of images is clipped like the list of changed files: a
+/// task that commits a package folder can add hundreds.
+#[tokio::test(start_paused = true)]
+async fn the_reviewer_s_list_of_images_is_clipped() {
+    let (_work, project, _log) = run_with(
+        ScriptedHarness {
+            image_task: Some("T004".into()),
+            ..Default::default()
+        },
+        3,
+        &["statClipBytes=1"],
+    )
+    .await;
+    let label = project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-reviewer-T004") => {
+                Some(s.label.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let prompt = project
+        .read(&format!(".tenaz/private/{label}.prompt.md"))
+        .unwrap();
+    assert!(
+        prompt.contains("## Images this change adds or replaces\n\n[... clipped 1 line]"),
+        "{prompt}"
+    );
 }
 
 #[tokio::test(start_paused = true)]

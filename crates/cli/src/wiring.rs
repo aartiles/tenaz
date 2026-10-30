@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
-use tenaz_acp::fx::{FxLaunch, FxSettings, ProfileMcpServer, write_profile};
+use tenaz_acp::fx::{FxHarness, FxLaunch, FxSettings, ProfileMcpServer, write_profile};
 use tenaz_acp::{EngineObservation, McpEndpoint, stop_reason_for_finish};
 use tenaz_adapters::clock::SystemClock;
 use tenaz_adapters::engine::generic::{Commands, GenericEngine};
@@ -234,7 +234,7 @@ pub async fn wire(
     });
     let mut lease = LeaseManager::new(
         engine_adapter.clone(),
-        config.id.clone(),
+        config.model_ids(),
         gate.clone(),
         observer,
     );
@@ -652,7 +652,7 @@ fn build_harness(
                         .unwrap_or_default(),
                 );
             }
-            Ok(Arc::new(acp))
+            Ok(Arc::new(FxHarness::new(acp, &launch.home, settings)))
         }
     }
 }

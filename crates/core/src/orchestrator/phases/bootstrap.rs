@@ -284,13 +284,12 @@ impl Runner {
         self.deps
             .vcs
             .commit_all(&format!("tenaz: bookkeeping before {}", Role::Bootstrap))?;
-        let stat = self.deps.vcs.diff_stat(&base, Some("HEAD"), false)?;
-        if stat.trim().is_empty() {
+        let stat = self.changed_files(&base, Some("HEAD"), false)?;
+        if stat.is_empty() {
             return Ok(None);
         }
         Ok(Some(format!(
-            "{}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right.",
-            stat.trim()
+            "{stat}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right."
         )))
     }
 }

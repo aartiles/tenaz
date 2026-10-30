@@ -222,12 +222,13 @@ mod tests {
             ..JobOutcome::default()
         };
         let report = JobRun {
-            engine: Some("the LLM did not reload after a job: refused"),
+            engine: Some("the LLMs did not reload after a job: refused"),
             ..run(&job, &ok, "")
         }
         .report();
         assert!(
-            report.ends_with("Around it, the engine: the LLM did not reload after a job: refused."),
+            report
+                .ends_with("Around it, the engine: the LLMs did not reload after a job: refused."),
             "{report}"
         );
     }

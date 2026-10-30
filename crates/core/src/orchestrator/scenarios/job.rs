@@ -562,7 +562,7 @@ async fn under_lease_with(
     before(&project);
     let lease = Arc::new(LeaseManager::new(
         llm,
-        "fake",
+        vec!["fake".into()],
         Gate::new(),
         Arc::new(|_| {}),
     ));
@@ -616,7 +616,7 @@ async fn the_llm_serves_again_before_the_session_after_a_job() {
         "{log}"
     );
     assert!(
-        builder_prompts(&project)[1].contains("Around it, the engine: the LLM did not reload"),
+        builder_prompts(&project)[1].contains("Around it, the engine: the LLMs did not reload"),
         "{log}"
     );
 }
@@ -631,12 +631,12 @@ async fn an_llm_that_does_not_serve_again_after_a_job_blocks_the_run() {
     assert_eq!(ledger.phase, Phase::Blocked, "{log}");
     let reason = ledger.blocked_reason.clone().unwrap_or_default();
     assert!(
-        reason.contains("the LLM did not serve again after T002's job")
+        reason.contains("the LLMs did not serve again after T002's job")
             && reason.contains("no memory"),
         "{reason}"
     );
     assert!(
-        log.contains("waiting for the LLM to serve again after T002's job"),
+        log.contains("waiting for the LLMs to serve again after T002's job"),
         "{log}"
     );
     let builders = seen

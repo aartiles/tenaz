@@ -68,7 +68,7 @@ impl Runner {
         if let Some(error) = unserved {
             self.project.set_attempts(task, attempt - 1)?;
             return Err(RunError::EngineUnavailable(format!(
-                "the LLM did not serve again after {task}'s job: {error}"
+                "the LLMs did not serve again after {task}'s job: {error}"
             )));
         }
         Ok(())
@@ -314,7 +314,7 @@ mod tests {
             leased_outcome(ran),
             (
                 exited(0),
-                Some("the LLM did not reload after a job: engine refused: busy".to_owned()),
+                Some("the LLMs did not reload after a job: engine refused: busy".to_owned()),
                 5
             )
         );

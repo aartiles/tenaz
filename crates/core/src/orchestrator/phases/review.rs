@@ -9,7 +9,7 @@ use crate::role::Role;
 use crate::task::{TaskCard, TaskId};
 use crate::verify::VerifyOutcome;
 
-use super::PromptParts;
+use super::{PromptParts, clip_lines};
 
 /// What a review session is given.
 pub(super) struct ReviewInput<'a> {
@@ -89,12 +89,13 @@ impl Runner {
         Ok(self.review_outcome(task, reviewed))
     }
 
-    /// The diff since `base`, clipped to `diffLimitBytes` after its stat.
+    /// The diff since `base`, clipped to `diffLimitBytes` after its stat
+    /// (clipped to `statClipBytes`).
     fn review_diff(&self, base: &str) -> Result<ReviewDiff, RunError> {
         let mut diff = self.deps.vcs.diff(base, "HEAD", true)?;
         let images = briefing::changed_images(&diff);
         if diff.len() > self.params.diff_limit_bytes {
-            let stat = self.deps.vcs.diff_stat(base, Some("HEAD"), false)?;
+            let stat = self.changed_files(base, Some("HEAD"), false)?;
             diff = clip_diff(&diff, &stat, self.params.diff_limit_bytes);
         }
         Ok(ReviewDiff { text: diff, images })
@@ -152,15 +153,12 @@ impl Runner {
         ));
         extra.extend(self.amends_section(input.card));
         if !diff.images.is_empty() {
+            let images: Vec<_> = diff.images.iter().map(|path| format!("- {path}")).collect();
+            let images = clip_lines(&images.join("\n"), self.params.stat_clip_bytes);
             extra.push((
                 "Images this change adds or replaces".to_owned(),
                 format!(
-                    "{}\n\nLook at each one before you judge the task (see the role prompt).",
-                    diff.images
-                        .iter()
-                        .map(|path| format!("- {path}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    "{images}\n\nLook at each one before you judge the task (see the role prompt)."
                 ),
             ));
         }

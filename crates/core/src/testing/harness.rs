@@ -308,6 +308,7 @@ pub struct ScriptedJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::SessionModel;
     use crate::session::StopReason;
 
     #[tokio::test]
@@ -322,6 +323,12 @@ mod tests {
                 raw_log: None,
                 thinking_log: None,
                 stderr_log: None,
+                model: SessionModel {
+                    name: "p/m".into(),
+                    id: "m".into(),
+                    context_window: 65536,
+                    supports_images: false,
+                },
             })
             .await
             .unwrap();
@@ -350,6 +357,12 @@ mod tests {
                 raw_log: None,
                 thinking_log: None,
                 stderr_log: None,
+                model: SessionModel {
+                    name: "p/m".into(),
+                    id: "m".into(),
+                    context_window: 65536,
+                    supports_images: false,
+                },
             })
             .await
             .unwrap();

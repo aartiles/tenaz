@@ -182,6 +182,52 @@ fn status_json(project: &std::path::Path) -> serde_json::Value {
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
+/// `init --model-for` pins another model for a role under the run's
+/// provider, with the window `--context-window-for` gives it or else the
+/// run's, and the run's inputs; `status` names it.
+#[test]
+fn init_pins_a_model_per_role() {
+    let work = tempfile::tempdir().unwrap();
+    let brief = work.path().join("brief.md");
+    std::fs::write(&brief, "# Brief\n").unwrap();
+    let project = work.path().join("project");
+    let init = tenaz()
+        .args(["init", "--project"])
+        .arg(&project)
+        .arg("--brief")
+        .arg(&brief)
+        .args(["--harness", "fake", "--model", "m", "--provider", "p"])
+        .args(["--context-window", "65536", "--vision"])
+        .args([
+            "--model-for",
+            "reviewer=critic",
+            "--model-for",
+            "split=planner",
+        ])
+        .args(["--context-window-for", "reviewer=32768"])
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let ledger: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(project.join(".tenaz/run.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        ledger["config"]["roleModels"],
+        serde_json::json!({
+            "reviewer": {"model": "p/critic", "id": "critic", "contextWindow": 32768, "input": ["text", "image"]},
+            "split": {"model": "p/planner", "id": "planner", "contextWindow": 65536, "input": ["text", "image"]},
+        })
+    );
+    assert_eq!(
+        status_json(&project)["role_models"]["split"],
+        serde_json::json!({"model": "p/planner", "context_window": 65536})
+    );
+}
+
 /// `init --harness pi` pins `pi --version` and reads the provider's base URL,
 /// context window and inputs from `~/.pi/agent/models.json` when it lists
 /// the model; a model it does not list takes them from the flags.

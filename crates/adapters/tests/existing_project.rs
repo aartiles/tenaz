@@ -2,6 +2,7 @@
 //! and its own `.gitignore`: everything Tenaz adds goes under `.tenaz/`,
 //! including `verify`, and the project's own files are left alone.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -104,6 +105,22 @@ fn deps(harness: ScriptedHarness, root: &Path, verify_path: &str) -> Deps {
     }
 }
 
+/// The model a run on `harness` is pinned to.
+fn fake_model(harness: &ScriptedHarness) -> ModelConfig {
+    ModelConfig {
+        harness: HarnessKind::Fake,
+        harness_version: harness.version(),
+        model: "fake/fake".into(),
+        provider: Some("fake".into()),
+        id: "fake".into(),
+        base_url: None,
+        context_window: 131_072,
+        input: vec!["text".into()],
+        thinking: None,
+        role_models: BTreeMap::new(),
+    }
+}
+
 #[tokio::test]
 async fn a_run_in_an_existing_project_stays_under_tenaz() {
     let work = tempfile::tempdir().unwrap();
@@ -129,17 +146,7 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
     };
     let options = InitOptions {
         brief: Some(brief),
-        config: ModelConfig {
-            harness: HarnessKind::Fake,
-            harness_version: harness.version(),
-            model: "fake/fake".into(),
-            provider: Some("fake".into()),
-            id: "fake".into(),
-            base_url: None,
-            context_window: 131_072,
-            input: vec!["text".into()],
-            thinking: None,
-        },
+        config: fake_model(&harness),
         launch: Launch::default(),
         params,
         skills: vec![],

@@ -16,8 +16,11 @@ use agent_client_protocol::schema::v1::{
     ToolCallUpdateFields, UsageUpdate,
 };
 use agent_client_protocol::{Agent, DynConnectTo};
+use tenaz_acp::fx::{FxHarness, FxSettings};
 use tenaz_acp::{AcpHarness, EngineObservation, McpEndpoint};
-use tenaz_core::ports::{Harness, HarnessInfo, PermissionDecision, SessionSpec};
+use tenaz_core::ports::{
+    Harness, HarnessError, HarnessInfo, PermissionDecision, SessionModel, SessionSpec,
+};
 use tenaz_core::session::{SessionEvent, StopReason as CoreStop, Usage};
 
 /// A steer prompt as the fake agent received it.
@@ -176,6 +179,12 @@ fn spec(dir: &Path) -> SessionSpec {
         raw_log: Some(dir.join("raw.jsonl")),
         thinking_log: Some(dir.join("thinking.md")),
         stderr_log: None,
+        model: SessionModel {
+            name: "p/m".into(),
+            id: "m".into(),
+            context_window: 65536,
+            supports_images: false,
+        },
     }
 }
 
@@ -492,4 +501,90 @@ async fn a_steer_is_dropped_when_the_agent_does_not_advertise_it() {
     assert!((6..200).contains(&calls));
     assert_eq!(settled, vec![true]);
     session.close(Duration::from_secs(5)).await;
+}
+
+/// fx's settings for the run's model, before a session's replaces it.
+fn fx_settings() -> FxSettings {
+    FxSettings {
+        provider: "p".into(),
+        base_url: "http://127.0.0.1:1/v1".into(),
+        model: "run".into(),
+        context_window: 131_072,
+        max_output_tokens: 16384,
+        supports_vision: false,
+        permission_mode: "ask".into(),
+        effort: None,
+        skill_catalog: false,
+    }
+}
+
+/// fx reads its settings when it starts: each session's are written for
+/// that session's model before the agent is launched.
+#[tokio::test]
+async fn fx_starts_each_session_with_its_model_in_the_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let launched: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let (read_home, log) = (home.clone(), launched.clone());
+    let info = HarnessInfo {
+        name: "fx".into(),
+        version: "1".into(),
+    };
+    let acp = AcpHarness::new(
+        info,
+        Arc::new(move |_| {
+            let text = std::fs::read_to_string(read_home.join(".fx/settings.json")).unwrap();
+            log.lock()
+                .unwrap()
+                .push(serde_json::from_str(&text).unwrap());
+            fake_agent(seen.clone(), false)
+        }),
+    );
+    let fx = FxHarness::new(acp, &home, fx_settings());
+    let models = [("critic", 32768, false), ("m", 65536, true)];
+    for (id, context_window, supports_images) in models {
+        let spec = SessionSpec {
+            model: SessionModel {
+                name: format!("p/{id}"),
+                id: id.into(),
+                context_window,
+                supports_images,
+            },
+            ..spec(dir.path())
+        };
+        let mut session = fx.open(spec).await.unwrap();
+        session.close(Duration::ZERO).await;
+    }
+    let launched = launched.lock().unwrap();
+    assert_eq!(launched.len(), models.len());
+    for (settings, (id, context_window, supports_images)) in launched.iter().zip(models) {
+        assert_eq!(settings["models"]["p"], id);
+        let provider = &settings["providers"]["p"];
+        assert_eq!(provider["base_url"], "http://127.0.0.1:1/v1");
+        assert_eq!(
+            provider["model_metadata"],
+            serde_json::json!({ id: {
+                "context_window": context_window,
+                "max_output_tokens": 16384,
+                "supports_tool_use": true,
+                "supports_vision": supports_images,
+            }})
+        );
+    }
+}
+
+/// A session whose settings cannot be written is not started on old ones.
+#[tokio::test]
+async fn fx_refuses_a_session_whose_settings_cannot_be_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::write(&home, "a file, not a folder").unwrap();
+    let acp = harness_with(Arc::new(Mutex::new(Seen::default())), false);
+    let fx = FxHarness::new(acp, &home, fx_settings());
+    let error = fx.open(spec(dir.path())).await.err().unwrap();
+    assert!(
+        matches!(&error, HarnessError::Spawn(m) if m.starts_with("cannot write the fx settings")),
+        "{error}"
+    );
 }

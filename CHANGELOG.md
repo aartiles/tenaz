@@ -8,6 +8,29 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `tenaz init --model-for ROLE=ID` gives a role another model than
+  `--model`, for example a reviewer of another model family, served by the
+  same engine. It is repeatable, one role each, and
+  `--context-window-for ROLE=N` sets that model's window (default: the
+  run's). The map is kept in `run.json` under `config.roleModels`;
+  `tenaz status` names the roles it covers and gives the builder's context
+  budget, and `status --json` has `role_models`. An unknown or repeated
+  role, the run's own model, and a window for a role with no model of its
+  own are refused, and so are one model given different windows for two
+  roles and a map with `--harness pi`.
+
+  fx is launched with each session's model, and the session's context
+  budget is the `contextBudget` share of that model's window; the
+  session's journal record has `model`. Planners size cards for the
+  builder's model. After the engine runs out of memory, the lowered budget
+  is raised toward the largest model's budget. See ADR 0011.
+- With `--model-for`, every model of the run must be loaded before the
+  first session. Tenaz loads those that are not, as it does the run's
+  model, and `tenaz run` stops and names any it could not load. Around an
+  image job or a heavy job the lease frees every model and loads them all
+  back; a generic engine's stop and start commands run once for all of
+  them. A generic engine that serves only some of the run's models is not
+  started a second time: `tenaz run` stops and names the others.
 - A builder whose task needs work too heavy for a session (a render, a
   long build) writes `.tenaz/jobs/<TASK>.json` with the command, its time
   limit and why, and stops. Tenaz runs the command between sessions of the
@@ -59,6 +82,21 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- These apply to every run, with or without `--model-for`:
+  - A session whose context budget is already under the cap a memory
+    failure set (a card that asks for a small budget, for example) no
+    longer counts toward raising the cap: it did not test it.
+  - After an image job or a heavy job, a generic engine's start command
+    is skipped when the engine still serves the model.
+  - When the run's model is not served before the first session,
+    `tenaz run` says `Model <id> is not being served at <url>`, with why
+    loading it failed, instead of `the LLM could not be loaded: ...`
+    (`Model <id> is not being served (<error>)` when the engine does not
+    answer, as before).
+  - When freeing the LLM for an image or a heavy job fails and the engine
+    still answers without it, Tenaz loads it back at once (a generic
+    engine's start command runs) instead of leaving it to the engine
+    retry.
 - On macOS the sandbox lets the agent and `verify` write the per-user cache
   (`getconf DARWIN_USER_CACHE_DIR`), as they could already write the
   temporary directory beside it. Metal keeps its compiled shaders there:
@@ -82,6 +120,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A list of changed files put in a prompt is clipped to `statClipBytes`
+  (8000 bytes, a new parameter), at a whole line, with the number of lines
+  left out. Such lists went in whole: the reviewer's (ahead of a diff
+  clipped to `diffLimitBytes`) and its list of changed images, the files
+  an earlier bootstrap session left, and a retried builder's changes so
+  far. In the Digger 3D run of 2026-10-29 a task had committed 3,265
+  `node_modules` files: their list alone was about 200 KB, and fx refused
+  the review before sending it, as over the reviewer model's 65,536-token
+  window. Every rerun sent the same prompt.
 - With fx, an engine that runs out of memory part way through a reply is
   reported as such. Sushi sends the error inside a stream that started
   with status 200, which the proxy ignored, so the session read as a

@@ -52,8 +52,9 @@ You write the goal as a short brief. The **bootstrap** turns it into
 numbered requirements, a `verify` script and a list of small tasks, in three
 sessions, one step each, so no session has to plan everything at once. Each
 task then gets its own session: the agent builds it, Tenaz runs `verify`,
-and a fresh session of the same model reviews the diff. A review asks for
-changes only for a problem that matters for the requirements. A task that
+and a fresh session of the same model, or of the one `--model-for` gives
+the reviewer, reviews the diff. A review asks for changes only for a
+problem that matters for the requirements. A task that
 passes is committed; one that fails is undone and retried, split into
 smaller tasks or marked blocked. Its notes are kept, so a split knows what
 the failed attempts tried. A builder that finds its task cannot pass
@@ -89,10 +90,13 @@ project's own tests.
 - **Watchdogs.** Loops, repeated calls, idle turns and huge outputs get a
   steering message first, then the session is stopped. A file written
   outside the project is logged and the session told so.
-- **One resident model.** When the agent asks for an image, Tenaz unloads the
-  LLM, runs the image model, frees it and reloads the LLM. The agent's
-  requests wait meanwhile instead of failing. See [Images](#images) for
-  what that needs from your engine.
+- **Resident models.** When the agent asks for an image, Tenaz unloads
+  the LLM, runs the image model, frees it and reloads the LLM. With
+  `--model-for`, every model named must be loaded at once: Tenaz checks
+  before the first session (loading what it can, as for `--model`), does
+  not swap between them, and frees and reloads them all around an image
+  or a heavy job. The agent's requests wait meanwhile instead of failing.
+  See [Images](#images) for what that needs from your engine.
 - **Pause and resume.** Ctrl-C pauses after the current session; run again
   to continue.
 
@@ -297,8 +301,8 @@ interface the skill relies on:
 - `init` creates the project (or uses the directory you point it at),
   writes the goal to `.tenaz/brief.md`, adds the working protocol
   (`.tenaz/protocol.md`) and role prompts (`.tenaz/prompts/`), pins the
-  model, the agent, how to start the engine and the run parameters in
-  `.tenaz/run.json`, and makes the first commit. Everything it writes is
+  model (and any `--model-for` role models), the agent, how to start the
+  engine and the run parameters in `.tenaz/run.json`, and makes the first commit. Everything it writes is
   under `.tenaz/`, with its own `.tenaz/.gitignore`; the project's
   `AGENTS.md`, `CLAUDE.md` and `.gitignore` are left as they are. The
   wizard looks for engines on Sushi's port 12345, mlx-serve's 11234,
@@ -350,6 +354,16 @@ scripts and CI. With llama.cpp's server on its default port:
 tenaz init --project my-goal --brief brief.md --model my-model --base-url http://127.0.0.1:8080/v1 --context-window 65536
 ```
 
+`--model-for ROLE=ID` gives one role another model, for example
+`--model-for reviewer=Qwen3.8-27B` to have the diffs reviewed by another
+model family; the other roles keep `--model`. Repeat it for more roles
+(bootstrap, builder, reviewer, split, replan, final-reviewer), and add
+`--context-window-for ROLE=N` when that model's window is not
+`--context-window`; roles that name the same model get the same window.
+The engine serves every model named, all loaded at once: Tenaz does not
+swap between them. Not with `--harness pi` yet. See
+[ADR 0011](docs/adr/0011-a-model-per-role.md).
+
 `--vision` says the model reads images. `--set key=value` overrides a
 parameter; `tenaz params` lists them. Tenaz does not set the sampling
 temperature, so each engine uses its own default; `--set temperature=0`
@@ -391,10 +405,13 @@ depends on the engine:
   - `--engine-stop` frees the memory, for example by stopping the engine's
     process. Tenaz runs it, then waits until the model is no longer listed
     at `/v1/models` (or the engine stops answering).
-  - `--engine-start` brings the engine back with the same model. It must
-    return once the engine is launched, so start a server process in the
-    background. Tenaz then waits up to 20 minutes for the model to be
-    listed again.
+  - `--engine-start` brings the engine back with the same model (with
+    `--model-for`, every model of the run). It must return once the engine
+    is launched, so start a server process in the background. Tenaz runs
+    it once when the engine does not answer or has none of the models
+    loaded, then waits up to 20 minutes for them to be listed again. An
+    engine that has only some of them loaded is running, so it is not
+    started a second time: `tenaz run` names the missing ones.
 
   Both are whole command lines, run as your user. Without both, the LLM
   stays loaded and serving while the image renders, so the memory has to

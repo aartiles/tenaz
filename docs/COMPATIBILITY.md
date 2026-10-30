@@ -15,7 +15,7 @@ below; this page is about the real ones.
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 in RPC mode | Tested end to end to a COMPLETE run with the user's own `models.json`. The generated configuration, through the proxy, is tested against a mock engine only. No media tools (see below). |
 | | Other ACP agents | Should work through the same adapter; fx-specific settings are only applied to fx. Untested. |
 | Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve's load and unload through the API are tested against a mock only. |
-| | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run. The servers named here are untried. |
+| | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run, before the start was skipped for an engine that still serves the model (see Known gaps). The servers named here are untried. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
 | Media | ComfyUI images (`generate_image` over MCP) | Tested against a mock, and in real runs with FLUX models next to TensorFold and Sushi (8 and 10 images). Needs an API-format workflow with `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}` and `{{height}}` placeholders. |
@@ -95,6 +95,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   settings, credentials (`auth.json`), extensions and context files are
   not used: a provider you signed in to with `/login` needs its `apiKey`
   in `models.json` instead.
+- fx's `settings.json` is written again before each session, for that
+  session's model.
 - Skills: by default Pi sees only the skills pinned with `init --skill`,
   and none without them: it gets `--no-skills` plus each pinned skill.
   fx's skill catalog gets a 0-byte budget, so its prompt lists no skills,
@@ -104,6 +106,34 @@ above), so a 32k context is the practical floor (`contextFloor`).
   it finds by itself.
 
 ## Known gaps
+
+- **A model per role** (`--model-for`, ADR 0011). fx is launched with each
+  session's model: its `settings.json` is rewritten before the session
+  starts. Run once with fx 0.0.15 and mlx-serve 26.10.3 holding two
+  models on a 64 GB Mac (2026-10-29, stopped blocked at T003): a Ternary
+  Bonsai 2 27B (2-bit) builder with a 131072 window, and Qwen3.8-27B for
+  the other roles with 65536. In 31 sessions the journal names each
+  role's model, with a budget of 85196 tokens for the builder and 42598
+  for the rest. An earlier try with Flint int4 as the builder did not fit
+  beside Qwen3.8-27B and mlx-serve's prefix cache, and mlx-serve once
+  unloaded Qwen to load Flint (seen by the operator, not journaled). Not
+  checked whether fx writes `settings.json` itself. The check that every
+  model is loaded passed against that mlx-serve; the lease freeing and
+  reloading them around an image is tested with fake engines and a
+  stand-in server for the generic engine's commands, not against Kapitsa,
+  mlx-serve or a generic engine holding two models; so is a heavy job,
+  which goes through the same unload and reload. TensorFold's scripts
+  have not been run again since a generic engine that still serves its
+  model after an image is no longer started. The preflight's probes
+  (reasoning, cache, a tool call, an image) run on `--model` only, so a
+  role's model is never probed; and every role's model takes the run's
+  `--vision`, so a reviewer that cannot read images is still sent them
+  when the run's model can. Likewise one `diffLimitBytes` serves every
+  reviewer, whatever its window: in that run the reviewer's first request
+  was 30245 tokens of its 42598 budget, and the diff was half of Tenaz's
+  prompt (40.6k of 79.4k characters). Not with Pi: `init` refuses the
+  map, and Pi refuses a session on another model than the one it was set
+  up for.
 
 - **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
   job runner; the lease cycle with fake engines, and whole runs with a
@@ -118,6 +148,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
   (sandbox-exec, bwrap), with a GPU program, or around a real engine's
   unload and reload (Sushi). A crash of Tenaz during a job leaves the job
   running, in its own process group: stop it before resuming the run.
+
 - **An engine error inside a stream** (Sushi's `GenerationOutOfMemory`),
   with fx; Pi reports engine errors itself. Its shape, `data: {"error":
   {"message":…},"choices":[{"finish_reason":"error"}]}`, was read from
@@ -129,6 +160,21 @@ above), so a 32k context is the practical floor (`contextFloor`).
   read; how llama.cpp, vLLM or Ollama send an error inside a stream has
   not been checked. With Pi, an out-of-memory error is tested only with
   the scripted harness's own wording; no real one has been seen.
+- **A prompt the engine cannot fit.** mlx-serve 26.10.3 refuses a request
+  whose prefill does not fit in free GPU memory ("This prompt (30245
+  tokens) does not fit in GPU memory even after freeing the prefix cache
+  … It was refused before any work started."), which fx reports as
+  `ProviderError`; fx refuses a prompt it cannot compact into the model's
+  window with `ContextCapacityExceeded`. Tenaz matches neither message: it
+  journals the first as an engine error and the second as a harness exit,
+  and sends the same prompt again after each wait, up to `engineRetries`,
+  then stops the run as engine unavailable. Seen twice in the Digger 3D
+  run of 2026-10-29, seven sessions each time: reviewers on a
+  281k-character prompt that fx refused, then, with the lists of changed
+  files clipped, reviewers that mlx-serve refused at 39468 tokens after
+  three turns and then at 30245 tokens, before reading a file. The same
+  refusal also came mid-session in two earlier reviews: one session
+  finished anyway, and the other's rerun ran to the end.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.

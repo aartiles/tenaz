@@ -1,11 +1,13 @@
-//! The six session roles, all played by the same model one after another.
+//! The six session roles, played one after another by the run's model or
+//! by the one `run.json` pins for the role (ADR 0011).
 
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Ordered as [`Role::ALL`], the order a run meets them in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
     Bootstrap,
@@ -80,5 +82,15 @@ impl FromStr for Role {
             .into_iter()
             .find(|r| r.as_str() == s)
             .ok_or_else(|| format!("unknown role {s}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roles_are_ordered_as_all_lists_them() {
+        assert!(Role::ALL.windows(2).all(|w| w[0] < w[1]));
     }
 }

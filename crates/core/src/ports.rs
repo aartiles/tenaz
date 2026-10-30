@@ -21,6 +21,17 @@ pub struct HarnessInfo {
     pub version: String,
 }
 
+/// The model a session runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionModel {
+    /// The model as the harness names it (`provider/id`), as in `run.json`.
+    pub name: String,
+    /// The model as the engine lists it.
+    pub id: String,
+    pub context_window: u64,
+    pub supports_images: bool,
+}
+
 /// How to open one session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSpec {
@@ -40,6 +51,9 @@ pub struct SessionSpec {
     pub thinking_log: Option<PathBuf>,
     /// Where the harness's stderr is appended.
     pub stderr_log: Option<PathBuf>,
+    /// The model to run: the run's, or the one its role is pinned to. A
+    /// harness runs this model or refuses the session.
+    pub model: SessionModel,
 }
 
 /// The runner's answer to a permission request.
@@ -212,6 +226,18 @@ pub enum EngineError {
     Timeout(String),
 }
 
+impl EngineError {
+    /// The same error, saying it was about `model`.
+    #[must_use]
+    pub fn about(self, model: &str) -> Self {
+        match self {
+            Self::Unreachable(m) => Self::Unreachable(format!("{model}: {m}")),
+            Self::Refused(m) => Self::Refused(format!("{model}: {m}")),
+            Self::Timeout(m) => Self::Timeout(format!("{model}: {m}")),
+        }
+    }
+}
+
 /// What the engine reports about one model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelState {
@@ -219,6 +245,18 @@ pub struct ModelState {
     pub loaded: bool,
     pub ready: bool,
     pub context_length: Option<u64>,
+}
+
+impl ModelState {
+    /// Loaded and ready to serve requests.
+    pub fn serving(&self) -> bool {
+        self.loaded && self.ready
+    }
+}
+
+/// Whether `listed` has `id` loaded and ready.
+pub fn serves(listed: &[ModelState], id: &str) -> bool {
+    listed.iter().any(|m| m.id == id && m.serving())
 }
 
 /// An LLM engine the runner can load and unload.
@@ -231,8 +269,29 @@ pub trait EngineAdapter: Send + Sync {
     async fn load(&self, model: &str) -> Result<(), EngineError>;
     /// Returns when the memory is released.
     async fn unload(&self, model: &str) -> Result<(), EngineError>;
+    /// Loads each of `models` the engine does not list as ready, and
+    /// returns when all of them are. An engine that loads its models
+    /// together (one start command) overrides it.
+    async fn load_all(&self, models: &[String]) -> Result<(), EngineError> {
+        let listed = self.models().await.unwrap_or_default();
+        for id in models {
+            if !serves(&listed, id) {
+                self.load(id).await.map_err(|e| e.about(id))?;
+            }
+        }
+        Ok(())
+    }
+    /// Unloads each of `models`, and returns when their memory is
+    /// released. An engine that frees its models together (one stop
+    /// command) overrides it.
+    async fn unload_all(&self, models: &[String]) -> Result<(), EngineError> {
+        for id in models {
+            self.unload(id).await.map_err(|e| e.about(id))?;
+        }
+        Ok(())
+    }
     /// Whether `unload` and a later `load` can work. When they cannot, a
-    /// media job runs with the LLM still loaded.
+    /// media job or a heavy job runs with the LLM still loaded.
     fn can_unload(&self) -> bool {
         true
     }

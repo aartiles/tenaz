@@ -1,6 +1,7 @@
 //! `tenaz init`: the plan, from flags or from the setup wizard, then the
 //! project, its placement (a worktree, in place or fresh) and run.json.
 
+use std::collections::BTreeMap;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
@@ -9,6 +10,8 @@ use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, ModelConfig};
 use tenaz_core::orchestrator::{InitOptions, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
+use tenaz_core::role::Role;
+use tenaz_core::role_models::{self, RoleFlags, RolePick, RunDefaults};
 use tenaz_pi::models::ModelEntry;
 
 use super::{
@@ -92,6 +95,14 @@ pub(crate) struct InitArgs {
     /// Default 131072; with --harness pi, the model's contextWindow in models.json.
     #[arg(long)]
     pub(crate) context_window: Option<u64>,
+    /// Another model for one role, `ROLE=ID` (repeatable); the engine must
+    /// serve it next to --model. Not with --harness pi yet.
+    #[arg(long = "model-for", value_name = "ROLE=ID")]
+    pub(crate) models_for: Vec<String>,
+    /// The context window of a --model-for model, `ROLE=N` (repeatable;
+    /// default: the --model's window; the same for roles on one model).
+    #[arg(long = "context-window-for", value_name = "ROLE=N")]
+    pub(crate) context_windows_for: Vec<String>,
     /// The model reads images (with --harness pi, read from models.json when listed there).
     #[arg(long)]
     pub(crate) vision: bool,
@@ -170,11 +181,21 @@ impl InitArgs {
             ("provider", self.provider.clone()),
             ("base-url", self.base_url.clone()),
             ("context-window", self.context_window.map(|c| c.to_string())),
-            (
-                "thinking",
-                (self.thinking != "medium").then(|| self.thinking.clone()),
-            ),
         ];
+        flags.extend(
+            self.models_for
+                .iter()
+                .map(|p| ("model-for", Some(p.clone()))),
+        );
+        flags.extend(
+            self.context_windows_for
+                .iter()
+                .map(|p| ("context-window-for", Some(p.clone()))),
+        );
+        flags.push((
+            "thinking",
+            (self.thinking != "medium").then(|| self.thinking.clone()),
+        ));
         flags.extend(self.sets.iter().map(|pair| ("set", Some(pair.clone()))));
         flags.extend(
             self.skills
@@ -234,6 +255,8 @@ pub(crate) struct InitPlan {
     pub(crate) harness: HarnessKind,
     pub(crate) harness_bin: Option<PathBuf>,
     pub(crate) model: String,
+    /// The roles `--model-for` gives another model.
+    pub(crate) role_picks: BTreeMap<Role, RolePick>,
     pub(crate) provider: String,
     pub(crate) api: EngineApi,
     /// The goal typed in the wizard, written as the brief.
@@ -264,6 +287,14 @@ impl InitPlan {
             anyhow::bail!("--project is required");
         };
         let harness = args.harness.map_or(HarnessKind::Fx, HarnessArg::kind);
+        let flags = RoleFlags {
+            models: &args.models_for,
+            windows: &args.context_windows_for,
+        };
+        let role_picks = flags.picks(&model)?;
+        if harness == HarnessKind::Pi && !role_picks.is_empty() {
+            anyhow::bail!("--model-for is not supported with --harness pi yet");
+        }
         let provider = args
             .provider
             .clone()
@@ -273,6 +304,7 @@ impl InitPlan {
             harness,
             harness_bin: args.harness_bin(harness),
             model,
+            role_picks,
             provider,
             api: engine_api(&args, engine),
             brief_text,
@@ -432,6 +464,12 @@ fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
         plan.args.base_url.clone(),
         plan.args.context_window,
     );
+    let run = RunDefaults {
+        provider: &plan.provider,
+        context_window,
+        input: &input,
+    };
+    let role_models = role_models::pin(&plan.role_picks, run);
     Ok(ModelConfig {
         harness: plan.harness,
         harness_version,
@@ -442,6 +480,7 @@ fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
         context_window,
         input,
         thinking: Some(plan.args.thinking.clone()),
+        role_models,
     })
 }
 
@@ -740,5 +779,71 @@ mod tests {
         };
         assert!(error(&["tenaz", "init", "--project", "p"]).contains("--model"));
         assert!(error(&["tenaz", "init", "--model", "m"]).contains("--project"));
+    }
+
+    #[test]
+    fn the_command_line_gives_the_role_models_back_after_the_context_window() {
+        let args = init_args(&with(&[
+            "--context-window",
+            "65536",
+            "--model-for",
+            "reviewer=r",
+            "--model-for",
+            "split=s",
+            "--context-window-for",
+            "reviewer=32768",
+            "--thinking",
+            "high",
+        ]));
+        assert_eq!(
+            args.command_line(),
+            "tenaz init --project p --model m --context-window 65536 \
+             --model-for reviewer=r --model-for split=s --context-window-for reviewer=32768 \
+             --thinking high"
+        );
+    }
+
+    fn plan_error(extra: &[&'static str]) -> String {
+        InitPlan::from_args(init_args(&with(extra)), None, None)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_plan_keeps_the_role_picks() {
+        let line = with(&[
+            "--model-for",
+            "reviewer=r",
+            "--context-window-for",
+            "reviewer=32768",
+        ]);
+        assert_eq!(
+            plan(&line, None).role_picks.into_iter().collect::<Vec<_>>(),
+            vec![(
+                Role::Reviewer,
+                RolePick {
+                    id: "r".into(),
+                    context_window: Some(32768)
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn role_picks_are_refused_with_pi() {
+        assert_eq!(
+            plan_error(&["--harness", "pi", "--model-for", "reviewer=r"]),
+            "--model-for is not supported with --harness pi yet"
+        );
+    }
+
+    /// The picks are checked against `--model` as given.
+    #[test]
+    fn a_role_pick_of_the_run_s_own_model_is_refused() {
+        assert_eq!(
+            plan_error(&["--model-for", "reviewer=m"]),
+            "--model-for reviewer=m names the run's --model; leave it out"
+        );
     }
 }

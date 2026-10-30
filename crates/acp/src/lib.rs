@@ -30,7 +30,9 @@ pub struct McpEndpoint {
     pub url: String,
 }
 
-/// The harness.
+/// The harness. It runs the model its agent is set up with and ignores
+/// `SessionSpec.model`: a harness that runs each session's model wraps it,
+/// as [`fx::FxHarness`] does.
 #[derive(Clone)]
 pub struct AcpHarness {
     info: HarnessInfo,

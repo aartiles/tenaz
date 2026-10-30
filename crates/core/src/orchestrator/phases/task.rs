@@ -565,11 +565,11 @@ impl Runner {
             return Ok(Vec::new());
         };
         let mut extra = vec![("Previous attempt failed".to_owned(), failure)];
-        let diff = self.deps.vcs.diff_stat(&self.current_base(), None, true)?;
-        if !diff.trim().is_empty() {
+        let changed = self.changed_files(&self.current_base(), None, true)?;
+        if !changed.is_empty() {
             extra.push((
                 "Changes already made since the task started (kept)".to_owned(),
-                diff.trim().to_owned(),
+                changed,
             ));
         }
         Ok(extra)

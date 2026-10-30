@@ -19,7 +19,8 @@ const TOOL_PROBE_WORD: &str = "marmalade-4817";
 
 impl Runner {
     pub(crate) async fn preflight(&mut self) -> Result<Preflight, RunError> {
-        let vision = self.ledger.config.supports_images();
+        let model = self.ledger.config.run_model();
+        let vision = model.supports_images;
         let dir = tempfile::Builder::new()
             .prefix("tenaz-preflight-")
             .tempdir()?;
@@ -37,6 +38,7 @@ impl Runner {
                 label: "preflight",
                 prompts: &prompts,
                 cwd,
+                model,
                 watch: None,
                 persist: false,
                 own_checks: None,

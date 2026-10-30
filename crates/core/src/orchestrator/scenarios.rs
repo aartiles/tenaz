@@ -4,9 +4,11 @@
 mod conflict;
 mod harness_exit;
 mod job;
+mod role_models;
 mod scripted_run;
 mod stop_grace;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,6 +49,7 @@ fn fake_project(work: &Path, overrides: &[&str]) -> (Project, Arc<SnapshotVcs>) 
         context_window: 131_072,
         input: vec!["text".into()],
         thinking: Some("medium".into()),
+        role_models: BTreeMap::new(),
     };
     let templates =
         Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();

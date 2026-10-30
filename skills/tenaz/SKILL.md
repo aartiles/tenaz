@@ -59,6 +59,12 @@ doctor found, or ask the user when it lists several. A person at a
 terminal can instead run `tenaz init` with no `--model` and answer the
 setup wizard's questions; you cannot, because it needs a terminal.
 
+When the user wants another model for some roles, for example a reviewer
+of another family, add `--model-for reviewer=<id>` (repeatable, one role
+each) and `--context-window-for reviewer=<tokens>` when its window
+differs; roles on the same model need the same window. The engine must
+have every model named loaded at once. Not with `--harness pi`.
+
 ## Write the brief
 
 The brief is all the local model gets besides the code, and it is smaller

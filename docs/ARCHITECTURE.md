@@ -37,6 +37,7 @@ Pure modules, each unit-tested without I/O:
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal). |
 | `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |
 | `role` | The session roles, their prompt paths and what a steered session is asked to write before it stops. |
+| `role_models` | The `--model-for ROLE=ID` map: its checks at `init` and the models pinned in `run.json` (ADR 0011). |
 | `cache_report` | Whether the engine's usage names its cached tokens, noted by the engine proxy for the preflight. |
 | `effort` | The dial that lowers the reasoning effort for one session after a reply cut at the output limit. |
 | `ownership` | Which paths each role may write; the rest is reverted. |
@@ -91,7 +92,7 @@ module with unit tests turns the harness's own records into those events.
 | | `tenaz-acp` (fx) | `tenaz-pi` (Pi) |
 |---|---|---|
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
-| Per session | `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
+| Per session | `settings.json` written for the session's model, then `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
 | Prompt | `session/prompt` | `{"id":"prompt-N","type":"prompt","message":...}`; a `response` that is not `success` or whose disposition is `handled` becomes `PromptRejected` |
 | Steer | fx's extension: a `session/prompt` with `_meta.fx.steer: true` while a prompt runs; otherwise dropped | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
 | Abort | `session/cancel` | `clear_queue` then `abort`; `agent_settled {aborted:true}` follows |

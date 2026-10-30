@@ -833,6 +833,7 @@ mod tests {
             context_window: 8192,
             input: vec![],
             thinking: None,
+            role_models: BTreeMap::new(),
         };
         let ledger = tenaz_core::ledger::Ledger::new(
             "t".into(),

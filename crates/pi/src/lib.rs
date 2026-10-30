@@ -225,6 +225,15 @@ impl Harness for PiHarness {
     }
 
     async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
+        // Pi takes its model at launch; a session asking for another is
+        // refused rather than run on the wrong one (ADR 0011).
+        let launched = self.launch.model.split_once('/').map(|(_, id)| id);
+        if launched != Some(spec.model.id.as_str()) {
+            return Err(HarnessError::Spawn(format!(
+                "Pi was set up for {}, not {}; a model per role is not supported with Pi yet",
+                self.launch.model, spec.model.name
+            )));
+        }
         let (program, args) = tenaz_core::util::wrap_command(
             &self.launch.wrapper,
             &self.launch.binary,

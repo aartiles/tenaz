@@ -1,7 +1,7 @@
 ROLE: PLANNER (bootstrap)
 
-Turn `.tenaz/brief.md` into a plan that fresh, context-limited sessions of
-the same model can carry out one small task at a time. The bootstrap writes
+Turn `.tenaz/brief.md` into a plan that fresh, context-limited builder
+sessions can carry out one small task at a time. The bootstrap writes
 only the plan and a minimal `verify`. Do not build the project or implement
 features: the first task cards do that.
 

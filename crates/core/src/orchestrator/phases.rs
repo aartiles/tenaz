@@ -45,6 +45,19 @@ const AMENDS_TITLE: &str = "Checks this card may amend";
 pub(crate) const CONFLICTS_TITLE: &str = "Declared conflicts";
 
 impl Runner {
+    /// The files changed from `from` to `to` (the working tree when
+    /// `None`), as `git diff --stat` lists them, cut to `statClipBytes` at
+    /// a whole line. Empty when none changed.
+    fn changed_files(
+        &self,
+        from: &str,
+        to: Option<&str>,
+        exclude_agent: bool,
+    ) -> Result<String, RunError> {
+        let stat = self.deps.vcs.diff_stat(from, to, exclude_agent)?;
+        Ok(clip_lines(stat.trim(), self.params.stat_clip_bytes))
+    }
+
     /// `./verify` with `args`, judged as its contract says.
     pub(crate) async fn run_verify(&self, args: &[&str]) -> VerifyOutcome {
         let timeout = Duration::from_secs(self.params.verify_timeout_sec);
@@ -85,7 +98,7 @@ impl Runner {
     fn card_sizing(&self) -> (String, String) {
         (
             briefing::CARD_SIZING_TITLE.to_owned(),
-            briefing::card_sizing(self.ledger.configured_budget_tokens()),
+            briefing::card_sizing(self.ledger.builder_budget_tokens()),
         )
     }
 
@@ -199,5 +212,40 @@ impl Runner {
             &briefing::build(role, &b),
             self.params.verify_path(),
         ))
+    }
+}
+
+/// Cuts `text` to the whole lines that fit in `limit` bytes and says how
+/// many lines were left out, for a list such as a diff's file stat.
+fn clip_lines(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_owned();
+    }
+    let (mut kept, mut left_out) = (0, 0);
+    for line in text.split_inclusive('\n') {
+        if left_out == 0 && kept + line.len() <= limit {
+            kept += line.len();
+        } else {
+            left_out += 1;
+        }
+    }
+    let lines = if left_out == 1 { "line" } else { "lines" };
+    format!("{}[... clipped {left_out} {lines}]", &text[..kept])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clip_lines;
+
+    #[test]
+    fn clip_lines_keeps_whole_lines_and_counts_the_rest() {
+        assert_eq!(clip_lines("a\nb\n", 10), "a\nb\n");
+        assert_eq!(
+            clip_lines("ab\ncd\nef\n", 7),
+            "ab\ncd\n[... clipped 1 line]"
+        );
+        assert_eq!(clip_lines("abcdef\ng", 3), "[... clipped 2 lines]");
+        // Lines are cut whole, so a character is never split.
+        assert_eq!(clip_lines("é\r\nü\r\n", 5), "é\r\n[... clipped 1 line]");
     }
 }
