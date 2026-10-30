@@ -121,7 +121,9 @@ was refused.
   then block instead of being clipped.
 
 A. A share keeps room for the files the reviewer reads, on any window,
-and old `run.json` files load with the default.
+and old `run.json` files load with the default. The share is of the
+reviewer's budget under the run's `context_cap`: when the engine says it
+holds less, the diff shrinks with the rest of the session.
 
 ### 4. A check before a session opens
 

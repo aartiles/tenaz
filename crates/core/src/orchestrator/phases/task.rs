@@ -400,8 +400,9 @@ impl Runner {
         Ok(LoadedCard { card, text })
     }
 
-    /// The builder's session. A paused session, or one cut short by the
-    /// engine, gives its attempt back: it is not a failed one.
+    /// The builder's session. A paused session, one cut short by the
+    /// engine, or one whose prompt is too large for its model gives its
+    /// attempt back: it is not a failed one.
     pub(super) async fn builder_session(
         &mut self,
         card: &TaskCard,

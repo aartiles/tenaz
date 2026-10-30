@@ -8,12 +8,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, run};
 use crate::ledger::{JournalRecord, Ledger, Phase, SessionRecord};
-use crate::params::RunParams;
 use crate::project::Project;
 use crate::role::Role;
 use crate::role_models::RoleModel;
 use crate::testing::{ScriptedHarness, VirtualClock};
-use crate::util::CODE_BYTES_PER_TOKEN;
 
 /// A run blocked by a refused prompt: the project, its log and why.
 struct Blocked {
@@ -215,12 +213,17 @@ async fn a_prompt_over_its_budget_blocks_the_run_before_the_session() {
 
 /// The cap the engine set after it ran out of memory is not what a prompt
 /// must fit: it is raised again, and the engine refuses what it cannot
-/// hold. A reviewer prompt over a low cap still runs.
+/// hold. A reviewer prompt over a low cap still runs: under the 8192
+/// reserve alone, the cap is below every prompt's estimate.
 #[tokio::test(start_paused = true)]
 async fn a_prompt_over_a_lowered_cap_still_runs() {
-    let (_work, project, log) = play(ScriptedHarness::default(), &[], |ledger| {
-        ledger.context_cap = Some(9000);
-    })
+    let (_work, project, log) = play(
+        ScriptedHarness::default(),
+        &["harnessReserveTokens=8192"],
+        |ledger| {
+            ledger.context_cap = Some(8000);
+        },
+    )
     .await;
     assert_eq!(
         project.load_ledger().unwrap().phase,
@@ -230,16 +233,13 @@ async fn a_prompt_over_a_lowered_cap_still_runs() {
     let review = sessions(&project, Role::Reviewer)
         .next()
         .expect("T001 is reviewed");
-    assert_eq!(review.context_budget, 9000, "{log}");
-    // The check's estimate, as `first_request_tokens` makes it.
-    let estimate = review.prompt_chars.div_ceil(CODE_BYTES_PER_TOKEN) as u64
-        + RunParams::default().harness_reserve_tokens;
-    assert!(estimate > 9000, "{estimate}");
+    assert_eq!(review.context_budget, 8000, "{log}");
 }
 
 /// A session paused mid-turn is continued on the next run. If its prompt
-/// is then over the budget, the run blocks and still owes the
-/// continuation, so `--resume` after the fix continues the work.
+/// is then over the budget, the run blocks, still owes the continuation
+/// and does not charge the attempt, so `--resume` after the fix continues
+/// the work.
 #[tokio::test(start_paused = true)]
 async fn a_blocked_continuation_is_still_owed() {
     let work = tempfile::tempdir().unwrap();
@@ -279,4 +279,6 @@ async fn a_blocked_continuation_is_still_owed() {
     assert!(ledger.pending_continuation, "{log}");
     let builders = sessions(&project, Role::Builder).count();
     assert_eq!(builders, 1, "{log}");
+    let card = project.read(".tenaz/tasks/T001.md").unwrap();
+    assert!(card.contains("attempts: 0"), "{card}");
 }
