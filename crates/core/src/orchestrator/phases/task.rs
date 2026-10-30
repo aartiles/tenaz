@@ -415,7 +415,10 @@ impl Runner {
             context_tokens: card.budget.tokens,
         };
         let result = self.session(Role::Builder, prompt, &ctx).await;
-        if let Err(RunError::Paused(_) | RunError::EngineUnavailable(_)) = &result {
+        if let Err(
+            RunError::Paused(_) | RunError::EngineUnavailable(_) | RunError::PromptTooLarge(_),
+        ) = &result
+        {
             self.project.set_attempts(&card.id, attempt - 1)?;
         }
         result

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use crate::briefing::without_map;
 use crate::ledger::{JournalRecord, SessionRecord};
+use crate::ports::SessionModel;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
@@ -86,6 +87,7 @@ impl Runner {
                     // there counts toward the same retries.
                     let _ = self.wait_for_engine("after an engine error").await;
                 }
+                Step::PromptRefused => return Err(self.prompt_refused(&result.record, role)),
                 Step::GiveUp(why) => return Err(self.give_up(&label, why)),
             }
         }
@@ -127,6 +129,17 @@ impl Runner {
             }
         };
         self.log(&format!("  {label}: {why}; a fresh session continues the same work ({count}/{limit}, not counted as an attempt)"));
+    }
+
+    /// The error that ends the run when the harness refused `record`'s prompt.
+    fn prompt_refused(&self, record: &SessionRecord, role: Role) -> RunError {
+        let model = self.ledger.config.model_for(role);
+        RunError::PromptTooLarge(prompt_refused_reason(
+            &record.label,
+            role,
+            &model,
+            record.prompt_chars,
+        ))
     }
 
     /// The error that ends the run when a session keeps failing in the engine.
@@ -328,6 +341,29 @@ fn retry_notice(cause: FailureCause) -> Option<String> {
     }
 }
 
+/// Why the run stops at `label`, whose prompt of `prompt_chars` the harness
+/// refused for `role`'s `model`: what was refused, and what to change. A
+/// review can be made smaller; a model is changed in a new run only.
+fn prompt_refused_reason(
+    label: &str,
+    role: Role,
+    model: &SessionModel,
+    prompt_chars: usize,
+) -> String {
+    let larger = format!(
+        "give the {role} a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+    );
+    let advice = if role == Role::Reviewer {
+        format!("lower params.diffLimitBytes in .tenaz/run.json and run with --resume, or {larger}")
+    } else {
+        larger
+    };
+    format!(
+        "the harness refused the {role} prompt of {label}, {prompt_chars} characters; {}'s window is {} tokens. To go on, {advice}",
+        model.name, model.context_window
+    )
+}
+
 /// Why the run stops rerunning `label`, under the run's `context_cap`.
 fn give_up_reason(label: &str, why: GiveUp, context_cap: Option<u64>) -> String {
     match why {
@@ -428,6 +464,32 @@ mod tests {
         assert_eq!(
             give_up_reason("020-reviewer-T003", why, None),
             "7 sessions in a row ended with engine errors (last: 020-reviewer-T003)"
+        );
+    }
+
+    fn qwen() -> SessionModel {
+        SessionModel {
+            name: "mlx-serve/Qwen3.8-27B".into(),
+            id: "Qwen3.8-27B".into(),
+            context_window: 65_536,
+            supports_images: false,
+        }
+    }
+
+    /// The reviewer of T001 in the Digger 3D run of 2026-10-29.
+    #[test]
+    fn a_refused_review_names_its_size_and_window_and_what_to_lower() {
+        assert_eq!(
+            prompt_refused_reason("007-reviewer-T001", Role::Reviewer, &qwen(), 281_465),
+            "the harness refused the reviewer prompt of 007-reviewer-T001, 281465 characters; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+        );
+    }
+
+    #[test]
+    fn a_refused_prompt_of_another_role_asks_for_a_larger_window_only() {
+        assert_eq!(
+            prompt_refused_reason("005-builder-T001", Role::Builder, &qwen(), 300_000),
+            "the harness refused the builder prompt of 005-builder-T001, 300000 characters; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the builder a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
         );
     }
 

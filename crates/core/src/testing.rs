@@ -20,7 +20,7 @@ pub use clock::VirtualClock;
 pub use harness::{ScriptedConflict, ScriptedHarness, ScriptedJob};
 pub use jobs::ScriptedJobs;
 pub use notifier::SilentNotifier;
-pub use player::{OUTSIDE, VERIFY};
+pub use player::{OUTSIDE, VERIFY, fx_context_exceeded_exit};
 pub use replay::Replay;
 pub use vcs::SnapshotVcs;
 pub use vcs_contract::MakeVcs;

@@ -364,8 +364,22 @@ impl SessionMetrics {
     pub fn capacity_limit(&self) -> Option<u64> {
         self.capacity_limits.iter().copied().min()
     }
+
+    /// The harness refused the prompt as more than the model's window can
+    /// hold: fx ends with `ContextCapacityExceeded` before any reply. The
+    /// same prompt is refused again (ADR 0012). After a reply, fx failed to
+    /// compact what the session read since, and a rerun may pass.
+    pub fn prompt_refused(&self) -> bool {
+        self.assistant.is_empty()
+            && self
+                .harness_exit
+                .as_deref()
+                .is_some_and(|exit| exit.contains(CONTEXT_EXCEEDED))
+    }
 }
 
+/// What fx says when a prompt does not fit the model's window.
+const CONTEXT_EXCEEDED: &str = "ContextCapacityExceeded";
 static CAPACITY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Maximum context[^:]*:\s*(\d+) tokens").expect("static regex"));
 static OUT_OF_MEMORY: LazyLock<Regex> = LazyLock::new(|| {
@@ -548,6 +562,40 @@ mod tests {
             ..Default::default()
         };
         assert!(!settled.ended_early());
+    }
+
+    fn exited(note: &str) -> SessionMetrics {
+        SessionMetrics {
+            harness_exit: Some(note.to_owned()),
+            ..SessionMetrics::default()
+        }
+    }
+
+    /// fx 0.0.15 on a reviewer prompt of 281465 characters, in the
+    /// Digger 3D run of 2026-10-29.
+    #[test]
+    fn a_prompt_the_harness_refused_is_told_from_other_exits() {
+        assert!(exited(&crate::testing::fx_context_exceeded_exit()).prompt_refused());
+        for other in [
+            "the harness ended before the turn settled (exit code 1); its stderr was empty",
+            MLX_SERVE_REFUSAL,
+        ] {
+            assert!(!exited(other).prompt_refused(), "{other}");
+        }
+        assert!(!SessionMetrics::default().prompt_refused());
+    }
+
+    /// After a reply the prompt fitted: fx failed to compact what came
+    /// later, which a rerun may not meet again.
+    #[test]
+    fn a_context_exceeded_after_a_reply_is_not_a_refused_prompt() {
+        let mut metrics = exited(&crate::testing::fx_context_exceeded_exit());
+        metrics.assistant.push(AssistantTurn {
+            stop_reason: StopReason::ToolUse,
+            usage: Usage::default(),
+            thinking: 0,
+        });
+        assert!(!metrics.prompt_refused());
     }
 
     #[test]

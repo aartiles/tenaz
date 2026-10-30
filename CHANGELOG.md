@@ -120,6 +120,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A prompt the harness refuses as larger than the model's window (fx's
+  `ContextCapacityExceeded` before any reply) blocks the run at once, with
+  a reason that starts `prompt too large:`, names the session, its role,
+  its model, the model's window and the prompt's size, and says what to
+  change. The same error after a reply is rerun as before. Tenaz used to
+  send the same prompt again up to `engineRetries` times and then block as
+  "engine unavailable": in the Digger 3D run of 2026-10-29 that took seven
+  sessions and about 45 minutes. A builder whose prompt is refused is not
+  charged the attempt. See ADR 0012.
 - mlx-serve's refusal of a prompt that "does not fit in GPU memory" is
   treated as the engine running out of memory, rather than as an unnamed
   engine error: the session's log line says `failed (engine out of

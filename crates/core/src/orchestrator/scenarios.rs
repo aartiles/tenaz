@@ -4,6 +4,7 @@
 mod conflict;
 mod harness_exit;
 mod job;
+mod prompt_fit;
 mod role_models;
 mod scripted_run;
 mod stop_grace;

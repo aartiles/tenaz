@@ -172,14 +172,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   matcher is tested with the recorded message, not yet against mlx-serve
   itself; the error body around it (`error.message`) is assumed, not
   captured, and so is whether it comes as an HTTP error or inside the
-  stream. Tenaz does not match fx's message: it journals it as a harness
-  exit and reruns the same prompt the same way. Seen twice in the Digger 3D
-  run of 2026-10-29, seven sessions each time: reviewers on a
-  281k-character prompt that fx refused, then, with the lists of changed
-  files clipped, reviewers that mlx-serve refused at 39468 tokens after
-  three turns and then at 30245 tokens, before reading a file. The same
-  refusal also came mid-session in two earlier reviews: one session
-  finished anyway, and the other's rerun ran to the end.
+  stream. fx's refusal before any reply blocks the run at once (`prompt
+  too large:`), since the same prompt would be refused again; this is
+  tested with the scripted harness and the stderr fx left in that run,
+  not yet against fx itself. Seen twice in the Digger 3D run of
+  2026-10-29, seven sessions each time: reviewers on a 281k-character
+  prompt that fx refused, then, with the lists of changed files clipped,
+  reviewers that mlx-serve refused at 39468 tokens after three turns and
+  then at 30245 tokens, before reading a file. The same refusal also came
+  mid-session in two earlier reviews: one session finished anyway, and
+  the other's rerun ran to the end.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.

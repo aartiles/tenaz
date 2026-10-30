@@ -61,6 +61,9 @@ pub(crate) enum Step {
     /// The engine can hold `limit` tokens: lower the budget and rerun;
     /// `count` of `capacityRetries`.
     LowerCap { limit: u64, count: u32 },
+    /// The harness refused the prompt as larger than the model's window: a
+    /// rerun would send the same prompt, so the run stops (ADR 0012).
+    PromptRefused,
     /// Wait and rerun the same session; `retry` reruns came before it.
     Retry { retry: u32, cause: FailureCause },
     /// Stop rerunning: the run cannot go on with this engine.
@@ -124,6 +127,9 @@ impl Recovery {
         self.note = std::mem::take(&mut self.note).without_image();
         if !metrics.engine_failed() {
             return Step::Done;
+        }
+        if metrics.prompt_refused() {
+            return Step::PromptRefused;
         }
         // A prompt larger than the engine's current memory allows fails the same way
         // after any wait. If the reported maximum is still usable, lower the budget and
@@ -548,6 +554,45 @@ mod tests {
         };
         let (_, steps) = steps(Role::Builder, &[after_harness_exit(out_of_memory)]);
         assert_eq!(steps, [retry(0, FailureCause::OutOfMemory)]);
+    }
+
+    /// fx refused a reviewer prompt seven times in the Digger 3D run of
+    /// 2026-10-29: the first refusal stops the reruns.
+    #[test]
+    fn a_prompt_the_harness_refused_is_not_rerun() {
+        let refused = SessionMetrics {
+            harness_exit: Some(crate::testing::fx_context_exceeded_exit()),
+            exit_code: Some(1),
+            ..SessionMetrics::default()
+        };
+        let (_, alone) = steps(Role::Reviewer, std::slice::from_ref(&refused));
+        assert_eq!(alone, [Step::PromptRefused]);
+        // Ahead of a capacity limit the engine may also have named.
+        let with_limit = SessionMetrics {
+            capacity_limits: vec![61_488],
+            ..refused
+        };
+        let (_, limited) = steps(Role::Reviewer, &[with_limit]);
+        assert_eq!(limited, [Step::PromptRefused]);
+    }
+
+    /// After a reply the prompt fitted: fx failed on what came later, and
+    /// the session is rerun as any harness exit.
+    #[test]
+    fn a_context_exceeded_after_a_reply_is_rerun() {
+        let after_a_reply = SessionMetrics {
+            harness_exit: Some(crate::testing::fx_context_exceeded_exit()),
+            exit_code: Some(1),
+            assistant: vec![crate::session::AssistantTurn {
+                stop_reason: StopReason::ToolUse,
+                usage: crate::session::Usage::default(),
+                thinking: 0,
+            }],
+            last_stop_reason: Some(StopReason::ToolUse),
+            ..SessionMetrics::default()
+        };
+        let (_, steps) = steps(Role::Builder, &[after_a_reply]);
+        assert_eq!(steps, [retry(0, FailureCause::Harness)]);
     }
 
     /// The cause is the last session's, whatever came before it.

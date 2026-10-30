@@ -60,6 +60,32 @@ pub(super) fn field<'a>(prompt: &'a str, name: &str) -> Option<&'a str> {
 /// temporary directories the tests run in.
 pub const OUTSIDE: &str = "/elsewhere";
 
+/// What fx 0.0.15 left on stderr, through tenaz-acp, when it refused a
+/// prompt larger than the model's window: the Digger 3D run of
+/// 2026-10-29, with the cargo registry path cut.
+const FX_CONTEXT_EXCEEDED: &str = "[tenaz] the agent connection ended: ContextCapacityExceeded: {\n  \"spawned_at\": \"…/agent-client-protocol-3.4.0/src/session.rs:1171:14\",\n  \"data\": null\n}\n";
+
+/// The session's `harness_exit` when fx refused its prompt, as the runner
+/// notes it from [`FX_CONTEXT_EXCEEDED`].
+pub fn fx_context_exceeded_exit() -> String {
+    format!(
+        "the harness ended before the turn settled (exit code 1); stderr tail:\n{}",
+        FX_CONTEXT_EXCEEDED.trim()
+    )
+}
+
+/// The verdict of a review the script lets finish: the first review of a
+/// task the script names rejects it, else it is accepted.
+fn verdict(script: &ScriptedHarness, first_of: impl Fn(&Option<String>) -> bool) -> &'static str {
+    if first_of(&script.rejected_review) {
+        "Verdict: CHANGES\n- [MAJOR] fake finding\n"
+    } else if first_of(&script.minor_review) {
+        "Verdict: CHANGES\n- [MINOR] a decision is not recorded\n"
+    } else {
+        "Verdict: ACCEPT\n"
+    }
+}
+
 /// The `verify` the scripted harness writes at bootstrap.
 pub const VERIFY: &str = r#"#!/bin/sh
 # Runs checks/<ID>.<name>.sh; --task T007 selects the T007. prefix.
@@ -298,6 +324,9 @@ impl Player {
             stop.cancel();
             return self.hang().await;
         }
+        if self.refused(|script| &script.oversize_review, task).await {
+            return;
+        }
         let first_review = self.bump(&format!("review-{task}")) == 1;
         let first_of =
             |script_field: &Option<String>| first_review && names(script_field.as_deref(), task);
@@ -307,13 +336,7 @@ impl Player {
         if first_of(&self.script.no_verdict_review) {
             return self.finish("(no verdict written)"); // must be retried
         }
-        let verdict = if first_of(&self.script.rejected_review) {
-            "Verdict: CHANGES\n- [MAJOR] fake finding\n"
-        } else if first_of(&self.script.minor_review) {
-            "Verdict: CHANGES\n- [MINOR] a decision is not recorded\n"
-        } else {
-            "Verdict: ACCEPT\n"
-        };
+        let verdict = verdict(&self.script, first_of);
         self.write_tool(&file, verdict, false).await;
         self.finish("Done.");
     }
@@ -409,6 +432,25 @@ impl Player {
         }
         self.events.handled().await;
         self.emit(SessionEvent::Exited { code: Some(1) });
+    }
+
+    /// When `script_field` names `task`, refuses the prompt before any
+    /// turn, as fx does with one larger than the model's window: stderr,
+    /// then exit 1. True when it did.
+    async fn refused(
+        &mut self,
+        script_field: impl Fn(&ScriptedHarness) -> &Option<String>,
+        task: &str,
+    ) -> bool {
+        if !names(script_field(&self.script).as_deref(), task) {
+            return false;
+        }
+        if let Some(log) = &self.stderr_log {
+            let _ = std::fs::write(log, FX_CONTEXT_EXCEEDED);
+        }
+        self.events.handled().await;
+        self.emit(SessionEvent::Exited { code: Some(1) });
+        true
     }
 
     /// The engine runs out of memory on the turn's request, and the harness
@@ -716,7 +758,8 @@ impl Player {
     /// The scripted builder sessions of `task` that do not do its work.
     /// True when one played.
     async fn failed_session(&mut self, task: &str, attempt: u32) -> bool {
-        self.cut_short(task).await
+        self.refused(|script| &script.oversize_task, task).await
+            || self.cut_short(task).await
             || self.stuck(task, attempt).await
             || self.stopped(task).await
             || self.failing(task).await

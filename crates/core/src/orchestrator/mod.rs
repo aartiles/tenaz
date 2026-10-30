@@ -78,6 +78,9 @@ pub enum RunError {
     /// Engine failures exhausted their retries: the run blocks.
     #[error("engine unavailable: {0}")]
     EngineUnavailable(String),
+    /// A session's prompt cannot fit its model's window: the run blocks.
+    #[error("prompt too large: {0}")]
+    PromptTooLarge(String),
     #[error(transparent)]
     Harness(#[from] HarnessError),
     #[error("git: {0}")]
@@ -501,6 +504,11 @@ impl Runner {
         if let Some(sampler) = self.sampler.take() {
             sampler.stop();
         }
+        self.settle(outcome)
+    }
+
+    /// Pauses, blocks or stops the run as the phases' `outcome` says.
+    fn settle(&mut self, outcome: Result<(), RunError>) -> Result<(), RunError> {
         match outcome {
             Ok(()) => {
                 if self.stopping() && self.ledger.phase.is_running() {
@@ -526,6 +534,9 @@ impl Runner {
             Err(RunError::EngineUnavailable(reason)) => self.block(&format!(
                 "engine unavailable: {reason}. Fix the engine, then run with --resume"
             )),
+            Err(RunError::PromptTooLarge(reason)) => {
+                self.block(&format!("prompt too large: {reason}"))
+            }
             Err(error) => {
                 self.ledger.last_error = Some(error.to_string());
                 self.ledger.inflight = None;
