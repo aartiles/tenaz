@@ -46,8 +46,9 @@ impl FailureCause {
 pub(crate) enum GiveUp {
     /// Sessions still overflow after `capacityRetries` lowered budgets.
     Capacity,
-    /// This many sessions in a row ended with engine errors.
-    Engine { sessions: u32 },
+    /// This many sessions in a row ended with engine errors; `cause` is
+    /// why the last one failed.
+    Engine { sessions: u32, cause: FailureCause },
 }
 
 /// The next thing the loop does, with the count it reports.
@@ -155,30 +156,34 @@ impl Recovery {
 
     fn retry(&mut self, metrics: &SessionMetrics, role: Role, params: &RunParams) -> Step {
         let retry = self.retry;
+        let cause = failure_cause(metrics);
         if retry >= params.engine_retries {
             return Step::GiveUp(GiveUp::Engine {
                 sessions: retry + 1,
+                cause,
             });
         }
         self.retry += 1;
-        // What the engine said comes first: fx exits after an engine
-        // error, and that exit is its consequence, not its cause. The
-        // session's log line ranks an abort reason higher (`outcome` in
-        // session/record.rs): it says why the session stopped, this says
-        // why it is rerun.
-        let cause = if metrics.engine_out_of_memory {
-            FailureCause::OutOfMemory
-        } else if metrics.harness_exit.is_none()
-            || metrics.last_stop_reason == Some(StopReason::Error)
-        {
-            FailureCause::Engine
-        } else {
-            FailureCause::Harness
-        };
         // Only a builder can declare a job, and only while jobs are on.
         self.out_of_memory |=
             cause == FailureCause::OutOfMemory && role == Role::Builder && params.jobs_on();
         Step::Retry { retry, cause }
+    }
+}
+
+/// Who ended a session the engine failed. What the engine said comes
+/// first: fx exits after an engine error, and that exit is its
+/// consequence, not its cause. The session's log line ranks an abort
+/// reason higher (`outcome` in session/record.rs): it says why the session
+/// stopped, this says why it is rerun.
+fn failure_cause(metrics: &SessionMetrics) -> FailureCause {
+    if metrics.engine_out_of_memory {
+        FailureCause::OutOfMemory
+    } else if metrics.harness_exit.is_none() || metrics.last_stop_reason == Some(StopReason::Error)
+    {
+        FailureCause::Engine
+    } else {
+        FailureCause::Harness
     }
 }
 
@@ -511,7 +516,10 @@ mod tests {
                 engine_retry(0),
                 engine_retry(1),
                 engine_retry(2),
-                Step::GiveUp(GiveUp::Engine { sessions: 4 })
+                Step::GiveUp(GiveUp::Engine {
+                    sessions: 4,
+                    cause: FailureCause::Engine
+                })
             ]
         );
     }
@@ -540,6 +548,33 @@ mod tests {
         };
         let (_, steps) = steps(Role::Builder, &[after_harness_exit(out_of_memory)]);
         assert_eq!(steps, [retry(0, FailureCause::OutOfMemory)]);
+    }
+
+    /// The cause is the last session's, whatever came before it.
+    #[test]
+    fn giving_up_names_the_last_cause() {
+        let last_cause =
+            |sessions: &[SessionMetrics]| match steps(Role::Reviewer, sessions).1.last() {
+                Some(Step::GiveUp(GiveUp::Engine { cause, .. })) => Some(*cause),
+                _ => None,
+            };
+        let memory_then_engine = [
+            out_of_memory(),
+            out_of_memory(),
+            out_of_memory(),
+            engine_error(),
+        ];
+        assert_eq!(last_cause(&memory_then_engine), Some(FailureCause::Engine));
+        let engine_then_memory = [
+            engine_error(),
+            engine_error(),
+            engine_error(),
+            out_of_memory(),
+        ];
+        assert_eq!(
+            last_cause(&engine_then_memory),
+            Some(FailureCause::OutOfMemory)
+        );
     }
 
     fn out_of_memory() -> SessionMetrics {

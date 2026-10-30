@@ -120,6 +120,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- mlx-serve's refusal of a prompt that "does not fit in GPU memory" is
+  treated as the engine running out of memory, rather than as an unnamed
+  engine error: the session's log line says `failed (engine out of
+  memory)`, and a builder's rerun gets the memory note when jobs are on.
+  For any engine out of memory, the rerun's log line, the notice at the
+  first rerun, and the run's reason once the retries run out say to free
+  memory or reload the model. The journal's `cause` stays `engine`. In
+  the Digger 3D run of 2026-10-29 mlx-serve refused a reviewer this way
+  seven times; the waits did not help, a reload of the model did. See
+  ADR 0012.
 - A list of changed files put in a prompt is clipped to `statClipBytes`
   (8000 bytes, a new parameter), at a whole line, with the number of lines
   left out. Such lists went in whole: the reviewer's (ahead of a diff

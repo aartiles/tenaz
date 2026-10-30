@@ -165,10 +165,15 @@ above), so a 32k context is the practical floor (`contextFloor`).
   tokens) does not fit in GPU memory even after freeing the prefix cache
   … It was refused before any work started."), which fx reports as
   `ProviderError`; fx refuses a prompt it cannot compact into the model's
-  window with `ContextCapacityExceeded`. Tenaz matches neither message: it
-  journals the first as an engine error and the second as a harness exit,
-  and sends the same prompt again after each wait, up to `engineRetries`,
-  then stops the run as engine unavailable. Seen twice in the Digger 3D
+  window with `ContextCapacityExceeded`. Tenaz reads the first as the
+  engine running out of memory (ADR 0012), and still sends the same
+  prompt again after each wait, up to `engineRetries`, then stops the run
+  as engine unavailable, saying to free memory or reload the model. The
+  matcher is tested with the recorded message, not yet against mlx-serve
+  itself; the error body around it (`error.message`) is assumed, not
+  captured, and so is whether it comes as an HTTP error or inside the
+  stream. Tenaz does not match fx's message: it journals it as a harness
+  exit and reruns the same prompt the same way. Seen twice in the Digger 3D
   run of 2026-10-29, seven sessions each time: reviewers on a
   281k-character prompt that fx refused, then, with the lists of changed
   files clipped, reviewers that mlx-serve refused at 39468 tokens after

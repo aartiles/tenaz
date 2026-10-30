@@ -372,7 +372,7 @@ static OUT_OF_MEMORY: LazyLock<Regex> = LazyLock::new(|| {
     // `OutOfMemory` in CamelCase, as Sushi and Metal name it, is matched
     // case-sensitively: without case it would match `layoutOfMemory`.
     Regex::new(
-        r"(?i:\bout[ _-]?of[ _-]?memory|\binsufficient memory\b|\bnot enough (?:\w+ )?memory\b)|OutOfMemory",
+        r"(?i:\bout[ _-]?of[ _-]?memory|\binsufficient memory\b|\bnot enough (?:\w+ )?memory\b|\bdoes not fit in (?:\w+ ){0,2}memory\b)|OutOfMemory",
     )
     .expect("static regex")
 });
@@ -389,9 +389,10 @@ pub fn capacity_limit(error: &str) -> Option<u64> {
 
 /// The engine ran out of memory while it worked on a request. Sushi sends
 /// `GenerationOutOfMemory` when Metal cannot get the memory, typically
-/// because another program is using the GPU at the same time. This is not
-/// a prompt too large for the engine (`capacity_limit`): the same prompt
-/// fits again once the memory is back.
+/// because another program is using the GPU at the same time; mlx-serve
+/// refuses a prompt whose prefill "does not fit in GPU memory" (ADR 0012).
+/// This is not a prompt too large for the engine (`capacity_limit`): the
+/// same prompt fits again once the memory is back.
 pub fn is_out_of_memory(error: &str) -> bool {
     OUT_OF_MEMORY.is_match(error)
 }
@@ -405,6 +406,10 @@ pub fn is_image_refusal(error: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// mlx-serve 26.10.3, in the Digger 3D run of 2026-10-29. The proxy's
+    /// `an_mlx_serve_memory_refusal_is_out_of_memory` sends the same text.
+    const MLX_SERVE_REFUSAL: &str = "This prompt (30245 tokens) does not fit in GPU memory even after freeing the prefix cache: it requires ~7720MB GPU memory but only ~6960MB is available. It was refused before any work started. Reduce the prompt length, lower --ctx-size, or free memory on the machine.";
+
     #[test]
     fn an_engine_out_of_memory_is_told_from_other_errors() {
         for message in [
@@ -415,6 +420,9 @@ mod tests {
             "out_of_memory",
             "400: not enough GPU memory",
             "not enough memory",
+            MLX_SERVE_REFUSAL,
+            "does not fit in memory",
+            "does not fit in free GPU memory",
         ] {
             assert!(is_out_of_memory(message), "{message}");
         }
@@ -423,6 +431,7 @@ mod tests {
             "layout of memory map",
             "layoutOfMemory",
             "not enough tokens",
+            "does not fit in the context window",
             "boom",
         ] {
             assert!(!is_out_of_memory(message), "{message}");
