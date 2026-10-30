@@ -78,8 +78,9 @@ Each phase has a module under `orchestrator/phases/` (`bootstrap`, `task`,
 for split and replan, `task_loop`, `final_review`);
 `phases.rs` keeps what they share, the `verify` call and the briefing.
 `orchestrator/session.rs` is the wrapper; one session, start to journal
-record, is `session/record.rs`, the harness run `session/harness.rs`, and
-its requests `session/requests.rs`.
+record, is `session/record.rs`, the harness run `session/harness.rs`,
+its requests `session/requests.rs`, and what the run says when it reruns
+or stops a session, a prompt over its budget included, `session/reasons.rs`.
 
 State lives on disk under `.tenaz/` in the project, so a run survives the
 process and the user's existing tooling (`jq` over the journal, `git log`)
