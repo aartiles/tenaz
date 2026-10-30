@@ -90,6 +90,13 @@ When it is blocked, read `blocked_reason` and the newest notes in
 `.tenaz/notes/`. A task whose builder found it cannot pass without changing
 a check of a done task leaves `.tenaz/conflicts/<TASK>.md`; a replan may
 then add a card whose `amends` lets its builder change those checks.
+A builder may declare a heavy job (a render, a long build) in
+`.tenaz/jobs/<TASK>.json`; unless `jobMinutes=0`, Tenaz runs it between
+sessions with the engine's memory freed where the engine can, logs it to
+`.tenaz/private/jobs/`, and journals `job-started` and `job-finished`.
+While a job runs no session is in flight (`inflight` is null in
+`tenaz status --json`): `.tenaz/private/orchestrator.log` names the job,
+and its log grows in `.tenaz/private/jobs/`.
 To see why a session went wrong, read its briefing and,
 with fx, the model's reasoning: `.tenaz/private/<label>.prompt.md` and
 `<label>.thinking.md` (the label is in `tenaz status`). Fix what you can (an

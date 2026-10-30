@@ -8,6 +8,30 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- A builder whose task needs work too heavy for a session (a render, a
+  long build) writes `.tenaz/jobs/<TASK>.json` with the command, its time
+  limit and why, and stops. Tenaz runs the command between sessions of the
+  same attempt, with the engine's request gate closed and the LLM unloaded
+  where the engine can, for at most `jobMinutes` (60); a fresh session
+  then gets its exit code, duration and the end of its log, in
+  `.tenaz/private/jobs/`. The job does not cost an attempt. An attempt
+  may have `jobsPerAttempt` (3) job files; one past them is removed unread
+  and the attempt is judged. The journal gets `job-started` and
+  `job-finished` records. A file that is not valid runs nothing and the
+  next session is told why. A stop during the job pauses the run, and on
+  resume the job runs again before any session; a report no session has
+  read yet is kept in `run.json` across a pause. A crash costs the
+  attempt: the job file it left is removed unrun. After a job the LLM
+  serves again before the next session; one that does not come back
+  blocks the run as "engine unavailable". `jobMinutes=0` turns jobs off:
+  a job file is removed unread and the attempt is judged. In the Lotion
+  Pump run a 25-minute Blender render next to the model's engine failed
+  for memory, and so did the engine; the operator had to run it with the
+  run blocked. See ADR 0010.
+- A builder session rerun after the engine ran out of memory is told why
+  and asked not to leave heavy work running in the background, but to
+  declare it as a job. Other roles, other engine errors and runs with
+  `jobMinutes=0` get no such note. See ADR 0010.
 - A builder whose task cannot pass without changing a check of a done task
   writes `.tenaz/conflicts/<TASK>.md` naming those checks and stops. Tenaz
   blocks the task at once, without more attempts or a split, journals a

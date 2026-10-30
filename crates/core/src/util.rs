@@ -17,6 +17,15 @@ pub fn clip(text: &str, limit: usize) -> String {
     format!("{}\n[... clipped {} bytes]", &text[..cut], text.len() - cut)
 }
 
+/// The last `bytes` of `text` at most, from a character boundary.
+pub fn tail(text: &str, bytes: usize) -> String {
+    if text.len() <= bytes {
+        return text.to_owned();
+    }
+    let start = text.ceil_char_boundary(text.len() - bytes);
+    text[start..].to_owned()
+}
+
 /// `program args...` started through `wrapper` (a program and its leading
 /// arguments, such as the sandbox launcher); unchanged when `wrapper` is empty.
 pub fn wrap_command(
@@ -83,6 +92,15 @@ mod tests {
             "link done"
         );
         assert_eq!(strip_ansi("plain ✓"), "plain ✓");
+    }
+
+    /// A progress line redrawn with `\r` has no newline to cut at, and a
+    /// cut may fall inside a character.
+    #[test]
+    fn tail_keeps_the_end_on_a_character_boundary() {
+        assert_eq!(tail("abc", 10), "abc");
+        assert_eq!(tail("frame 1\rframe 2\rframe 3", 7), "frame 3");
+        assert_eq!(tail("añb", 2), "b", "ñ is two bytes, and the cut is in it");
     }
 
     #[test]

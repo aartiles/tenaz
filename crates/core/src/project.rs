@@ -186,6 +186,19 @@ impl Project {
         self.read(relative).ok()
     }
 
+    /// The last `bytes` of the file at `relative` at most, read from its
+    /// end and decoded leniently; `None` when it cannot be read.
+    pub fn tail(&self, relative: &str, bytes: usize) -> Option<String> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = fs::File::open(self.path(relative)).ok()?;
+        let len = file.metadata().ok()?.len();
+        file.seek(SeekFrom::Start(len.saturating_sub(bytes as u64)))
+            .ok()?;
+        let mut end = Vec::new();
+        file.read_to_end(&mut end).ok()?;
+        Some(crate::util::tail(&String::from_utf8_lossy(&end), bytes))
+    }
+
     pub fn exists(&self, relative: &str) -> bool {
         self.path(relative).exists()
     }
@@ -440,6 +453,11 @@ pub fn note_path(id: &str) -> String {
 /// Where the builder of task `id` declares a conflict.
 pub fn conflict_path(id: &str) -> String {
     format!(".tenaz/conflicts/{id}.md")
+}
+
+/// Where the builder of task `id` declares a heavy job (ADR 0010).
+pub fn job_path(id: &str) -> String {
+    format!(".tenaz/jobs/{id}.json")
 }
 
 /// A review that asks for changes with MINOR findings only: the reviewer

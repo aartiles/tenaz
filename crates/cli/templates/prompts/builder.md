@@ -21,6 +21,11 @@ protocol) and stop: the task is blocked and replanned. If it cannot be done
 as written for another reason, explain why in your notes and stop; the
 attempt fails, and after the last one the task is split or blocked.
 
+Never leave heavy work running in the background. If a command needs more
+than a tool call's time, or most of the machine's memory for minutes,
+write `.tenaz/jobs/<TASK>.json` (see the protocol, "Heavy jobs") and stop:
+the orchestrator runs it, and your next session gets its result.
+
 When the briefing has a section "Checks this card may amend", you may change
 those checks and no others. Each must still test its requirement as the spec
 states it. Write in your notes each old and new value and the spec line that

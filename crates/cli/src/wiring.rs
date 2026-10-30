@@ -13,12 +13,13 @@ use tenaz_adapters::clock::SystemClock;
 use tenaz_adapters::engine::generic::{Commands, GenericEngine};
 use tenaz_adapters::engine::load_api::LoadApiEngine;
 use tenaz_adapters::git::GitRepo;
+use tenaz_adapters::job::JobProcess;
 use tenaz_adapters::media::comfyui::ComfyUi;
 use tenaz_adapters::media::openai_images::OpenAiImages;
 use tenaz_adapters::metrics::PrometheusMetrics;
 use tenaz_adapters::notify::DesktopNotifier;
 use tenaz_adapters::probe_macos::MacMemoryProbe;
-use tenaz_adapters::sandbox::{Guard, GuardedHarness, GuardedVerify, Policy};
+use tenaz_adapters::sandbox::{Guard, GuardedHarness, GuardedJobs, GuardedVerify, Policy};
 use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::cache_report::CacheReport;
 use tenaz_core::effort::EffortDial;
@@ -300,20 +301,16 @@ pub async fn wire(
         &feed,
         &wrapper,
     )?;
-    let mut verify: Arc<dyn tenaz_core::ports::VerifyRunner> = Arc::new(
-        VerifyProcess::new(project.root())
-            .at(ledger.params.verify_path())
-            .wrapped(wrapper),
-    );
+    let (verify, jobs) = runners(project, &ledger.params, sandbox.as_ref());
     if let Some(sandbox) = sandbox {
-        harness = Arc::new(GuardedHarness::new(harness, sandbox.guard.clone()));
-        verify = Arc::new(GuardedVerify::new(verify, sandbox.guard));
+        harness = Arc::new(GuardedHarness::new(harness, sandbox.guard));
     }
     let port = reqwest_url(&base_url)?.2;
     let deps = Deps {
         harness,
         vcs: Arc::new(GitRepo::new(project.root())),
         verify,
+        jobs,
         clock: Arc::new(SystemClock::new()),
         notifier: Arc::new(notifier(project)),
         engine: (config.harness != HarnessKind::Fake).then_some(engine_adapter),
@@ -351,6 +348,32 @@ fn outside_write_scope(project: &Project, params: &RunParams) -> Option<WriteSco
     tenaz_adapters::sandbox::write_scope(project.root(), &params.sandbox_allow_write)
         .inspect_err(|e| tracing::warn!("writes outside the project will not be noted: {e}"))
         .ok()
+}
+
+/// `verify` and the heavy-job runner, both started in the sandbox and
+/// followed by its guard's restore when the run has one.
+fn runners(
+    project: &Project,
+    params: &RunParams,
+    sandbox: Option<&Sandbox>,
+) -> (
+    Arc<dyn tenaz_core::ports::VerifyRunner>,
+    Arc<dyn tenaz_core::ports::JobRunner>,
+) {
+    let wrapper = sandbox.map(|s| s.wrapper.clone()).unwrap_or_default();
+    let verify = Arc::new(
+        VerifyProcess::new(project.root())
+            .at(params.verify_path())
+            .wrapped(wrapper.clone()),
+    );
+    let jobs = Arc::new(JobProcess::new(project.root()).wrapped(wrapper));
+    match sandbox {
+        Some(sandbox) => (
+            Arc::new(GuardedVerify::new(verify, sandbox.guard.clone())),
+            Arc::new(GuardedJobs::new(jobs, sandbox.guard.clone())),
+        ),
+        None => (verify, jobs),
+    }
 }
 
 /// A sandboxed run's launcher prefix and the guard of its protected paths.

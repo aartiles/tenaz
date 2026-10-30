@@ -41,6 +41,31 @@ pub struct CurrentTask {
     /// text so a repeat can name it. Cleared when a review asks for changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify_failure: Option<VerifyFailure>,
+    /// The heavy jobs of the attempt being built (ADR 0010).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs: Option<AttemptJobs>,
+}
+
+/// The heavy jobs an attempt's builder declared, kept so a pause neither
+/// loses a job's report nor lets the attempt run more jobs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttemptJobs {
+    pub attempt: u32,
+    /// Job files read so far, valid or not.
+    pub files: u32,
+    /// The last job's report, until a session has read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+}
+
+impl AttemptJobs {
+    pub fn new(attempt: u32) -> Self {
+        Self {
+            attempt,
+            files: 0,
+            report: None,
+        }
+    }
 }
 
 /// The bytes of an attempt's failure kept in the task's history.
@@ -60,6 +85,7 @@ impl CurrentTask {
             stopped: Vec::new(),
             in_review: None,
             verify_failure: None,
+            jobs: None,
         }
     }
 

@@ -6,7 +6,7 @@ on the core, the core depends on nothing of theirs.
 ```text
 crates/
   core/      tenaz-core      domain + ports + orchestration. No process, network or git code.
-  adapters/  tenaz-adapters  git, verify runner, macOS memory probe, notifier, engine adapters
+  adapters/  tenaz-adapters  git, verify and heavy-job runners, macOS memory probe, notifier, engine adapters
                            (generic commands, a load API as Sushi's), media adapters (ComfyUI, OpenAI Images),
                            Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
@@ -30,6 +30,7 @@ Pure modules, each unit-tested without I/O:
 | `spec` | Requirement lines (`- R1: ...`, `manual:`) and coverage. |
 | `backlog` | Card validation, dependency DAG, resolved and ready tasks. |
 | `conflict` | A builder's declared conflict with checks of done tasks, and which checks a card's `amends` may name (ADR 0009). |
+| `job` | A heavy job a builder declares, and the report of how it ran (ADR 0010). |
 | `verify` | The `verify` contract: last-line JSON, exit code, clipping; whether a builder attempt passed. |
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time, provider-error and outside-write rules; emits steer, abort or interrupt (stop the turn, prompt again). |
 | `write_scope` | Where a session may write without the sandbox, and whether a write tool's target is outside it (ADR 0008). |
@@ -42,22 +43,26 @@ Pure modules, each unit-tested without I/O:
 | `ledger` | `run.json` and the `journal.jsonl` record types. |
 | `metrics` | Engine Prometheus counters, per-request deltas, engine summary. |
 | `memory` | Memory samples and per-session windows. |
-| `lease` | One resident engine: the lease manager state machine over the engine and media ports. |
+| `lease` | One resident engine: the lease manager state machine over the engine and media ports, and the heavy jobs builders declare (ADR 0010). |
 
 `ports` declares the traits the orchestration needs: `Harness` and
-`Session`, `Vcs`, `VerifyRunner`, `Clock`, `Notifier`, `MemoryProbe`,
-`EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
+`Session`, `Vcs`, `VerifyRunner`, `JobRunner`, `Clock`, `Notifier`,
+`MemoryProbe`, `EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
 holds the scripted harness, which plays the happy path of a small goal
 with each recovery opt-in (`every_recovery` is what `tenaz demo` plays),
 `VirtualClock`, which runs on tokio's paused time (ADR 0006), `Replay`,
 which answers for the memory probe and the engine counters with readings
 a test gives it, `ScriptedVerify`, which judges the scripted harness's
-checks without a shell, and `SnapshotVcs`, a repository kept as snapshots
+checks without a shell, `ScriptedJobs`, which runs heavy jobs without a
+shell (ADR 0010), and `SnapshotVcs`, a repository kept as snapshots
 in memory; `vcs_contract_tests!` holds it and
 `GitRepo` to the same checks (ADR 0005). They serve the core's own tests
 and the crates above it. `tenaz-adapters` has a `testing` feature too:
-`write_executable`, for a test that writes a script and then runs it.
+`write_executable`, for a test that writes a script and then runs it, and
+`gone_within`, which checks that a process is gone, zombies included.
+Its private `process` module starts and stops the process groups that
+`verify` and heavy jobs run in.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations
@@ -66,7 +71,8 @@ what a failed bootstrap attempt tells the next one and whether it counts
 (the pure `orchestrator::bootstrap`),
 the task attempt loop with review, split and block, and pause and resume.
 Each phase has a module under `orchestrator/phases/` (`bootstrap`, `task`,
-`review`, `planner` for split and replan, `task_loop`, `final_review`);
+`job` for the heavy jobs between a builder's sessions, `review`, `planner`
+for split and replan, `task_loop`, `final_review`);
 `phases.rs` keeps what they share, the `verify` call and the briefing.
 `orchestrator/session.rs` is the wrapper; one session, start to journal
 record, is `session/record.rs`, the harness run `session/harness.rs`, and
@@ -105,8 +111,8 @@ protocol without a model: the adapter's integration tests spawn it.
 - Unit tests next to each core module.
 - Adapter conformance tests against fakes or a temporary git repository.
 - Whole runs in `orchestrator/scenarios.rs` and `orchestrator/scenarios/`
-  drive the loop with the scripted harness, `SnapshotVcs` and
-  `ScriptedVerify`: no git or shell (ADR 0005).
+  drive the loop with the scripted harness, `SnapshotVcs`,
+  `ScriptedVerify` and `ScriptedJobs`: no git or shell (ADR 0005).
   They run with tokio's time paused (`start_paused = true`) on
   `VirtualClock`, so waits take no real time and timers fire in the order
   of their deadlines (ADR 0006).

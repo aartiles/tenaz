@@ -8,6 +8,7 @@ pub mod cache_report;
 pub mod conflict;
 pub mod doctor;
 pub mod effort;
+pub mod job;
 pub mod lease;
 pub mod ledger;
 pub mod memory;

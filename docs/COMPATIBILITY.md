@@ -105,6 +105,19 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
+  job runner; the lease cycle with fake engines, and whole runs with a
+  lease over a fake LLM whose reload after the job fails or that cannot
+  unload; the job runner itself with `sh`. No real model has declared a job yet, so whether a
+  small model declares one at the right moment, rather than running the
+  work in the background, is unknown. With an engine that cannot unload
+  (`--engine generic` without stop/start scripts) the job runs next to the
+  resident LLM, with only the request gate closed, and may still fail for
+  memory. `verify` still runs with the LLM loaded, so checks that render
+  can clash the same way. No job has yet run under the sandbox launcher
+  (sandbox-exec, bwrap), with a GPU program, or around a real engine's
+  unload and reload (Sushi). A crash of Tenaz during a job leaves the job
+  running, in its own process group: stop it before resuming the run.
 - **An engine error inside a stream** (Sushi's `GenerationOutOfMemory`),
   with fx; Pi reports engine errors itself. Its shape, `data: {"error":
   {"message":…},"choices":[{"finish_reason":"error"}]}`, was read from

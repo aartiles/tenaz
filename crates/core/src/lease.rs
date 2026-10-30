@@ -1,7 +1,9 @@
 //! The lease: one resident engine. The LLM holds it by default; a media job
-//! borrows it (unload LLM, load media, run, unload media, reload LLM). The
-//! proxy's gate holds LLM requests while the LLM is away. An engine that
-//! cannot unload keeps the LLM loaded, and the job runs next to it.
+//! borrows it (unload LLM, load media, run, unload media, reload LLM), and
+//! so does a heavy job a builder declared (ADR 0010: unload LLM, run,
+//! reload LLM). The proxy's gate holds LLM requests while the LLM is away.
+//! An engine that cannot unload keeps the LLM loaded, and the job runs next
+//! to it.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -60,6 +62,8 @@ impl Gate {
 pub enum Holder {
     Llm,
     Media(String),
+    /// A heavy job a builder declared (ADR 0010).
+    Job,
 }
 
 impl std::fmt::Display for Holder {
@@ -67,6 +71,7 @@ impl std::fmt::Display for Holder {
         match self {
             Holder::Llm => f.write_str("llm"),
             Holder::Media(name) => write!(f, "media:{name}"),
+            Holder::Job => f.write_str("job"),
         }
     }
 }
@@ -90,8 +95,17 @@ pub enum LeaseError {
     #[error(transparent)]
     Media(#[from] MediaError),
     /// The job ran, but the LLM could not be reloaded afterwards.
-    #[error("the LLM did not reload after the media job: {0}")]
+    #[error("the LLM did not reload after a job: {0}")]
     ReloadFailed(EngineError),
+}
+
+/// What [`LeaseManager::run_job`] gives back: the job's output, unless it
+/// never ran, and how the LLM fared around it. A job that ran keeps its
+/// output even when the LLM did not reload after it.
+#[derive(Debug)]
+pub struct JobLease<T> {
+    pub output: Option<T>,
+    pub lease: Result<(), LeaseError>,
 }
 
 /// Observes transitions (the orchestrator journals them).
@@ -156,7 +170,7 @@ impl LeaseManager {
     /// Loads the LLM when the engine says it is not loaded. Used before the
     /// first session and after a failed reload.
     pub async fn ensure_llm(&self) -> Result<(), LeaseError> {
-        let _guard = self.holder.lock().await;
+        let mut guard = self.holder.lock().await;
         let loaded = self
             .llm
             .models()
@@ -167,6 +181,7 @@ impl LeaseManager {
             self.timed(Holder::Llm, "load", self.llm.load(&self.llm_model))
                 .await?;
         }
+        *guard = Holder::Llm;
         self.gate.open();
         Ok(())
     }
@@ -193,6 +208,63 @@ impl LeaseManager {
             self.observe(Holder::Llm, "kept", 0, Some(why.to_owned()));
             return self.media_cycle(&media_holder, adapter.as_ref(), job).await;
         }
+        let (output, reloaded) = self
+            .with_llm_away(
+                &mut holder,
+                media_holder.clone(),
+                self.media_cycle(&media_holder, adapter.as_ref(), job),
+            )
+            .await?;
+        reloaded?;
+        output
+    }
+
+    /// Runs `job` with the engine's memory to itself: LLM requests wait at
+    /// the gate and the LLM is unloaded where the engine can, then loaded
+    /// again. An engine that cannot unload keeps the LLM, and the job runs
+    /// next to it with the gate closed. Stop a job through its own means (a
+    /// cancellation token): dropped before it ends, the gate stays closed.
+    pub async fn run_job<T>(&self, job: impl Future<Output = T>) -> JobLease<T> {
+        let mut holder = self.holder.lock().await;
+        let job = self.timed_ok(Holder::Job, "job", job);
+        if !self.llm.can_unload() {
+            self.observe(
+                Holder::Llm,
+                "kept",
+                0,
+                Some("the engine cannot unload the LLM".to_owned()),
+            );
+            self.gate.close();
+            let output = job.await;
+            self.gate.open();
+            return JobLease {
+                output: Some(output),
+                lease: Ok(()),
+            };
+        }
+        match self.with_llm_away(&mut holder, Holder::Job, job).await {
+            Ok((output, reloaded)) => JobLease {
+                output: Some(output),
+                lease: reloaded,
+            },
+            Err(error) => JobLease {
+                output: None,
+                lease: Err(error),
+            },
+        }
+    }
+
+    /// Unloads the LLM with its requests held at the gate, runs `work` as
+    /// `borrower`, and loads the LLM again. An error when the unload fails
+    /// (`work` did not run, the gate is open again); otherwise the output
+    /// and whether the reload worked. After a failed reload the gate stays
+    /// closed: requests wait until `ensure_llm` succeeds.
+    async fn with_llm_away<T>(
+        &self,
+        holder: &mut Holder,
+        borrower: Holder,
+        work: impl Future<Output = T>,
+    ) -> Result<(T, Result<(), LeaseError>), LeaseError> {
         self.gate.close();
         let unloaded = self
             .timed(Holder::Llm, "unload", self.llm.unload(&self.llm_model))
@@ -203,26 +275,38 @@ impl LeaseManager {
             self.gate.open();
             return Err(error.into());
         }
-        *holder = media_holder.clone();
-        let result = self.media_cycle(&media_holder, adapter.as_ref(), job).await;
+        *holder = borrower;
+        let output = work.await;
         let reload = self
             .timed(Holder::Llm, "load", self.llm.load(&self.llm_model))
             .await;
-        match reload {
+        let reloaded = match reload {
             Ok(()) => {
                 *holder = Holder::Llm;
                 self.gate.open();
                 self.observe(Holder::Llm, "ready", 0, None);
+                Ok(())
             }
             Err(error) => {
                 self.observe(Holder::Llm, "failed", 0, Some(error.to_string()));
-                // The gate stays closed: requests wait until `ensure_llm` succeeds.
-                return match result {
-                    Ok(_) | Err(_) => Err(LeaseError::ReloadFailed(error)),
-                };
+                Err(LeaseError::ReloadFailed(error))
             }
-        }
-        result
+        };
+        Ok((output, reloaded))
+    }
+
+    /// `op`, which cannot fail, observed as a transition with its duration.
+    async fn timed_ok<T>(
+        &self,
+        holder: Holder,
+        transition: &str,
+        op: impl Future<Output = T>,
+    ) -> T {
+        let started = Instant::now();
+        let output = op.await;
+        let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.observe(holder, transition, ms, None);
+        output
     }
 
     async fn media_cycle(
@@ -459,6 +543,82 @@ mod tests {
         );
     }
 
+    /// A job that notes whether the gate was open while it ran, and ends
+    /// with 7.
+    fn noting_job(manager: &LeaseManager, log: &Arc<Log>) -> impl Future<Output = i32> {
+        let gate = manager.gate().clone();
+        let log = log.clone();
+        async move {
+            log.push(format!("job (gate open: {})", gate.is_open()));
+            7
+        }
+    }
+
+    /// A heavy job (ADR 0010) gets the engine's memory: the LLM is unloaded
+    /// and requests wait while it runs, then the LLM comes back.
+    #[tokio::test]
+    async fn a_heavy_job_runs_with_the_llm_unloaded_and_the_gate_closed() {
+        let (manager, log, _) = setup(false, false);
+        let ran = manager.run_job(noting_job(&manager, &log)).await;
+        assert!(ran.lease.is_ok(), "{:?}", ran.lease);
+        let after = (ran.output, manager.gate().is_open(), manager.holder().await);
+        assert_eq!(after, (Some(7), true, Holder::Llm));
+        assert_eq!(
+            log.lines(),
+            ["llm unload", "job (gate open: false)", "llm load m"]
+        );
+    }
+
+    /// An engine that cannot unload keeps the LLM; the job still runs with
+    /// requests held at the gate.
+    #[tokio::test]
+    async fn a_heavy_job_next_to_an_llm_that_cannot_unload_still_holds_requests() {
+        let (manager, log, transitions) = setup_llm(false, false, Unload::Unsupported);
+        let ran = manager.run_job(noting_job(&manager, &log)).await;
+        assert_eq!(
+            (ran.lease.is_ok(), ran.output, manager.gate().is_open()),
+            (true, Some(7), true)
+        );
+        assert_eq!(log.lines(), ["job (gate open: false)"]);
+        assert!(
+            transitions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|t| t.holder == Holder::Llm && t.transition == "kept")
+        );
+    }
+
+    /// The job ran and its output stands; the LLM did not come back, so
+    /// requests keep waiting at the gate until `ensure_llm` succeeds.
+    #[tokio::test]
+    async fn a_heavy_job_whose_reload_fails_keeps_its_output_and_the_gate_closed() {
+        let (manager, log, _) = setup(false, true);
+        let ran = manager.run_job(noting_job(&manager, &log)).await;
+        assert_eq!(ran.output, Some(7));
+        assert!(
+            matches!(ran.lease, Err(LeaseError::ReloadFailed(_))),
+            "{:?}",
+            ran.lease
+        );
+        assert!(!manager.gate().is_open());
+    }
+
+    /// An LLM that would not unload may still be serving: the job does not
+    /// run and requests go on.
+    #[tokio::test]
+    async fn a_heavy_job_whose_unload_fails_does_not_run() {
+        let (manager, log, _) = setup_llm(false, false, Unload::Fails);
+        let ran = manager.run_job(noting_job(&manager, &log)).await;
+        let after = (ran.output, manager.gate().is_open(), log.lines());
+        assert_eq!(after, (None, true, Vec::<String>::new()));
+        assert!(
+            matches!(ran.lease, Err(LeaseError::Engine(_))),
+            "{:?}",
+            ran.lease
+        );
+    }
+
     #[tokio::test]
     async fn a_failed_job_still_frees_the_media_engine_and_reloads_the_llm() {
         let (manager, log, transitions) = setup(true, false);
@@ -496,6 +656,7 @@ mod tests {
         log.0.lock().unwrap().retain(|l| l != "llm unload");
         manager.ensure_llm().await.unwrap();
         assert!(manager.gate().is_open());
+        assert_eq!(manager.holder().await, Holder::Llm);
     }
 
     #[tokio::test]

@@ -25,8 +25,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tenaz_core::ports::{
-    Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit, SessionSpec,
-    VerifyRunner,
+    Harness, HarnessError, HarnessInfo, JobOutcome, JobRunner, JobSpec, PermissionDecision,
+    Session, SessionExit, SessionSpec, VerifyRunner,
 };
 use tenaz_core::project::{LEDGER, Project};
 use tenaz_core::session::SessionEvent;
@@ -614,6 +614,34 @@ impl VerifyRunner for GuardedVerify {
         let output = self.inner.run(args, timeout).await;
         self.guard.restore("verify");
         output
+    }
+}
+
+/// A job runner whose every job is followed by [`Guard::restore`], as
+/// `verify` is.
+pub struct GuardedJobs {
+    inner: Arc<dyn JobRunner>,
+    guard: Arc<Guard>,
+}
+
+impl GuardedJobs {
+    pub fn new(inner: Arc<dyn JobRunner>, guard: Arc<Guard>) -> Self {
+        Self { inner, guard }
+    }
+}
+
+impl std::fmt::Debug for GuardedJobs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuardedJobs").finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl JobRunner for GuardedJobs {
+    async fn run(&self, job: &JobSpec, stop: &tenaz_core::ports::CancellationToken) -> JobOutcome {
+        let outcome = self.inner.run(job, stop).await;
+        self.guard.restore("a job");
+        outcome
     }
 }
 

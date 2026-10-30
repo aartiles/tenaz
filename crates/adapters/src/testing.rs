@@ -29,6 +29,28 @@ pub fn write_executable(path: &Path, text: &str) {
     );
 }
 
+/// Whether process `pid` is gone within `limit`: not running, or a zombie
+/// only waiting to be reaped (`kill -0` still succeeds on one of those).
+/// A number, so that a pid a test failed to read cannot count as gone.
+pub fn gone_within(pid: u32, limit: std::time::Duration) -> bool {
+    let pid = pid.to_string();
+    let started = std::time::Instant::now();
+    loop {
+        let state = Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .expect("ps runs");
+        if state.is_empty() || state.starts_with('Z') {
+            return true;
+        }
+        if started.elapsed() >= limit {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

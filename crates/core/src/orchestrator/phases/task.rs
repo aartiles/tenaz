@@ -16,8 +16,8 @@ use super::PromptParts;
 use super::review::{Review, ReviewInput};
 
 /// A task card as an attempt loads it: parsed, and its text.
-struct LoadedCard {
-    card: TaskCard,
+pub(super) struct LoadedCard {
+    pub(super) card: TaskCard,
     text: String,
 }
 
@@ -299,8 +299,7 @@ impl Runner {
         self.project.remove(&conflict_path(task.id.as_str()))?;
         self.project.set_attempts(&task.id, attempt)?;
         let card = self.load_card(&task.id)?;
-        let prompt = self.builder_prompt(backlog, &card, attempt).await?;
-        let s = self.builder_session(&card.card, attempt, &prompt).await?;
+        let s = self.builder_sessions(backlog, &card, attempt).await?;
         let work = Work {
             loaded: card,
             stopped: s.metrics.stopped(),
@@ -403,7 +402,7 @@ impl Runner {
 
     /// The builder's session. A paused session, or one cut short by the
     /// engine, gives its attempt back: it is not a failed one.
-    async fn builder_session(
+    pub(super) async fn builder_session(
         &mut self,
         card: &TaskCard,
         attempt: u32,
@@ -494,7 +493,7 @@ impl Runner {
     /// The builder's briefing: notes from the dependencies and from the task
     /// itself, the previous failure and what it left, and the latest
     /// `verify` result.
-    async fn builder_prompt(
+    pub(super) async fn builder_prompt(
         &self,
         backlog: &Backlog,
         loaded: &LoadedCard,
@@ -508,6 +507,7 @@ impl Runner {
             "Latest ./verify --all".to_owned(),
             self.run_verify(&["--all"]).await.summary,
         ));
+        extra.extend(self.job_section(attempt));
         let fields = vec![
             ("Task".to_owned(), card.id.to_string()),
             (
