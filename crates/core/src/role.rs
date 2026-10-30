@@ -1,5 +1,5 @@
 //! The six session roles, played one after another by the run's model or
-//! by the one `run.json` pins for the role (ADR 0010).
+//! by the one `run.json` pins for the role (ADR 0011).
 
 use std::fmt;
 use std::str::FromStr;

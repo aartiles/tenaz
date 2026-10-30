@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::abort::Abort;
 use super::paced::PacedSender;
-use super::{ScriptedConflict, ScriptedHarness};
+use super::{ScriptedConflict, ScriptedHarness, ScriptedJob};
 use crate::session::{SessionEvent, StopReason, Usage};
 
 /// One tool call of the scripted model: the tool, its arguments, what it
@@ -411,6 +411,15 @@ impl Player {
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
 
+    /// The engine runs out of memory on the turn's request, and the harness
+    /// exits on the error, as fx does with Sushi.
+    async fn out_of_memory(&mut self) {
+        self.emit(SessionEvent::TurnStart);
+        self.engine_error("error.GenerationOutOfMemory");
+        self.events.handled().await;
+        self.emit(SessionEvent::Exited { code: Some(1) });
+    }
+
     /// A shell call that runs until the turn is aborted, as a script in an
     /// endless loop would.
     async fn hang(&mut self) {
@@ -712,6 +721,32 @@ impl Player {
             || self.stopped(task).await
             || self.failing(task).await
             || self.conflicting(task).await
+            || self.declaring_job(task).await
+    }
+
+    /// The first session of the script's job task, or every one, declares
+    /// its job and stops.
+    async fn declaring_job(&mut self, task: &str) -> bool {
+        let Some(ScriptedJob {
+            task: at,
+            text,
+            every_session,
+        }) = self.script.job.clone()
+        else {
+            return false;
+        };
+        let declares = if every_session {
+            names(Some(&at), task)
+        } else {
+            self.first(Some(&at), "job", task)
+        };
+        if !declares {
+            return false;
+        }
+        self.write_tool(&format!(".tenaz/jobs/{task}.json"), &text, false)
+            .await;
+        self.finish("Declared a job.");
+        true
     }
 
     /// The first session of the script's conflict task declares its
@@ -747,6 +782,8 @@ impl Player {
             self.crash(true).await;
         } else if self.first(self.script.truncate_task.as_deref(), "truncate", task) {
             self.truncate().await;
+        } else if self.first(self.script.out_of_memory_task.as_deref(), "oom", task) {
+            self.out_of_memory().await;
         } else {
             return false;
         }

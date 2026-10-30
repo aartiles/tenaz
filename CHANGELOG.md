@@ -23,14 +23,38 @@ uses [Semantic Versioning](https://semver.org/).
   budget is the `contextBudget` share of that model's window; the
   session's journal record has `model`. Planners size cards for the
   builder's model. After the engine runs out of memory, the lowered budget
-  is raised toward the largest model's budget. See ADR 0010.
+  is raised toward the largest model's budget. See ADR 0011.
 - With `--model-for`, every model of the run must be loaded before the
   first session. Tenaz loads those that are not, as it does the run's
   model, and `tenaz run` stops and names any it could not load. Around an
-  image job the lease frees every model and loads them all back; a generic
-  engine's stop and start commands run once for all of them. A generic
-  engine that serves only some of the run's models is not started a second
-  time: `tenaz run` stops and names the others.
+  image job or a heavy job the lease frees every model and loads them all
+  back; a generic engine's stop and start commands run once for all of
+  them. A generic engine that serves only some of the run's models is not
+  started a second time: `tenaz run` stops and names the others.
+- A builder whose task needs work too heavy for a session (a render, a
+  long build) writes `.tenaz/jobs/<TASK>.json` with the command, its time
+  limit and why, and stops. Tenaz runs the command between sessions of the
+  same attempt, with the engine's request gate closed and the LLM unloaded
+  where the engine can, for at most `jobMinutes` (60); a fresh session
+  then gets its exit code, duration and the end of its log, in
+  `.tenaz/private/jobs/`. The job does not cost an attempt. An attempt
+  may have `jobsPerAttempt` (3) job files; one past them is removed unread
+  and the attempt is judged. The journal gets `job-started` and
+  `job-finished` records. A file that is not valid runs nothing and the
+  next session is told why. A stop during the job pauses the run, and on
+  resume the job runs again before any session; a report no session has
+  read yet is kept in `run.json` across a pause. A crash costs the
+  attempt: the job file it left is removed unrun. After a job the LLM
+  serves again before the next session; one that does not come back
+  blocks the run as "engine unavailable". `jobMinutes=0` turns jobs off:
+  a job file is removed unread and the attempt is judged. In the Lotion
+  Pump run a 25-minute Blender render next to the model's engine failed
+  for memory, and so did the engine; the operator had to run it with the
+  run blocked. See ADR 0010.
+- A builder session rerun after the engine ran out of memory is told why
+  and asked not to leave heavy work running in the background, but to
+  declare it as a job. Other roles, other engine errors and runs with
+  `jobMinutes=0` get no such note. See ADR 0010.
 - A builder whose task cannot pass without changing a check of a done task
   writes `.tenaz/conflicts/<TASK>.md` naming those checks and stops. Tenaz
   blocks the task at once, without more attempts or a split, journals a
@@ -62,16 +86,17 @@ uses [Semantic Versioning](https://semver.org/).
   - A session whose context budget is already under the cap a memory
     failure set (a card that asks for a small budget, for example) no
     longer counts toward raising the cap: it did not test it.
-  - After an image job, a generic engine's start command is skipped when
-    the engine still serves the model.
+  - After an image job or a heavy job, a generic engine's start command
+    is skipped when the engine still serves the model.
   - When the run's model is not served before the first session,
     `tenaz run` says `Model <id> is not being served at <url>`, with why
     loading it failed, instead of `the LLM could not be loaded: ...`
     (`Model <id> is not being served (<error>)` when the engine does not
     answer, as before).
-  - When freeing the LLM for an image fails and the engine still answers
-    without it, Tenaz loads it back at once (a generic engine's start
-    command runs) instead of leaving it to the engine retry.
+  - When freeing the LLM for an image or a heavy job fails and the engine
+    still answers without it, Tenaz loads it back at once (a generic
+    engine's start command runs) instead of leaving it to the engine
+    retry.
 - On macOS the sandbox lets the agent and `verify` write the per-user cache
   (`getconf DARWIN_USER_CACHE_DIR`), as they could already write the
   temporary directory beside it. Metal keeps its compiled shaders there:

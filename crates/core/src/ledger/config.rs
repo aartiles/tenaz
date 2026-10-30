@@ -27,7 +27,7 @@ pub struct ModelConfig {
     pub input: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
-    /// Roles played by another model than this one (ADR 0010).
+    /// Roles played by another model than this one (ADR 0011).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub role_models: BTreeMap<Role, RoleModel>,
 }

@@ -10,15 +10,14 @@ use crate::orchestrator::{RunError, Runner};
 use crate::project::conflict_path;
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId, TaskStatus};
-use crate::util::clip_lines;
 use crate::verify::{VerifyOutcome, judge_attempt};
 
 use super::PromptParts;
 use super::review::{Review, ReviewInput};
 
 /// A task card as an attempt loads it: parsed, and its text.
-struct LoadedCard {
-    card: TaskCard,
+pub(super) struct LoadedCard {
+    pub(super) card: TaskCard,
     text: String,
 }
 
@@ -300,8 +299,7 @@ impl Runner {
         self.project.remove(&conflict_path(task.id.as_str()))?;
         self.project.set_attempts(&task.id, attempt)?;
         let card = self.load_card(&task.id)?;
-        let prompt = self.builder_prompt(backlog, &card, attempt).await?;
-        let s = self.builder_session(&card.card, attempt, &prompt).await?;
+        let s = self.builder_sessions(backlog, &card, attempt).await?;
         let work = Work {
             loaded: card,
             stopped: s.metrics.stopped(),
@@ -404,7 +402,7 @@ impl Runner {
 
     /// The builder's session. A paused session, or one cut short by the
     /// engine, gives its attempt back: it is not a failed one.
-    async fn builder_session(
+    pub(super) async fn builder_session(
         &mut self,
         card: &TaskCard,
         attempt: u32,
@@ -495,7 +493,7 @@ impl Runner {
     /// The builder's briefing: notes from the dependencies and from the task
     /// itself, the previous failure and what it left, and the latest
     /// `verify` result.
-    async fn builder_prompt(
+    pub(super) async fn builder_prompt(
         &self,
         backlog: &Backlog,
         loaded: &LoadedCard,
@@ -509,6 +507,7 @@ impl Runner {
             "Latest ./verify --all".to_owned(),
             self.run_verify(&["--all"]).await.summary,
         ));
+        extra.extend(self.job_section(attempt));
         let fields = vec![
             ("Task".to_owned(), card.id.to_string()),
             (
@@ -566,11 +565,11 @@ impl Runner {
             return Ok(Vec::new());
         };
         let mut extra = vec![("Previous attempt failed".to_owned(), failure)];
-        let diff = self.deps.vcs.diff_stat(&self.current_base(), None, true)?;
-        if !diff.trim().is_empty() {
+        let changed = self.changed_files(&self.current_base(), None, true)?;
+        if !changed.is_empty() {
             extra.push((
                 "Changes already made since the task started (kept)".to_owned(),
-                clip_lines(diff.trim(), self.params.stat_clip_bytes),
+                changed,
             ));
         }
         Ok(extra)

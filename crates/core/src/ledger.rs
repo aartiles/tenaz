@@ -18,7 +18,7 @@ mod budget;
 mod config;
 mod current;
 pub use config::ModelConfig;
-pub use current::{CurrentTask, StoppedAttempt, VerifyFailure};
+pub use current::{AttemptJobs, CurrentTask, StoppedAttempt, VerifyFailure};
 
 /// Where the run is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -610,6 +610,30 @@ pub enum JournalRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stopped_sessions: Option<Vec<StoppedAttempt>>,
     },
+    /// A heavy job a builder declared starts, between its attempt's
+    /// sessions (ADR 0010).
+    JobStarted {
+        task: TaskId,
+        attempt: u32,
+        command: String,
+        minutes: u64,
+    },
+    /// The heavy job ended.
+    JobFinished {
+        task: TaskId,
+        attempt: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        timed_out: bool,
+        /// Why the job could not run or be waited for.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        /// What went wrong with the engine's unload or reload around it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        engine: Option<String>,
+        duration_ms: u64,
+    },
     /// A builder declared that its task cannot pass without changing
     /// these checks of done tasks (ADR 0009).
     Conflict {
@@ -749,6 +773,34 @@ mod tests {
         };
         assert_eq!(*verdict, Some(Verdict::Changes));
         assert_eq!(serde_json::to_string(&entry).unwrap(), line);
+    }
+
+    /// Scripts read the job records by these names (ADR 0010).
+    #[test]
+    fn job_records_are_journaled_with_stable_fields() {
+        for line in [
+            r#"{"at":"t","type":"job-started","task":"T017","attempt":1,"command":"sh render.sh","minutes":40}"#,
+            r#"{"at":"t","type":"job-finished","task":"T017","attempt":1,"exit_code":0,"duration_ms":1503000}"#,
+            r#"{"at":"t","type":"job-finished","task":"T017","attempt":2,"timed_out":true,"error":"cannot run","engine":"the LLMs did not reload after a job: refused","duration_ms":5}"#,
+        ] {
+            let entry: JournalEntry = serde_json::from_str(line).unwrap();
+            assert_eq!(serde_json::to_string(&entry).unwrap(), line);
+        }
+    }
+
+    /// `run.json` keeps an attempt's jobs, and a report no session read.
+    #[test]
+    fn an_attempt_s_jobs_are_kept_in_run_json_by_these_names() {
+        let jobs = AttemptJobs {
+            attempt: 2,
+            files: 1,
+            report: Some("`sh render.sh` exited with 0".into()),
+        };
+        let text = r#"{"attempt":2,"files":1,"report":"`sh render.sh` exited with 0"}"#;
+        assert_eq!(serde_json::to_string(&jobs).unwrap(), text);
+        assert_eq!(serde_json::from_str::<AttemptJobs>(text).unwrap(), jobs);
+        let read = serde_json::from_str::<AttemptJobs>(r#"{"attempt":1,"files":0}"#).unwrap();
+        assert_eq!(read.report, None);
     }
 
     pub(super) fn config() -> ModelConfig {

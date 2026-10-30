@@ -107,7 +107,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
-- **A model per role** (`--model-for`, ADR 0010). fx is launched with each
+- **A model per role** (`--model-for`, ADR 0011). fx is launched with each
   session's model: its `settings.json` is rewritten before the session
   starts. Run once with fx 0.0.15 and mlx-serve 26.10.3 holding two
   models on a 64 GB Mac (2026-10-29, stopped blocked at T003): a Ternary
@@ -121,7 +121,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   model is loaded passed against that mlx-serve; the lease freeing and
   reloading them around an image is tested with fake engines and a
   stand-in server for the generic engine's commands, not against Kapitsa,
-  mlx-serve or a generic engine holding two models. TensorFold's scripts
+  mlx-serve or a generic engine holding two models; so is a heavy job,
+  which goes through the same unload and reload. TensorFold's scripts
   have not been run again since a generic engine that still serves its
   model after an image is no longer started. The preflight's probes
   (reasoning, cache, a tool call, an image) run on `--model` only, so a
@@ -133,6 +134,20 @@ above), so a 32k context is the practical floor (`contextFloor`).
   prompt (40.6k of 79.4k characters). Not with Pi: `init` refuses the
   map, and Pi refuses a session on another model than the one it was set
   up for.
+
+- **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
+  job runner; the lease cycle with fake engines, and whole runs with a
+  lease over a fake LLM whose reload after the job fails or that cannot
+  unload; the job runner itself with `sh`. No real model has declared a job yet, so whether a
+  small model declares one at the right moment, rather than running the
+  work in the background, is unknown. With an engine that cannot unload
+  (`--engine generic` without stop/start scripts) the job runs next to the
+  resident LLM, with only the request gate closed, and may still fail for
+  memory. `verify` still runs with the LLM loaded, so checks that render
+  can clash the same way. No job has yet run under the sandbox launcher
+  (sandbox-exec, bwrap), with a GPU program, or around a real engine's
+  unload and reload (Sushi). A crash of Tenaz during a job leaves the job
+  running, in its own process group: stop it before resuming the run.
 
 - **An engine error inside a stream** (Sushi's `GenerationOutOfMemory`),
   with fx; Pi reports engine errors itself. Its shape, `data: {"error":

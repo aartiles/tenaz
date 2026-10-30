@@ -17,22 +17,13 @@ pub fn clip(text: &str, limit: usize) -> String {
     format!("{}\n[... clipped {} bytes]", &text[..cut], text.len() - cut)
 }
 
-/// Cuts `text` to the whole lines that fit in `limit` bytes and says how
-/// many lines were left out, for a list such as a diff's file stat.
-pub fn clip_lines(text: &str, limit: usize) -> String {
-    if text.len() <= limit {
+/// The last `bytes` of `text` at most, from a character boundary.
+pub fn tail(text: &str, bytes: usize) -> String {
+    if text.len() <= bytes {
         return text.to_owned();
     }
-    let (mut kept, mut left_out) = (0, 0);
-    for line in text.split_inclusive('\n') {
-        if left_out == 0 && kept + line.len() <= limit {
-            kept += line.len();
-        } else {
-            left_out += 1;
-        }
-    }
-    let lines = if left_out == 1 { "line" } else { "lines" };
-    format!("{}[... clipped {left_out} {lines}]", &text[..kept])
+    let start = text.ceil_char_boundary(text.len() - bytes);
+    text[start..].to_owned()
 }
 
 /// `program args...` started through `wrapper` (a program and its leading
@@ -103,6 +94,15 @@ mod tests {
         assert_eq!(strip_ansi("plain ✓"), "plain ✓");
     }
 
+    /// A progress line redrawn with `\r` has no newline to cut at, and a
+    /// cut may fall inside a character.
+    #[test]
+    fn tail_keeps_the_end_on_a_character_boundary() {
+        assert_eq!(tail("abc", 10), "abc");
+        assert_eq!(tail("frame 1\rframe 2\rframe 3", 7), "frame 3");
+        assert_eq!(tail("añb", 2), "b", "ñ is two bytes, and the cut is in it");
+    }
+
     #[test]
     fn clip_keeps_short_text_and_marks_long_text() {
         assert_eq!(clip("abc", 10), "abc");
@@ -113,18 +113,6 @@ mod tests {
     fn clip_never_splits_a_character() {
         let clipped = clip("ééé", 3);
         assert!(clipped.starts_with("é\n"));
-    }
-
-    #[test]
-    fn clip_lines_keeps_whole_lines_and_counts_the_rest() {
-        assert_eq!(clip_lines("a\nb\n", 10), "a\nb\n");
-        assert_eq!(
-            clip_lines("ab\ncd\nef\n", 7),
-            "ab\ncd\n[... clipped 1 line]"
-        );
-        assert_eq!(clip_lines("abcdef\ng", 3), "[... clipped 2 lines]");
-        // Lines are cut whole, so a character is never split.
-        assert_eq!(clip_lines("é\r\nü\r\n", 5), "é\r\n[... clipped 1 line]");
     }
 
     #[test]

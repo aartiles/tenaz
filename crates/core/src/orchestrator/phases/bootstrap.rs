@@ -12,7 +12,6 @@ use crate::project::BRIEF;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::spec::{Requirement, coverage};
-use crate::util::clip_lines;
 
 use super::PromptParts;
 
@@ -285,13 +284,12 @@ impl Runner {
         self.deps
             .vcs
             .commit_all(&format!("tenaz: bookkeeping before {}", Role::Bootstrap))?;
-        let stat = self.deps.vcs.diff_stat(&base, Some("HEAD"), false)?;
-        if stat.trim().is_empty() {
+        let stat = self.changed_files(&base, Some("HEAD"), false)?;
+        if stat.is_empty() {
             return Ok(None);
         }
         Ok(Some(format!(
-            "{}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right.",
-            clip_lines(stat.trim(), self.params.stat_clip_bytes)
+            "{stat}\n\nThese are already in the project. Read them and continue from them: fix the problems above and write what is still missing. Do not start over or rewrite what is already right."
         )))
     }
 }

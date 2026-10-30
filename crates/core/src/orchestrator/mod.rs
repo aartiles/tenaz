@@ -42,6 +42,8 @@ pub struct Deps {
     pub harness: Arc<dyn Harness>,
     pub vcs: Arc<dyn Vcs>,
     pub verify: Arc<dyn VerifyRunner>,
+    /// Runs the heavy jobs builders declare (ADR 0010).
+    pub jobs: Arc<dyn crate::ports::JobRunner>,
     pub clock: Arc<dyn Clock>,
     pub notifier: Arc<dyn Notifier>,
     /// The LLM engine, to check that the model is served before a session.
@@ -118,6 +120,9 @@ impl std::fmt::Debug for Runner {
             .finish_non_exhaustive()
     }
 }
+
+/// The pause between two checks that the engine serves the run's models.
+pub(crate) const ENGINE_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 impl Runner {
     /// Loads the ledger and checks the pins. `stop` pauses the run when cancelled.
@@ -230,28 +235,32 @@ impl Runner {
         Ok(())
     }
 
-    /// Waits for the engine to serve every model of the run (up to 30 tries,
-    /// 20 s apart), unless stopping.
-    async fn wait_for_engine(&self) -> bool {
-        for _ in 0..30 {
+    /// Waits for the engine to serve every model of the run (up to 30
+    /// tries, [`ENGINE_WAIT`] apart), and logs the wait, `why`, once the first try
+    /// fails. The last error when it still does not serve; `None` once it
+    /// serves, or when the run is stopping, which callers check.
+    async fn wait_for_engine(&self, why: &str) -> Option<RunError> {
+        const TRIES: u32 = 30;
+        for tried in 1..=TRIES {
             if self.stopping() {
-                return false;
+                return None;
             }
-            match self.engine_serving().await {
-                Ok(()) => return true,
-                Err(_) => {
-                    self.deps
-                        .clock
-                        .sleep(std::time::Duration::from_secs(20))
-                        .await;
-                }
+            let error = self.engine_serving().await.err()?;
+            if tried == TRIES {
+                return Some(error);
             }
+            if tried == 1 {
+                self.log(&format!(
+                    "  waiting for the LLMs to serve again {why}: {error}"
+                ));
+            }
+            self.deps.clock.sleep(ENGINE_WAIT).await;
         }
-        false
+        None
     }
 
     /// Whether the engine lists every model of the run as loaded: the
-    /// run's and each role's, all resident at once (ADR 0010). With a
+    /// run's and each role's, all resident at once (ADR 0011). With a
     /// lease, the LLMs are loaded first when they are not resident (after a
     /// media job whose reload failed, for example); when that fails, the
     /// refusal names the models still missing and says why.

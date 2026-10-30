@@ -61,7 +61,11 @@ the failed attempts tried. A builder that finds its task cannot pass
 without changing a check of a done task says so in
 `.tenaz/conflicts/<TASK>.md`; the task is blocked at once, and a replan
 may add a card that amends those checks, judged against the spec (ADR
-0009). When every task is done, a final review checks the whole goal
+0009). Work too heavy for a session, such as a long render, is declared
+by the builder in `.tenaz/jobs/<TASK>.json`; Tenaz runs it between
+sessions, with the engine's memory freed where it can, for at most
+`jobMinutes` (60), and the next session of the attempt reads how it went
+(ADR 0010). When every task is done, a final review checks the whole goal
 against the brief.
 
 **`verify` decides when the work is done.** It is an executable at the
@@ -90,9 +94,9 @@ project's own tests.
   the LLM, runs the image model, frees it and reloads the LLM. With
   `--model-for`, every model named must be loaded at once: Tenaz checks
   before the first session (loading what it can, as for `--model`), does
-  not swap between them, and frees and reloads them all around an image. The
-  agent's requests wait meanwhile instead of failing. See [Images](#images)
-  for what that needs from your engine.
+  not swap between them, and frees and reloads them all around an image
+  or a heavy job. The agent's requests wait meanwhile instead of failing.
+  See [Images](#images) for what that needs from your engine.
 - **Pause and resume.** Ctrl-C pauses after the current session; run again
   to continue.
 
@@ -358,7 +362,7 @@ model family; the other roles keep `--model`. Repeat it for more roles
 `--context-window`; roles that name the same model get the same window.
 The engine serves every model named, all loaded at once: Tenaz does not
 swap between them. Not with `--harness pi` yet. See
-[ADR 0010](docs/adr/0010-a-model-per-role.md).
+[ADR 0011](docs/adr/0011-a-model-per-role.md).
 
 `--vision` says the model reads images. `--set key=value` overrides a
 parameter; `tenaz params` lists them. Tenaz does not set the sampling

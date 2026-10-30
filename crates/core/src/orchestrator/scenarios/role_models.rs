@@ -1,6 +1,6 @@
 //! Runs where some roles play another model than the run's: each session
 //! is opened with its role's model and budgeted by that model's window
-//! (ADR 0010).
+//! (ADR 0011).
 
 use std::sync::{Arc, Mutex};
 

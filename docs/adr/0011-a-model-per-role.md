@@ -1,4 +1,4 @@
-# ADR 0010: A model per role
+# ADR 0011: A model per role
 
 Status: accepted, 2026-10-29.
 
@@ -44,7 +44,8 @@ model. It cannot give the review to another family.
 - One engine serves every model in the map. Before the first session
   Tenaz checks that the engine lists each one as loaded, and names the
   ones that are not. Tenaz does not swap between them: the lease still
-  unloads the LLMs only for a media job, and then all of them.
+  unloads the LLMs only for a media job or a heavy job (ADR 0010), and
+  then all of them.
 - fx is the harness covered. `init` refuses a map with `--harness pi`.
 
 ### C. Swap the models through the lease

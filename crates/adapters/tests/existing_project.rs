@@ -92,6 +92,7 @@ fn deps(harness: ScriptedHarness, root: &Path, verify_path: &str) -> Deps {
         harness: Arc::new(harness),
         vcs: Arc::new(GitRepo::new(root)),
         verify: Arc::new(VerifyProcess::new(root).at(verify_path)),
+        jobs: Arc::new(tenaz_adapters::job::JobProcess::new(root)),
         clock: Arc::new(SystemClock::new()),
         notifier: Arc::new(SilentNotifier),
         engine: None,

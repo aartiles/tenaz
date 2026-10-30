@@ -1,7 +1,7 @@
 //! Which model plays each role: the `--model-for ROLE=ID` and
 //! `--context-window-for ROLE=N` pairs `init` checks and pins in
 //! `run.json`. A role without an entry is played by
-//! the run's model (ADR 0010).
+//! the run's model (ADR 0011).
 
 use std::collections::BTreeMap;
 

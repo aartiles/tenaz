@@ -61,11 +61,7 @@ impl Runner {
             if resumed {
                 self.save()?;
             }
-            let text = if recovery.has_continued() || resumed {
-                format!("{}\n\n{}", without_map(prompt), recovery.note())
-            } else {
-                prompt.to_owned()
-            };
+            let text = session_prompt(prompt, &recovery, resumed);
             let result = self.session_once(role, &text, ctx).await?;
             let label = result.record.label.clone();
             if self.stopping() {
@@ -86,7 +82,9 @@ impl Runner {
                     if self.stopping() {
                         return Err(self.pause(&label, role, ctx)?);
                     }
-                    self.wait_for_engine().await;
+                    // The next session meets the engine as it is: a failure
+                    // there counts toward the same retries.
+                    let _ = self.wait_for_engine("after an engine error").await;
                 }
                 Step::GiveUp(why) => return Err(self.give_up(&label, why)),
             }
@@ -147,6 +145,17 @@ impl Runner {
     /// Records a pause during `label` and returns the error that unwinds the run.
     fn pause(&mut self, label: &str, role: Role, ctx: &SessionCtx) -> Result<RunError, RunError> {
         self.ledger.pending_continuation = true;
+        self.record_pause(label, role, ctx)
+    }
+
+    /// Saves and journals a pause at `label`, without telling the next
+    /// session it continues a stopped one.
+    pub(super) fn record_pause(
+        &mut self,
+        label: &str,
+        role: Role,
+        ctx: &SessionCtx,
+    ) -> Result<RunError, RunError> {
         self.ledger.paused_at = Some(self.now());
         self.save()?;
         self.journal(JournalRecord::Paused {
@@ -320,6 +329,21 @@ fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
         raised
     };
     Some(raised)
+}
+
+/// The prompt of a session: `prompt`, with the note a session that
+/// continues earlier work gets, and the one a builder rerun after the
+/// engine ran out of memory gets.
+fn session_prompt(prompt: &str, recovery: &Recovery, resumed: bool) -> String {
+    let mut text = if recovery.has_continued() || resumed {
+        format!("{}\n\n{}", without_map(prompt), recovery.note())
+    } else {
+        prompt.to_owned()
+    };
+    if let Some(note) = recovery.memory_note() {
+        text = format!("{text}\n\n{note}");
+    }
+    text
 }
 
 #[cfg(test)]
