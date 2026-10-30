@@ -8,6 +8,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `diffShare` (default 0.25) sizes the diff a reviewer is shown by its
+  own model's context budget, counted at 3 bytes per token, with
+  `diffLimitBytes` (40000) still the most. A reviewer on a 65536 window at
+  `contextBudget` 0.65 gets about 32 KB; one on 131072 gets 40 KB, as
+  before. In the Digger 3D run of 2026-10-29 the reviewer's first request
+  was 30245 of its 42598 tokens before it read a file, half of it the
+  diff. A run.json without `diffShare` loads with the default. See
+  ADR 0012.
 - `tenaz init --model-for ROLE=ID` gives a role another model than
   `--model`, for example a reviewer of another model family, served by the
   same engine. It is repeatable, one role each, and

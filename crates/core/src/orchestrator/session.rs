@@ -354,7 +354,9 @@ fn prompt_refused_reason(
         "give the {role} a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
     );
     let advice = if role == Role::Reviewer {
-        format!("lower params.diffLimitBytes in .tenaz/run.json and run with --resume, or {larger}")
+        format!(
+            "lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or {larger}"
+        )
     } else {
         larger
     };
@@ -481,7 +483,7 @@ mod tests {
     fn a_refused_review_names_its_size_and_window_and_what_to_lower() {
         assert_eq!(
             prompt_refused_reason("007-reviewer-T001", Role::Reviewer, &qwen(), 281_465),
-            "the harness refused the reviewer prompt of 007-reviewer-T001, 281465 characters; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+            "the harness refused the reviewer prompt of 007-reviewer-T001, 281465 characters; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
         );
     }
 

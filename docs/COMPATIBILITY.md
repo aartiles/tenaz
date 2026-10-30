@@ -128,12 +128,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
   (reasoning, cache, a tool call, an image) run on `--model` only, so a
   role's model is never probed; and every role's model takes the run's
   `--vision`, so a reviewer that cannot read images is still sent them
-  when the run's model can. Likewise one `diffLimitBytes` serves every
-  reviewer, whatever its window: in that run the reviewer's first request
-  was 30245 tokens of its 42598 budget, and the diff was half of Tenaz's
-  prompt (40.6k of 79.4k characters). Not with Pi: `init` refuses the
-  map, and Pi refuses a session on another model than the one it was set
-  up for.
+  when the run's model can. In that run one `diffLimitBytes` served every
+  reviewer, whatever its window: the reviewer's first request was 30245
+  tokens of its 42598 budget, and the diff was half of Tenaz's prompt
+  (40.6k of 79.4k characters). The diff now takes `diffShare` of the
+  reviewer's own budget (ADR 0012), tested with the scripted harness; no
+  real run has used it yet. Not with Pi: `init` refuses the map, and Pi
+  refuses a session on another model than the one it was set up for.
 
 - **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
   job runner; the lease cycle with fake engines, and whole runs with a

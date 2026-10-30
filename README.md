@@ -365,10 +365,14 @@ swap between them. Not with `--harness pi` yet. See
 [ADR 0011](docs/adr/0011-a-model-per-role.md).
 
 `--vision` says the model reads images. `--set key=value` overrides a
-parameter; `tenaz params` lists them. Tenaz does not set the sampling
-temperature, so each engine uses its own default; `--set temperature=0`
-pins it for the run (through the proxy), which makes runs on different
-engines comparable.
+parameter; `tenaz params` lists them. Whatever its model, the diff a
+reviewer is shown takes at most `diffShare` (0.25) of the reviewer's
+context budget, counted at 3 bytes per token, and never more than
+`diffLimitBytes` (40000 bytes); see
+[ADR 0012](docs/adr/0012-prompts-that-fit-their-model.md). Tenaz
+does not set the sampling temperature, so each engine uses its own
+default; `--set temperature=0` pins it for the run (through the proxy),
+which makes runs on different engines comparable.
 
 ### Pi instead of fx
 

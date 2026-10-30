@@ -92,8 +92,13 @@ pub struct RunParams {
     pub max_bootstrap_attempts: u32,
     /// Final review cycles before the run completes with gaps.
     pub max_final_cycles: u32,
-    /// A review diff larger than this is clipped.
+    /// A review diff larger than this is clipped, whatever the reviewer's
+    /// budget.
     pub diff_limit_bytes: usize,
+    /// The share of the reviewer's context budget its diff may take, at 3
+    /// bytes per token, under `diffLimitBytes` (ADR 0012). 0 shows only
+    /// the diff's stat.
+    pub diff_share: f64,
     /// The `verify` summary shown to a model is clipped to this.
     pub verify_clip_bytes: usize,
     /// Handover notes are clipped to this.
@@ -176,6 +181,7 @@ impl Default for RunParams {
             max_bootstrap_attempts: 3,
             max_final_cycles: 2,
             diff_limit_bytes: 40000,
+            diff_share: 0.25,
             verify_clip_bytes: 4000,
             note_clip_bytes: 1500,
             map_clip_bytes: 8000,
@@ -303,6 +309,14 @@ mod tests {
         assert_eq!(p.context_floor, 32768);
         assert!((p.context_abort - 1.3).abs() < f64::EPSILON);
         assert!(p.notify);
+    }
+
+    /// A run.json from before `diffShare` loads with its default.
+    #[test]
+    fn params_pinned_before_diff_share_load_with_its_default() {
+        let p: RunParams = serde_json::from_str(r#"{"diffLimitBytes": 30000}"#).unwrap();
+        assert_eq!(p.diff_limit_bytes, 30000);
+        assert!((p.diff_share - 0.25).abs() < f64::EPSILON);
     }
 
     #[test]
