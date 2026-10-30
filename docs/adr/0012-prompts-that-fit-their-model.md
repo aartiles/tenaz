@@ -51,6 +51,9 @@ What Tenaz does today, for reference:
 For every session of the run, the first request's `input + cacheRead`
 (from `private/NNN-*.rpc.jsonl`) against the session's `prompt_chars`:
 
+Sizes are `prompt_chars`, which counts bytes; for these prompts, nearly
+all ASCII, bytes and characters are the same.
+
 | Sessions | Model | Prompt | First request − chars/4 |
 |---|---|---|---|
 | 001–004 bootstrap | Qwen3.8 | 8.6k–35.0k chars, prose | 6743–6786 tokens |
@@ -131,10 +134,10 @@ and old `run.json` files load with the default.
 - B. Block at once, without clipping.
 - C. Warn only.
 
-The estimate: the prompt at 3 characters per token, plus a reserve for
-the harness of 8192 tokens (a new parameter, `harnessReserveTokens`). The
-reserve is the measured 6750 rounded up; 3 characters per token is the
-diff's rate, so prose is overcounted by about a quarter, which errs on the
+The estimate: the prompt at 3 bytes per token, plus a reserve for the
+harness of 8192 tokens (a new parameter, `harnessReserveTokens`). The
+reserve is the measured 6750 rounded up; 3 bytes per token is the diff's
+rate, so prose is overcounted by about a quarter, which errs on the
 side of fitting. For session 025: 79670 / 3 + 8192 = 34749, against 30245
 in fact. Over the 20 sessions of the run that got a reply, the estimate
 is 2.2k to 4.5k tokens high, and never low.

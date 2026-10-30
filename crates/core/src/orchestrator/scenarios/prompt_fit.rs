@@ -131,7 +131,7 @@ async fn a_review_the_harness_refuses_blocks_the_run_at_once() {
     run.assert_reason_has(&[
         "prompt too large: the harness refused the reviewer prompt of ",
         "-reviewer-T001, ",
-        " characters; fake/reviewer's window is 65536 tokens",
+        " bytes; fake/reviewer's window is 65536 tokens",
         "lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume",
     ]);
     assert_eq!(run.sessions(Role::Reviewer), 1, "{}", run.log);

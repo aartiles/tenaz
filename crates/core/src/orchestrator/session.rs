@@ -397,7 +397,7 @@ impl PromptLimit<'_> {
             |task| format!("{role} prompt for {task}"),
         );
         Some(format!(
-            "the {what}, {} characters, is about {estimate} tokens with the harness's reserve, over the {role}'s budget of {}; {}. To go on, {}",
+            "the {what}, {} bytes, is about {estimate} tokens with the harness's reserve, over the {role}'s budget of {}; {}. To go on, {}",
             prompt.len(),
             self.budget,
             window(self.model),
@@ -426,16 +426,16 @@ fn change_advice(role: Role) -> String {
     }
 }
 
-/// Why the run stops at `label`, whose prompt of `prompt_chars` the harness
+/// Why the run stops at `label`, whose prompt of `prompt_bytes` the harness
 /// refused for `role`'s `model`: what was refused, and what to change.
 fn prompt_refused_reason(
     label: &str,
     role: Role,
     model: &SessionModel,
-    prompt_chars: usize,
+    prompt_bytes: usize,
 ) -> String {
     format!(
-        "the harness refused the {role} prompt of {label}, {prompt_chars} characters; {}. To go on, {}",
+        "the harness refused the {role} prompt of {label}, {prompt_bytes} bytes; {}. To go on, {}",
         window(model),
         change_advice(role)
     )
@@ -558,7 +558,7 @@ mod tests {
     fn a_refused_review_names_its_size_and_window_and_what_to_lower() {
         assert_eq!(
             prompt_refused_reason("007-reviewer-T001", Role::Reviewer, &qwen(), 281_465),
-            "the harness refused the reviewer prompt of 007-reviewer-T001, 281465 characters; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+            "the harness refused the reviewer prompt of 007-reviewer-T001, 281465 bytes; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
         );
     }
 
@@ -566,12 +566,12 @@ mod tests {
     fn a_refused_prompt_of_another_role_asks_for_a_larger_window_only() {
         assert_eq!(
             prompt_refused_reason("005-builder-T001", Role::Builder, &qwen(), 300_000),
-            "the harness refused the builder prompt of 005-builder-T001, 300000 characters; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the builder a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+            "the harness refused the builder prompt of 005-builder-T001, 300000 bytes; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the builder a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
         );
     }
 
     /// Session 025 of the Digger 3D run: a reviewer prompt of 79670
-    /// characters whose first request was 30245 tokens.
+    /// bytes whose first request was 30245 tokens.
     #[test]
     fn a_first_request_is_estimated_high_from_the_prompt_and_the_reserve() {
         let estimate = first_request_tokens(&"x".repeat(79_670), 8192);
@@ -604,11 +604,11 @@ mod tests {
         let task = TaskId::parse("T003").unwrap();
         assert_eq!(
             limit(Role::Reviewer, &model).over(&"x".repeat(31), Some(&task)),
-            Some("the reviewer prompt for T003, 31 characters, is about 8203 tokens with the harness's reserve, over the reviewer's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
+            Some("the reviewer prompt for T003, 31 bytes, is about 8203 tokens with the harness's reserve, over the reviewer's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
         );
         assert_eq!(
             limit(Role::Replan, &model).over(&"x".repeat(31), None),
-            Some("the replan prompt, 31 characters, is about 8203 tokens with the harness's reserve, over the replan's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the replan a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
+            Some("the replan prompt, 31 bytes, is about 8203 tokens with the harness's reserve, over the replan's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the replan a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
         );
     }
 

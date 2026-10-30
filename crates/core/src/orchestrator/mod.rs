@@ -534,9 +534,7 @@ impl Runner {
             Err(RunError::EngineUnavailable(reason)) => self.block(&format!(
                 "engine unavailable: {reason}. Fix the engine, then run with --resume"
             )),
-            Err(RunError::PromptTooLarge(reason)) => {
-                self.block(&format!("prompt too large: {reason}"))
-            }
+            Err(error @ RunError::PromptTooLarge(_)) => self.block(&error.to_string()),
             Err(error) => {
                 self.ledger.last_error = Some(error.to_string());
                 self.ledger.inflight = None;
