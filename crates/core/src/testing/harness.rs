@@ -99,6 +99,11 @@ pub struct ScriptedHarness {
     /// Each bootstrap session writes only the files of the step its prompt
     /// names. Otherwise the first one writes them all.
     pub stepwise_bootstrap: bool,
+    /// Every review of this task is refused before its first turn, as fx
+    /// refuses a prompt larger than the model's window.
+    pub oversize_review: Option<String>,
+    /// Every builder session of this task is refused the same way.
+    pub oversize_task: Option<String>,
     /// The first review of this task reads until its context is stopped.
     pub outgrow_review: Option<String>,
     /// The first review of this task asks for changes with a MINOR finding.

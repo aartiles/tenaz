@@ -128,12 +128,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
   (reasoning, cache, a tool call, an image) run on `--model` only, so a
   role's model is never probed; and every role's model takes the run's
   `--vision`, so a reviewer that cannot read images is still sent them
-  when the run's model can. Likewise one `diffLimitBytes` serves every
-  reviewer, whatever its window: in that run the reviewer's first request
-  was 30245 tokens of its 42598 budget, and the diff was half of Tenaz's
-  prompt (40.6k of 79.4k characters). Not with Pi: `init` refuses the
-  map, and Pi refuses a session on another model than the one it was set
-  up for.
+  when the run's model can. In that run one `diffLimitBytes` served every
+  reviewer, whatever its window: the reviewer's first request was 30245
+  tokens of its 42598 budget, and the diff was half of Tenaz's prompt
+  (40.6k of 79.4k characters). The diff now takes `diffShare` of the
+  reviewer's own budget (ADR 0012), tested with the scripted harness; no
+  real run has used it yet. Not with Pi: `init` refuses the map, and Pi
+  refuses a session on another model than the one it was set up for.
 
 - **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
   job runner; the lease cycle with fake engines, and whole runs with a
@@ -165,16 +166,29 @@ above), so a 32k context is the practical floor (`contextFloor`).
   tokens) does not fit in GPU memory even after freeing the prefix cache
   … It was refused before any work started."), which fx reports as
   `ProviderError`; fx refuses a prompt it cannot compact into the model's
-  window with `ContextCapacityExceeded`. Tenaz matches neither message: it
-  journals the first as an engine error and the second as a harness exit,
-  and sends the same prompt again after each wait, up to `engineRetries`,
-  then stops the run as engine unavailable. Seen twice in the Digger 3D
-  run of 2026-10-29, seven sessions each time: reviewers on a
-  281k-character prompt that fx refused, then, with the lists of changed
-  files clipped, reviewers that mlx-serve refused at 39468 tokens after
-  three turns and then at 30245 tokens, before reading a file. The same
-  refusal also came mid-session in two earlier reviews: one session
-  finished anyway, and the other's rerun ran to the end.
+  window with `ContextCapacityExceeded`. Tenaz reads the first as the
+  engine running out of memory (ADR 0012), and still sends the same
+  prompt again after each wait, up to `engineRetries`, then stops the run
+  as engine unavailable, saying to free memory or reload the model. The
+  matcher is tested with the recorded message, not yet against mlx-serve
+  itself; the error body around it (`error.message`) is assumed, not
+  captured, and so is whether it comes as an HTTP error or inside the
+  stream. fx's refusal before any reply blocks the run at once (`prompt
+  too large:`), since the same prompt would be refused again; this is
+  tested with the scripted harness and the stderr fx left in that run,
+  not yet against fx itself. Seen twice in the Digger 3D run of
+  2026-10-29, seven sessions each time: reviewers on a 281k-character
+  prompt that fx refused, then, with the lists of changed files clipped,
+  reviewers that mlx-serve refused at 39468 tokens after three turns and
+  then at 30245 tokens, before reading a file. The same refusal also came
+  mid-session in two earlier reviews: one session finished anyway, and
+  the other's rerun ran to the end. Before each session Tenaz now
+  estimates the first request (3 bytes per token plus
+  `harnessReserveTokens`) and blocks when it is over the role's budget.
+  The 8192-token reserve is fx 0.0.15's measured 6750 rounded up; Pi's
+  own prompt and tools were not measured, and a newer fx may add more.
+  The check is tested with the scripted harness only, not yet in a run
+  against fx or mlx-serve.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.

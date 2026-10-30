@@ -8,6 +8,22 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Before a session opens, Tenaz estimates its first request: the prompt
+  at 3 bytes per token, plus `harnessReserveTokens` (default 8192) for the
+  harness's own prompt and tools. Over the budget of the role's model,
+  the run blocks with a reason that starts `prompt too large:`, names the
+  role, the task if any, the model and its window, and says what to
+  change; no session runs. A card's own token budget and the engine's
+  capacity cap do not count here. Over the Digger 3D run of 2026-10-29
+  the estimate was 2.2k to 4.5k tokens high, never low. See ADR 0012.
+- `diffShare` (default 0.25) sizes the diff a reviewer is shown by its
+  own model's context budget, under the engine's capacity cap when there
+  is one, counted at 3 bytes per token, with `diffLimitBytes` (40000)
+  still the most. A reviewer on a 65536 window at `contextBudget` 0.65
+  gets about 32 KB; one on 131072 gets 40 KB, as before. In the Digger 3D
+  run of 2026-10-29 the reviewer's first request was 30245 of its 42598
+  tokens before it read a file, half of it the diff. A run.json without
+  `diffShare` loads with the default. See ADR 0012.
 - `tenaz init --model-for ROLE=ID` gives a role another model than
   `--model`, for example a reviewer of another model family, served by the
   same engine. It is repeatable, one role each, and
@@ -120,6 +136,25 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A prompt the harness refuses as larger than the model's window (fx's
+  `ContextCapacityExceeded` before any reply) blocks the run at once, with
+  a reason that starts `prompt too large:`, names the session, its role,
+  its model, the model's window and the prompt's size, and says what to
+  change. The same error after a reply is rerun as before. Tenaz used to
+  send the same prompt again up to `engineRetries` times and then block as
+  "engine unavailable": in the Digger 3D run of 2026-10-29 that took seven
+  sessions and about 45 minutes. A builder whose prompt is refused is not
+  charged the attempt. See ADR 0012.
+- mlx-serve's refusal of a prompt that "does not fit in GPU memory" is
+  treated as the engine running out of memory, rather than as an unnamed
+  engine error: the session's log line says `failed (engine out of
+  memory)`, and a builder's rerun gets the memory note when jobs are on.
+  For any engine out of memory, the rerun's log line, the notice at the
+  first rerun, and the run's reason once the retries run out say to free
+  memory or reload the model. The journal's `cause` stays `engine`. In
+  the Digger 3D run of 2026-10-29 mlx-serve refused a reviewer this way
+  seven times; the waits did not help, a reload of the model did. See
+  ADR 0012.
 - A list of changed files put in a prompt is clipped to `statClipBytes`
   (8000 bytes, a new parameter), at a whole line, with the number of lines
   left out. Such lists went in whole: the reviewer's (ahead of a diff

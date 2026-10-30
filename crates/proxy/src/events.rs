@@ -314,6 +314,16 @@ mod tests {
         );
     }
 
+    /// mlx-serve 26.10.3 refuses a prompt whose prefill does not fit in GPU
+    /// memory. The message is recorded (Digger 3D run, 2026-10-29); the
+    /// `error.message` body around it is assumed, not captured. The text is
+    /// `MLX_SERVE_REFUSAL` in tenaz-core's `session` tests.
+    #[test]
+    fn an_mlx_serve_memory_refusal_is_out_of_memory() {
+        let body = br#"{"error":{"message":"This prompt (30245 tokens) does not fit in GPU memory even after freeing the prefix cache: it requires ~7720MB GPU memory but only ~6960MB is available. It was refused before any work started. Reduce the prompt length, lower --ctx-size, or free memory on the machine."}}"#;
+        assert_eq!(classify_error(body).1, EngineErrorKind::OutOfMemory);
+    }
+
     /// Sushi's chat-completions stream error: the message, else the type.
     #[test]
     fn an_error_inside_a_stream_is_read_and_classified() {

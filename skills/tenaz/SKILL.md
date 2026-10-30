@@ -93,9 +93,14 @@ Leave out the plan: Tenaz makes its own. Keep it to one page.
 4. When `run` exits, its code says how it ended (`tenaz run --help`).
 
 When it is blocked, read `blocked_reason` and the newest notes in
-`.tenaz/notes/`. A task whose builder found it cannot pass without changing
-a check of a done task leaves `.tenaz/conflicts/<TASK>.md`; a replan may
-then add a card whose `amends` lets its builder change those checks.
+`.tenaz/notes/`. A reason that starts `prompt too large:` names the
+role, its model and that model's window, and says what to change: for a
+review, `params.diffShare` or `params.diffLimitBytes` in
+`.tenaz/run.json`; otherwise tell the user the role needs a model with
+a larger window, which takes a new run. A task whose builder found it
+cannot pass without changing a check of a done task leaves
+`.tenaz/conflicts/<TASK>.md`; a replan may then add a card whose
+`amends` lets its builder change those checks.
 A builder may declare a heavy job (a render, a long build) in
 `.tenaz/jobs/<TASK>.json`; unless `jobMinutes=0`, Tenaz runs it between
 sessions with the engine's memory freed where the engine can, logs it to
@@ -109,7 +114,8 @@ with fx, the model's reasoning: `.tenaz/private/<label>.prompt.md` and
 engine down, an unclear brief: tell the user, since the brief cannot change
 after `init`), then `tenaz run --project <dir> --resume`; after updating
 Tenaz, add `--refresh-templates` so the run gets the new prompts. Do not
-edit `.tenaz/run.json` or the task cards to force progress.
+edit `.tenaz/run.json` or the task cards to force progress; the one edit
+a block reason asks for is the exception.
 
 ## Check the result
 

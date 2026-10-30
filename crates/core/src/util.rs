@@ -49,6 +49,17 @@ pub fn approx_tokens(text: &str) -> usize {
     text.len().div_ceil(4)
 }
 
+/// Bytes per token of code and diffs: about 3 in the Digger 3D run, where
+/// prose was close to 4 (ADR 0012).
+pub const CODE_BYTES_PER_TOKEN: usize = 3;
+
+/// The token count of a text taken as code: [`CODE_BYTES_PER_TOKEN`].
+/// Prose is overcounted by about a quarter, which errs on the side of
+/// fitting.
+pub fn approx_code_tokens(text: &str) -> usize {
+    text.len().div_ceil(CODE_BYTES_PER_TOKEN)
+}
+
 /// `text` without terminal escape sequences: colours and other CSI
 /// sequences (`ESC [ … final`), OSC sequences (`ESC ] … BEL` or `ESC \\`)
 /// and two-character escapes.
@@ -127,5 +138,7 @@ mod tests {
     fn approx_tokens_rounds_up() {
         assert_eq!(approx_tokens(""), 0);
         assert_eq!(approx_tokens("abcde"), 2);
+        assert_eq!(approx_code_tokens(""), 0);
+        assert_eq!(approx_code_tokens("abcd"), 2);
     }
 }

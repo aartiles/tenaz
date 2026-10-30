@@ -92,8 +92,13 @@ pub struct RunParams {
     pub max_bootstrap_attempts: u32,
     /// Final review cycles before the run completes with gaps.
     pub max_final_cycles: u32,
-    /// A review diff larger than this is clipped.
+    /// A review diff larger than this is clipped, whatever the reviewer's
+    /// budget.
     pub diff_limit_bytes: usize,
+    /// The share of the reviewer's context budget its diff may take, at 3
+    /// bytes per token, under `diffLimitBytes` (ADR 0012). 0 shows only
+    /// the diff's stat.
+    pub diff_share: f64,
     /// The `verify` summary shown to a model is clipped to this.
     pub verify_clip_bytes: usize,
     /// Handover notes are clipped to this.
@@ -102,6 +107,10 @@ pub struct RunParams {
     pub map_clip_bytes: usize,
     /// A list of changed files (a diff's stat) is clipped to this.
     pub stat_clip_bytes: usize,
+    /// Tokens the harness adds to a session's first request, its system
+    /// prompt and tool schemas: a prompt must fit its budget with them.
+    /// fx added about 6750 in the Digger 3D run (ADR 0012).
+    pub harness_reserve_tokens: u64,
     /// Memory sampling period (0 disables).
     pub memory_sample_sec: u64,
     /// Desktop notifications when a run starts, waits on the engine, blocks, ends or crashes.
@@ -176,10 +185,12 @@ impl Default for RunParams {
             max_bootstrap_attempts: 3,
             max_final_cycles: 2,
             diff_limit_bytes: 40000,
+            diff_share: 0.25,
             verify_clip_bytes: 4000,
             note_clip_bytes: 1500,
             map_clip_bytes: 8000,
             stat_clip_bytes: 8000,
+            harness_reserve_tokens: 8192,
             memory_sample_sec: 30,
             notify: true,
             existing_project: None,
@@ -303,6 +314,16 @@ mod tests {
         assert_eq!(p.context_floor, 32768);
         assert!((p.context_abort - 1.3).abs() < f64::EPSILON);
         assert!(p.notify);
+    }
+
+    /// A run.json from before `diffShare` and `harnessReserveTokens` loads
+    /// with their defaults.
+    #[test]
+    fn params_pinned_before_adr_0012_load_with_its_defaults() {
+        let p: RunParams = serde_json::from_str(r#"{"diffLimitBytes": 30000}"#).unwrap();
+        assert_eq!(p.diff_limit_bytes, 30000);
+        assert!((p.diff_share - 0.25).abs() < f64::EPSILON);
+        assert_eq!(p.harness_reserve_tokens, 8192);
     }
 
     #[test]

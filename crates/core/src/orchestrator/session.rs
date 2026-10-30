@@ -8,9 +8,11 @@ use std::time::Duration;
 
 use crate::briefing::without_map;
 use crate::ledger::{JournalRecord, SessionRecord};
+use crate::ports::SessionModel;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
+use crate::util::approx_code_tokens;
 
 use super::recovery::{Continuation, FailureCause, GiveUp, Recovery, Step};
 use super::{RunError, Runner};
@@ -57,11 +59,12 @@ impl Runner {
     ) -> Result<SessionResult, RunError> {
         let mut recovery = Recovery::default();
         loop {
-            let resumed = std::mem::take(&mut self.ledger.pending_continuation);
-            if resumed {
+            let resumed = self.ledger.pending_continuation;
+            let text = session_prompt(prompt, &recovery, resumed);
+            self.check_prompt_fits(role, &text, ctx)?;
+            if std::mem::take(&mut self.ledger.pending_continuation) {
                 self.save()?;
             }
-            let text = session_prompt(prompt, &recovery, resumed);
             let result = self.session_once(role, &text, ctx).await?;
             let label = result.record.label.clone();
             if self.stopping() {
@@ -86,6 +89,7 @@ impl Runner {
                     // there counts toward the same retries.
                     let _ = self.wait_for_engine("after an engine error").await;
                 }
+                Step::PromptRefused => return Err(self.prompt_refused(&result.record, role)),
                 Step::GiveUp(why) => return Err(self.give_up(&label, why)),
             }
         }
@@ -129,17 +133,43 @@ impl Runner {
         self.log(&format!("  {label}: {why}; a fresh session continues the same work ({count}/{limit}, not counted as an attempt)"));
     }
 
+    /// Stops the run before a session of `role` whose `prompt`, with the
+    /// harness's reserve, is estimated over its model's budget: the engine
+    /// or the harness would refuse it, or leave the session no room to
+    /// work (ADR 0012).
+    fn check_prompt_fits(
+        &self,
+        role: Role,
+        prompt: &str,
+        ctx: &SessionCtx,
+    ) -> Result<(), RunError> {
+        let model = self.ledger.config.model_for(role);
+        let limit = PromptLimit {
+            role,
+            model: &model,
+            budget: self.ledger.model_budget_tokens(role),
+            reserve: self.params.harness_reserve_tokens,
+        };
+        match limit.over(prompt, ctx.task.as_ref()) {
+            Some(reason) => Err(RunError::PromptTooLarge(reason)),
+            None => Ok(()),
+        }
+    }
+
+    /// The error that ends the run when the harness refused `record`'s prompt.
+    fn prompt_refused(&self, record: &SessionRecord, role: Role) -> RunError {
+        let model = self.ledger.config.model_for(role);
+        RunError::PromptTooLarge(prompt_refused_reason(
+            &record.label,
+            role,
+            &model,
+            record.prompt_chars,
+        ))
+    }
+
     /// The error that ends the run when a session keeps failing in the engine.
     fn give_up(&self, label: &str, why: GiveUp) -> RunError {
-        RunError::EngineUnavailable(match why {
-            GiveUp::Capacity => format!(
-                "sessions still overflow the engine's memory after the context budget was lowered to {} (last: {label})",
-                self.ledger.context_cap.unwrap_or(0)
-            ),
-            GiveUp::Engine { sessions } => {
-                format!("{sessions} sessions in a row ended with engine errors (last: {label})")
-            }
-        })
+        RunError::EngineUnavailable(give_up_reason(label, why, self.ledger.context_cap))
     }
 
     /// Records a pause during `label` and returns the error that unwinds the run.
@@ -285,16 +315,12 @@ impl Runner {
             wait_s: wait,
             cause: Some(cause.as_str().to_owned()),
         });
-        let what = match cause {
-            FailureCause::Harness => "the harness ended before the turn settled",
-            FailureCause::Engine => "engine error",
-            FailureCause::OutOfMemory => {
-                "the engine ran out of memory (another program may be using the GPU)"
-            }
-        };
+        let what = retry_reason(cause);
         self.log(&format!("  {label}: {what}; retrying the same session in {wait} s ({}/{}, not counted as an attempt)", retry + 1, self.params.engine_retries));
-        if retry == 0 && cause != FailureCause::Harness {
-            self.notify("The engine is failing (often memory). Free memory; the run retries the same session.");
+        if retry == 0
+            && let Some(notice) = retry_notice(cause)
+        {
+            self.notify(&notice);
         }
         self.sleep_unless_stopped(Duration::from_secs(wait)).await;
     }
@@ -304,6 +330,132 @@ impl Runner {
         tokio::select! {
             () = self.deps.clock.sleep(wait) => {}
             () = self.stop.cancelled() => {}
+        }
+    }
+}
+
+/// What the operator can do when the engine runs out of memory: in the
+/// Digger 3D run waits did not bring back the memory mlx-serve needed, a
+/// reload did (ADR 0012).
+const OUT_OF_MEMORY_ADVICE: &str =
+    "free memory (another program may be using the GPU) or reload the model";
+
+/// Why a session the engine failed is rerun, for the log.
+fn retry_reason(cause: FailureCause) -> String {
+    match cause {
+        FailureCause::Harness => "the harness ended before the turn settled".to_owned(),
+        FailureCause::Engine => "engine error".to_owned(),
+        FailureCause::OutOfMemory => {
+            format!("the engine ran out of memory; {OUT_OF_MEMORY_ADVICE}")
+        }
+    }
+}
+
+/// The notice at the first rerun of a session the engine failed; none for
+/// a harness that ended on its own.
+fn retry_notice(cause: FailureCause) -> Option<String> {
+    match cause {
+        FailureCause::Harness => None,
+        FailureCause::Engine => Some(
+            "The engine is failing (often memory). Free memory; the run retries the same session."
+                .to_owned(),
+        ),
+        FailureCause::OutOfMemory => Some(format!(
+            "The engine ran out of memory: {OUT_OF_MEMORY_ADVICE}. The run retries the same session."
+        )),
+    }
+}
+
+/// The first request of a session with `prompt`, estimated: the prompt at
+/// three bytes per token, plus the harness's `reserve`. Over the Digger 3D
+/// run, with a reserve of 8192, this was 2.2k to 4.5k tokens high and never
+/// low (ADR 0012).
+fn first_request_tokens(prompt: &str, reserve: u64) -> u64 {
+    approx_code_tokens(prompt) as u64 + reserve
+}
+
+/// What a prompt of a `role` session must fit: `budget` tokens of
+/// `model`, with the harness's `reserve` on top of the prompt.
+struct PromptLimit<'a> {
+    role: Role,
+    model: &'a SessionModel,
+    budget: u64,
+    reserve: u64,
+}
+
+impl PromptLimit<'_> {
+    /// Why `prompt`, for `task` when there is one, does not fit; `None`
+    /// when it does.
+    fn over(&self, prompt: &str, task: Option<&TaskId>) -> Option<String> {
+        let estimate = first_request_tokens(prompt, self.reserve);
+        if estimate <= self.budget {
+            return None;
+        }
+        let role = self.role;
+        let what = task.map_or_else(
+            || format!("{role} prompt"),
+            |task| format!("{role} prompt for {task}"),
+        );
+        Some(format!(
+            "the {what}, {} bytes, is about {estimate} tokens with the harness's reserve, over the {role}'s budget of {}; {}. To go on, {}",
+            prompt.len(),
+            self.budget,
+            window(self.model),
+            change_advice(role)
+        ))
+    }
+}
+
+/// `model`'s name and window, for a reason.
+fn window(model: &SessionModel) -> String {
+    format!("{}'s window is {} tokens", model.name, model.context_window)
+}
+
+/// What to change when a `role` prompt does not fit: a review can be made
+/// smaller; a model is changed in a new run only.
+fn change_advice(role: Role) -> String {
+    let larger = format!(
+        "give the {role} a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+    );
+    if role == Role::Reviewer {
+        format!(
+            "lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or {larger}"
+        )
+    } else {
+        larger
+    }
+}
+
+/// Why the run stops at `label`, whose prompt of `prompt_bytes` the harness
+/// refused for `role`'s `model`: what was refused, and what to change.
+fn prompt_refused_reason(
+    label: &str,
+    role: Role,
+    model: &SessionModel,
+    prompt_bytes: usize,
+) -> String {
+    format!(
+        "the harness refused the {role} prompt of {label}, {prompt_bytes} bytes; {}. To go on, {}",
+        window(model),
+        change_advice(role)
+    )
+}
+
+/// Why the run stops rerunning `label`, under the run's `context_cap`.
+fn give_up_reason(label: &str, why: GiveUp, context_cap: Option<u64>) -> String {
+    match why {
+        GiveUp::Capacity => format!(
+            "sessions still overflow the engine's memory after the context budget was lowered to {} (last: {label})",
+            context_cap.unwrap_or(0)
+        ),
+        GiveUp::Engine {
+            sessions,
+            cause: FailureCause::OutOfMemory,
+        } => format!(
+            "{sessions} sessions in a row ended with engine errors, the last one out of memory (last: {label}); {OUT_OF_MEMORY_ADVICE}"
+        ),
+        GiveUp::Engine { sessions, .. } => {
+            format!("{sessions} sessions in a row ended with engine errors (last: {label})")
         }
     }
 }
@@ -364,6 +516,146 @@ mod tests {
         assert_eq!(raised_cap(70_000, 85_196, ceiling), None);
         // A ceiling above the configured budget does not lift it further.
         assert_eq!(raised_cap(60_000, 85_196, Some(90_000)), Some(72_598));
+    }
+
+    /// mlx-serve refuses a prompt for memory until the model is reloaded
+    /// (the Digger 3D run of 2026-10-29): the reason says so.
+    #[test]
+    fn giving_up_after_the_engine_ran_out_of_memory_says_what_to_do() {
+        let why = GiveUp::Engine {
+            sessions: 7,
+            cause: FailureCause::OutOfMemory,
+        };
+        assert_eq!(
+            give_up_reason("031-reviewer-T003", why, None),
+            "7 sessions in a row ended with engine errors, the last one out of memory (last: 031-reviewer-T003); free memory (another program may be using the GPU) or reload the model"
+        );
+    }
+
+    #[test]
+    fn giving_up_after_other_engine_errors_gives_no_memory_advice() {
+        let why = GiveUp::Engine {
+            sessions: 7,
+            cause: FailureCause::Engine,
+        };
+        assert_eq!(
+            give_up_reason("020-reviewer-T003", why, None),
+            "7 sessions in a row ended with engine errors (last: 020-reviewer-T003)"
+        );
+    }
+
+    fn qwen() -> SessionModel {
+        SessionModel {
+            name: "mlx-serve/Qwen3.8-27B".into(),
+            id: "Qwen3.8-27B".into(),
+            context_window: 65_536,
+            supports_images: false,
+        }
+    }
+
+    /// The reviewer of T001 in the Digger 3D run of 2026-10-29.
+    #[test]
+    fn a_refused_review_names_its_size_and_window_and_what_to_lower() {
+        assert_eq!(
+            prompt_refused_reason("007-reviewer-T001", Role::Reviewer, &qwen(), 281_465),
+            "the harness refused the reviewer prompt of 007-reviewer-T001, 281465 bytes; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+        );
+    }
+
+    #[test]
+    fn a_refused_prompt_of_another_role_asks_for_a_larger_window_only() {
+        assert_eq!(
+            prompt_refused_reason("005-builder-T001", Role::Builder, &qwen(), 300_000),
+            "the harness refused the builder prompt of 005-builder-T001, 300000 bytes; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the builder a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+        );
+    }
+
+    /// Session 025 of the Digger 3D run: a reviewer prompt of 79670
+    /// bytes whose first request was 30245 tokens.
+    #[test]
+    fn a_first_request_is_estimated_high_from_the_prompt_and_the_reserve() {
+        let estimate = first_request_tokens(&"x".repeat(79_670), 8192);
+        assert_eq!(estimate, 34_749);
+        assert!(estimate >= 30_245);
+        assert_eq!(first_request_tokens("", 8192), 8192);
+    }
+
+    fn limit(role: Role, model: &SessionModel) -> PromptLimit<'_> {
+        PromptLimit {
+            role,
+            model,
+            budget: 8202,
+            reserve: 8192,
+        }
+    }
+
+    /// 30 bytes are 10 tokens: with the reserve, exactly the budget.
+    #[test]
+    fn a_prompt_fits_up_to_its_budget_and_not_a_token_more() {
+        let model = qwen();
+        let reviewer = limit(Role::Reviewer, &model);
+        assert_eq!(reviewer.over(&"x".repeat(30), None), None);
+        assert!(reviewer.over(&"x".repeat(31), None).is_some());
+    }
+
+    #[test]
+    fn a_prompt_over_its_budget_says_whose_it_is_and_what_to_change() {
+        let model = qwen();
+        let task = TaskId::parse("T003").unwrap();
+        assert_eq!(
+            limit(Role::Reviewer, &model).over(&"x".repeat(31), Some(&task)),
+            Some("the reviewer prompt for T003, 31 bytes, is about 8203 tokens with the harness's reserve, over the reviewer's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
+        );
+        assert_eq!(
+            limit(Role::Replan, &model).over(&"x".repeat(31), None),
+            Some("the replan prompt, 31 bytes, is about 8203 tokens with the harness's reserve, over the replan's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the replan a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
+        );
+    }
+
+    #[test]
+    fn giving_up_on_capacity_names_the_lowered_budget() {
+        assert_eq!(
+            give_up_reason("009-builder-T002", GiveUp::Capacity, Some(30_000)),
+            "sessions still overflow the engine's memory after the context budget was lowered to 30000 (last: 009-builder-T002)"
+        );
+    }
+
+    #[test]
+    fn the_log_line_of_a_rerun_names_its_cause() {
+        for (cause, reason) in [
+            (
+                FailureCause::OutOfMemory,
+                "the engine ran out of memory; free memory (another program may be using the GPU) or reload the model",
+            ),
+            (FailureCause::Engine, "engine error"),
+            (
+                FailureCause::Harness,
+                "the harness ended before the turn settled",
+            ),
+        ] {
+            assert_eq!(retry_reason(cause), reason, "{cause:?}");
+        }
+    }
+
+    #[test]
+    fn the_first_rerun_notice_says_what_to_do_and_none_follows_a_harness_exit() {
+        for (cause, notice) in [
+            (
+                FailureCause::OutOfMemory,
+                Some(
+                    "The engine ran out of memory: free memory (another program may be using the GPU) or reload the model. The run retries the same session.",
+                ),
+            ),
+            (
+                FailureCause::Engine,
+                Some(
+                    "The engine is failing (often memory). Free memory; the run retries the same session.",
+                ),
+            ),
+            (FailureCause::Harness, None),
+        ] {
+            assert_eq!(retry_notice(cause).as_deref(), notice, "{cause:?}");
+        }
     }
 
     #[test]

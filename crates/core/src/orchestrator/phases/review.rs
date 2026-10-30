@@ -7,6 +7,7 @@ use crate::orchestrator::{RunError, Runner};
 use crate::project::{only_minor_findings, verdict_in};
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId};
+use crate::util::CODE_BYTES_PER_TOKEN;
 use crate::verify::VerifyOutcome;
 
 use super::{PromptParts, clip_lines};
@@ -51,6 +52,19 @@ fn review_path(task: &TaskId) -> String {
     format!(".tenaz/reviews/{task}.md")
 }
 
+/// The most of a diff a reviewer with `budget` tokens is shown: `share` of
+/// the budget at [`CODE_BYTES_PER_TOKEN`], and never over `ceiling` bytes.
+fn diff_limit(budget: u64, share: f64, ceiling: usize) -> usize {
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a context budget times a share is far below 2^53, and a negative share saturates to 0 bytes"
+    )]
+    let bytes = (budget as f64 * share * CODE_BYTES_PER_TOKEN as f64).floor() as usize;
+    bytes.min(ceiling)
+}
+
 /// A `diff` over `limit` bytes: its `stat`, then the diff cut at `limit`
 /// (on a character boundary), with a note to read the files instead.
 fn clip_diff(diff: &str, stat: &str, limit: usize) -> String {
@@ -89,14 +103,20 @@ impl Runner {
         Ok(self.review_outcome(task, reviewed))
     }
 
-    /// The diff since `base`, clipped to `diffLimitBytes` after its stat
-    /// (clipped to `statClipBytes`).
+    /// The diff since `base`, clipped to `diffShare` of the reviewer's
+    /// budget, at most `diffLimitBytes`, after its stat (clipped to
+    /// `statClipBytes`).
     fn review_diff(&self, base: &str) -> Result<ReviewDiff, RunError> {
         let mut diff = self.deps.vcs.diff(base, "HEAD", true)?;
         let images = briefing::changed_images(&diff);
-        if diff.len() > self.params.diff_limit_bytes {
+        let limit = diff_limit(
+            self.ledger.role_budget_tokens(Role::Reviewer, None),
+            self.params.diff_share,
+            self.params.diff_limit_bytes,
+        );
+        if diff.len() > limit {
             let stat = self.changed_files(base, Some("HEAD"), false)?;
-            diff = clip_diff(&diff, &stat, self.params.diff_limit_bytes);
+            diff = clip_diff(&diff, &stat, limit);
         }
         Ok(ReviewDiff { text: diff, images })
     }
@@ -231,6 +251,24 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Digger 3D run's budgets at `contextBudget` 0.65: Qwen3.8 on a
+    /// 65536 window, and Bonsai on 131072.
+    #[test]
+    fn a_diff_takes_its_share_of_the_reviewer_budget_up_to_the_ceiling() {
+        for (budget, share, limit) in [
+            (42_598, 0.25, 31_948),
+            (85_196, 0.25, 40_000),
+            (42_598, 0.0, 0),
+            (42_598, -1.0, 0),
+        ] {
+            assert_eq!(
+                diff_limit(budget, share, 40_000),
+                limit,
+                "{budget} × {share}"
+            );
+        }
+    }
 
     #[test]
     fn a_clipped_diff_starts_with_its_stat_and_ends_at_the_limit() {

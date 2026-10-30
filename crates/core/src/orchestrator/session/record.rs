@@ -88,9 +88,7 @@ impl Runner {
         let model = self.ledger.config.model_for(role);
         let watch = WatchConfig {
             turns: ctx.turns.unwrap_or(self.params.turn_budget),
-            context_tokens: self
-                .ledger
-                .context_budget_tokens(model.context_window, ctx.context_tokens),
+            context_tokens: self.ledger.role_budget_tokens(role, ctx.context_tokens),
             idle: role.edits_code(),
             wrap_up: role.wrap_up(),
         };

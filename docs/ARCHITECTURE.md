@@ -68,6 +68,8 @@ Its private `process` module starts and stops the process groups that
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations
 (which one comes next is decided by the pure `orchestrator::recovery`),
+and the check that a prompt fits its role's budget before the session
+opens (ADR 0012),
 what a failed bootstrap attempt tells the next one and whether it counts
 (the pure `orchestrator::bootstrap`),
 the task attempt loop with review, split and block, and pause and resume.

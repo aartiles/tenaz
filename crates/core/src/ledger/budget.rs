@@ -13,6 +13,19 @@ impl Ledger {
         self.context_cap.map_or(wanted, |cap| wanted.min(cap))
     }
 
+    /// The budget a session of `role` is steered at: its model's, or the
+    /// card's `requested` one, under the run's cap.
+    pub fn role_budget_tokens(&self, role: Role, requested: Option<u64>) -> u64 {
+        self.context_budget_tokens(self.config.model_for(role).context_window, requested)
+    }
+
+    /// The configured budget of `role`'s model: what a prompt must fit. A
+    /// card's own budget steers its session, and the cap follows what the
+    /// engine says it can hold, lowered and raised again (ADR 0012).
+    pub fn model_budget_tokens(&self, role: Role) -> u64 {
+        self.configured_budget_tokens(self.config.model_for(role).context_window)
+    }
+
     /// The largest configured budget of the run's models: a cap at or above
     /// it holds no session back.
     pub fn largest_budget_tokens(&self) -> u64 {
@@ -70,6 +83,41 @@ mod tests {
         assert_eq!(ledger.context_budget_tokens(262_144, None), 49_190);
         ledger.context_cap = Some(30_000);
         assert_eq!(ledger.context_budget_tokens(65536, None), 30_000);
+    }
+
+    /// A prompt is checked against its model's budget, before a card's
+    /// budget and the cap.
+    #[test]
+    fn a_role_s_budget_is_capped_and_its_model_s_is_not() {
+        let mut config = config();
+        config
+            .role_models
+            .insert(Role::Reviewer, role_model("r", 65536));
+        let mut ledger = Ledger::new(
+            "t".into(),
+            "b".into(),
+            "s".into(),
+            "0".into(),
+            config,
+            RunParams::default(),
+            vec![],
+        );
+        ledger.context_cap = Some(30_000);
+        // 0.65 of the reviewer's 65536 and of the run's 131072.
+        let (reviewer, run) = (42598, 85196);
+        for (role, requested, capped, model) in [
+            (Role::Reviewer, None, 30_000, reviewer),
+            (Role::Builder, None, 30_000, run),
+            (Role::Builder, Some(20_000), 20_000, run),
+            (Role::Builder, Some(40_000), 30_000, run),
+        ] {
+            assert_eq!(
+                ledger.role_budget_tokens(role, requested),
+                capped,
+                "{role} {requested:?}"
+            );
+            assert_eq!(ledger.model_budget_tokens(role), model, "{role}");
+        }
     }
 
     #[test]
