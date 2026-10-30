@@ -8,6 +8,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Before a session opens, Tenaz estimates its first request: the prompt
+  at 3 bytes per token, plus `harnessReserveTokens` (default 8192) for the
+  harness's own prompt and tools. Over the budget of the role's model,
+  the run blocks with a reason that starts `prompt too large:`, names the
+  role, the task if any, the model and its window, and says what to
+  change; no session runs. A card's own token budget and the engine's
+  capacity cap do not count here. Over the Digger 3D run of 2026-10-29
+  the estimate was 2.2k to 4.5k tokens high, never low. See ADR 0012.
 - `diffShare` (default 0.25) sizes the diff a reviewer is shown by its
   own model's context budget, counted at 3 bytes per token, with
   `diffLimitBytes` (40000) still the most. A reviewer on a 65536 window at

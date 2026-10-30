@@ -126,8 +126,8 @@ and old `run.json` files load with the default.
   sized by the budget sizes it before the session: today the reviewer's
   diff (decision 3); the lists of changed files are already clipped
   (`statClipBytes`). Then, before the harness starts, Tenaz estimates the
-  first request and blocks the run when it is over the session's budget,
-  with the same reason as 1A. No session runs.
+  first request and blocks the run when it is over its role model's
+  budget, with the same reason as 1A. No session runs.
 - B. Block at once, without clipping.
 - C. Warn only.
 
@@ -136,8 +136,14 @@ the harness of 8192 tokens (a new parameter, `harnessReserveTokens`). The
 reserve is the measured 6750 rounded up; 3 characters per token is the
 diff's rate, so prose is overcounted by about a quarter, which errs on the
 side of fitting. For session 025: 79670 / 3 + 8192 = 34749, against 30245
-in fact. Over the 20 sessions of the run that got a reply, the estimate is 2.2k
-to 4.5k tokens high, and never low.
+in fact. Over the 20 sessions of the run that got a reply, the estimate
+is 2.2k to 4.5k tokens high, and never low.
+
+The budget the prompt must fit is its role model's: the `contextBudget`
+share of the model's window. A card's own token budget steers its
+session but does not block it. Nor does `context_cap`: the cap follows
+what the engine says it can hold and is raised again, and a prompt over
+it goes through the capacity retries, as before.
 
 A, because a prompt that cannot fit costs a session or more, and the
 operator needs the reason more than the attempt.
@@ -147,9 +153,10 @@ operator needs the reason more than the attempt.
 - Neither refusal is resent seven times. fx's refusal and a prompt over
   its budget block the run with a reason that names the role, model,
   window and prompt size.
-- A blocked run keeps its pinned parameters. To go on after such a block,
-  the user lowers `diffShare` or `diffLimitBytes`, or gives the role a
-  model with a larger window, in `run.json`, and runs with `--resume`.
+- A blocked run keeps its pinned parameters. To go on after such a block
+  on a review, the user lowers `diffShare` or `diffLimitBytes` in
+  `run.json` and runs with `--resume`. A model with a larger window for
+  the role takes a new run.
 - mlx-serve's memory refusal is told apart from other engine errors in
   the log, the event and the notice. The journal's field names and values
   stay as they are: `cause` is still `engine` or `harness`.

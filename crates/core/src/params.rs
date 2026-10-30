@@ -107,6 +107,10 @@ pub struct RunParams {
     pub map_clip_bytes: usize,
     /// A list of changed files (a diff's stat) is clipped to this.
     pub stat_clip_bytes: usize,
+    /// Tokens the harness adds to a session's first request, its system
+    /// prompt and tool schemas: a prompt must fit its budget with them.
+    /// fx added about 6750 in the Digger 3D run (ADR 0012).
+    pub harness_reserve_tokens: u64,
     /// Memory sampling period (0 disables).
     pub memory_sample_sec: u64,
     /// Desktop notifications when a run starts, waits on the engine, blocks, ends or crashes.
@@ -186,6 +190,7 @@ impl Default for RunParams {
             note_clip_bytes: 1500,
             map_clip_bytes: 8000,
             stat_clip_bytes: 8000,
+            harness_reserve_tokens: 8192,
             memory_sample_sec: 30,
             notify: true,
             existing_project: None,
@@ -311,12 +316,14 @@ mod tests {
         assert!(p.notify);
     }
 
-    /// A run.json from before `diffShare` loads with its default.
+    /// A run.json from before `diffShare` and `harnessReserveTokens` loads
+    /// with their defaults.
     #[test]
-    fn params_pinned_before_diff_share_load_with_its_default() {
+    fn params_pinned_before_adr_0012_load_with_its_defaults() {
         let p: RunParams = serde_json::from_str(r#"{"diffLimitBytes": 30000}"#).unwrap();
         assert_eq!(p.diff_limit_bytes, 30000);
         assert!((p.diff_share - 0.25).abs() < f64::EPSILON);
+        assert_eq!(p.harness_reserve_tokens, 8192);
     }
 
     #[test]

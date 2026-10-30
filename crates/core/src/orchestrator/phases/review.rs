@@ -7,6 +7,7 @@ use crate::orchestrator::{RunError, Runner};
 use crate::project::{only_minor_findings, verdict_in};
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId};
+use crate::util::CODE_BYTES_PER_TOKEN;
 use crate::verify::VerifyOutcome;
 
 use super::{PromptParts, clip_lines};
@@ -51,12 +52,8 @@ fn review_path(task: &TaskId) -> String {
     format!(".tenaz/reviews/{task}.md")
 }
 
-/// Bytes per token of a diff: about 3 in the Digger 3D run, where prose was
-/// close to 4 (ADR 0012).
-const DIFF_BYTES_PER_TOKEN: f64 = 3.0;
-
 /// The most of a diff a reviewer with `budget` tokens is shown: `share` of
-/// the budget at [`DIFF_BYTES_PER_TOKEN`], and never over `ceiling` bytes.
+/// the budget at [`CODE_BYTES_PER_TOKEN`], and never over `ceiling` bytes.
 fn diff_limit(budget: u64, share: f64, ceiling: usize) -> usize {
     #[expect(
         clippy::cast_precision_loss,
@@ -64,7 +61,7 @@ fn diff_limit(budget: u64, share: f64, ceiling: usize) -> usize {
         clippy::cast_sign_loss,
         reason = "a context budget times a share is far below 2^53, and a negative share saturates to 0 bytes"
     )]
-    let bytes = (budget as f64 * share * DIFF_BYTES_PER_TOKEN).floor() as usize;
+    let bytes = (budget as f64 * share * CODE_BYTES_PER_TOKEN as f64).floor() as usize;
     bytes.min(ceiling)
 }
 
@@ -112,10 +109,8 @@ impl Runner {
     fn review_diff(&self, base: &str) -> Result<ReviewDiff, RunError> {
         let mut diff = self.deps.vcs.diff(base, "HEAD", true)?;
         let images = briefing::changed_images(&diff);
-        let reviewer = self.ledger.config.model_for(Role::Reviewer);
         let limit = diff_limit(
-            self.ledger
-                .context_budget_tokens(reviewer.context_window, None),
+            self.ledger.role_budget_tokens(Role::Reviewer, None),
             self.params.diff_share,
             self.params.diff_limit_bytes,
         );

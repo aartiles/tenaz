@@ -12,6 +12,7 @@ use crate::ports::SessionModel;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
+use crate::util::approx_code_tokens;
 
 use super::recovery::{Continuation, FailureCause, GiveUp, Recovery, Step};
 use super::{RunError, Runner};
@@ -58,11 +59,12 @@ impl Runner {
     ) -> Result<SessionResult, RunError> {
         let mut recovery = Recovery::default();
         loop {
-            let resumed = std::mem::take(&mut self.ledger.pending_continuation);
-            if resumed {
+            let resumed = self.ledger.pending_continuation;
+            let text = session_prompt(prompt, &recovery, resumed);
+            self.check_prompt_fits(role, &text, ctx)?;
+            if std::mem::take(&mut self.ledger.pending_continuation) {
                 self.save()?;
             }
-            let text = session_prompt(prompt, &recovery, resumed);
             let result = self.session_once(role, &text, ctx).await?;
             let label = result.record.label.clone();
             if self.stopping() {
@@ -129,6 +131,29 @@ impl Runner {
             }
         };
         self.log(&format!("  {label}: {why}; a fresh session continues the same work ({count}/{limit}, not counted as an attempt)"));
+    }
+
+    /// Stops the run before a session of `role` whose `prompt`, with the
+    /// harness's reserve, is estimated over its model's budget: the engine
+    /// or the harness would refuse it, or leave the session no room to
+    /// work (ADR 0012).
+    fn check_prompt_fits(
+        &self,
+        role: Role,
+        prompt: &str,
+        ctx: &SessionCtx,
+    ) -> Result<(), RunError> {
+        let model = self.ledger.config.model_for(role);
+        let limit = PromptLimit {
+            role,
+            model: &model,
+            budget: self.ledger.model_budget_tokens(role),
+            reserve: self.params.harness_reserve_tokens,
+        };
+        match limit.over(prompt, ctx.task.as_ref()) {
+            Some(reason) => Err(RunError::PromptTooLarge(reason)),
+            None => Ok(()),
+        }
     }
 
     /// The error that ends the run when the harness refused `record`'s prompt.
@@ -341,28 +366,78 @@ fn retry_notice(cause: FailureCause) -> Option<String> {
     }
 }
 
+/// The first request of a session with `prompt`, estimated: the prompt at
+/// three bytes per token, plus the harness's `reserve`. Over the Digger 3D
+/// run, with a reserve of 8192, this was 2.2k to 4.5k tokens high and never
+/// low (ADR 0012).
+fn first_request_tokens(prompt: &str, reserve: u64) -> u64 {
+    approx_code_tokens(prompt) as u64 + reserve
+}
+
+/// What a prompt of a `role` session must fit: `budget` tokens of
+/// `model`, with the harness's `reserve` on top of the prompt.
+struct PromptLimit<'a> {
+    role: Role,
+    model: &'a SessionModel,
+    budget: u64,
+    reserve: u64,
+}
+
+impl PromptLimit<'_> {
+    /// Why `prompt`, for `task` when there is one, does not fit; `None`
+    /// when it does.
+    fn over(&self, prompt: &str, task: Option<&TaskId>) -> Option<String> {
+        let estimate = first_request_tokens(prompt, self.reserve);
+        if estimate <= self.budget {
+            return None;
+        }
+        let role = self.role;
+        let what = task.map_or_else(
+            || format!("{role} prompt"),
+            |task| format!("{role} prompt for {task}"),
+        );
+        Some(format!(
+            "the {what}, {} characters, is about {estimate} tokens with the harness's reserve, over the {role}'s budget of {}; {}. To go on, {}",
+            prompt.len(),
+            self.budget,
+            window(self.model),
+            change_advice(role)
+        ))
+    }
+}
+
+/// `model`'s name and window, for a reason.
+fn window(model: &SessionModel) -> String {
+    format!("{}'s window is {} tokens", model.name, model.context_window)
+}
+
+/// What to change when a `role` prompt does not fit: a review can be made
+/// smaller; a model is changed in a new run only.
+fn change_advice(role: Role) -> String {
+    let larger = format!(
+        "give the {role} a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+    );
+    if role == Role::Reviewer {
+        format!(
+            "lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or {larger}"
+        )
+    } else {
+        larger
+    }
+}
+
 /// Why the run stops at `label`, whose prompt of `prompt_chars` the harness
-/// refused for `role`'s `model`: what was refused, and what to change. A
-/// review can be made smaller; a model is changed in a new run only.
+/// refused for `role`'s `model`: what was refused, and what to change.
 fn prompt_refused_reason(
     label: &str,
     role: Role,
     model: &SessionModel,
     prompt_chars: usize,
 ) -> String {
-    let larger = format!(
-        "give the {role} a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
-    );
-    let advice = if role == Role::Reviewer {
-        format!(
-            "lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or {larger}"
-        )
-    } else {
-        larger
-    };
     format!(
-        "the harness refused the {role} prompt of {label}, {prompt_chars} characters; {}'s window is {} tokens. To go on, {advice}",
-        model.name, model.context_window
+        "the harness refused the {role} prompt of {label}, {prompt_chars} characters; {}. To go on, {}",
+        window(model),
+        change_advice(role)
     )
 }
 
@@ -492,6 +567,48 @@ mod tests {
         assert_eq!(
             prompt_refused_reason("005-builder-T001", Role::Builder, &qwen(), 300_000),
             "the harness refused the builder prompt of 005-builder-T001, 300000 characters; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the builder a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
+        );
+    }
+
+    /// Session 025 of the Digger 3D run: a reviewer prompt of 79670
+    /// characters whose first request was 30245 tokens.
+    #[test]
+    fn a_first_request_is_estimated_high_from_the_prompt_and_the_reserve() {
+        let estimate = first_request_tokens(&"x".repeat(79_670), 8192);
+        assert_eq!(estimate, 34_749);
+        assert!(estimate >= 30_245);
+        assert_eq!(first_request_tokens("", 8192), 8192);
+    }
+
+    fn limit(role: Role, model: &SessionModel) -> PromptLimit<'_> {
+        PromptLimit {
+            role,
+            model,
+            budget: 8202,
+            reserve: 8192,
+        }
+    }
+
+    /// 30 bytes are 10 tokens: with the reserve, exactly the budget.
+    #[test]
+    fn a_prompt_fits_up_to_its_budget_and_not_a_token_more() {
+        let model = qwen();
+        let reviewer = limit(Role::Reviewer, &model);
+        assert_eq!(reviewer.over(&"x".repeat(30), None), None);
+        assert!(reviewer.over(&"x".repeat(31), None).is_some());
+    }
+
+    #[test]
+    fn a_prompt_over_its_budget_says_whose_it_is_and_what_to_change() {
+        let model = qwen();
+        let task = TaskId::parse("T003").unwrap();
+        assert_eq!(
+            limit(Role::Reviewer, &model).over(&"x".repeat(31), Some(&task)),
+            Some("the reviewer prompt for T003, 31 characters, is about 8203 tokens with the harness's reserve, over the reviewer's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
+        );
+        assert_eq!(
+            limit(Role::Replan, &model).over(&"x".repeat(31), None),
+            Some("the replan prompt, 31 characters, is about 8203 tokens with the harness's reserve, over the replan's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the replan a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
         );
     }
 

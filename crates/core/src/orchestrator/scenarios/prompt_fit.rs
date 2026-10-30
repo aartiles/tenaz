@@ -1,16 +1,19 @@
-//! Runs whose prompts do not fit their role's model: the run stops at the
-//! first refusal instead of sending the same prompt again (ADR 0012).
+//! Runs whose prompts do not fit their role's model: the run stops before
+//! the session, or at the harness's first refusal, instead of sending the
+//! same prompt again; and a review diff sized for the reviewer (ADR 0012).
 
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, run};
-use crate::ledger::{JournalRecord, Phase};
+use crate::ledger::{JournalRecord, Ledger, Phase, SessionRecord};
+use crate::params::RunParams;
 use crate::project::Project;
 use crate::role::Role;
 use crate::role_models::RoleModel;
 use crate::testing::{ScriptedHarness, VirtualClock};
+use crate::util::CODE_BYTES_PER_TOKEN;
 
 /// A run blocked by a refused prompt: the project, its log and why.
 struct Blocked {
@@ -25,16 +28,19 @@ struct Blocked {
 const REVIEWER_WINDOW: u64 = 65_536;
 
 /// Plays the fake goal with `harness` and `overrides`, the reviewer on a
-/// model of its own; the project and its log.
+/// model of its own and the ledger changed by `edit` before the run; the
+/// project and its log.
 async fn play(
     harness: ScriptedHarness,
     overrides: &[&str],
+    edit: impl FnOnce(&mut Ledger),
 ) -> (tempfile::TempDir, Project, String) {
     let work = tempfile::tempdir().unwrap();
     let mut set = vec!["maxAttempts=2"];
     set.extend_from_slice(overrides);
     let (project, vcs) = fake_project(work.path(), &set);
     let mut ledger = project.load_ledger().unwrap();
+    edit(&mut ledger);
     ledger.config.role_models.insert(
         Role::Reviewer,
         RoleModel {
@@ -56,9 +62,24 @@ async fn play(
     (work, project, log)
 }
 
-/// [`play`] that must block.
-async fn blocked(harness: ScriptedHarness) -> Blocked {
-    let (work, project, log) = play(harness, &[]).await;
+/// The journaled sessions of `role` for T001.
+fn sessions(project: &Project, role: Role) -> impl Iterator<Item = SessionRecord> {
+    project
+        .journal()
+        .into_iter()
+        .filter_map(move |e| match e.record {
+            JournalRecord::Session(s)
+                if s.role == role && s.task.as_ref().is_some_and(|t| t.as_str() == "T001") =>
+            {
+                Some(s)
+            }
+            _ => None,
+        })
+}
+
+/// [`play`], unchanged, that must block.
+async fn blocked(harness: ScriptedHarness, overrides: &[&str]) -> Blocked {
+    let (work, project, log) = play(harness, overrides, |_| {}).await;
     let ledger = project.load_ledger().unwrap();
     assert_eq!(ledger.phase, Phase::Blocked, "{log}");
     let reason = ledger.blocked_reason.unwrap_or_default();
@@ -71,13 +92,9 @@ async fn blocked(harness: ScriptedHarness) -> Blocked {
 }
 
 impl Blocked {
-    /// The journaled sessions whose label ends with `suffix`.
-    fn sessions(&self, suffix: &str) -> usize {
-        self.project
-            .journal()
-            .iter()
-            .filter(|e| matches!(&e.record, JournalRecord::Session(s) if s.label.ends_with(suffix)))
-            .count()
+    /// How many sessions of `role` T001 had.
+    fn sessions(&self, role: Role) -> usize {
+        sessions(&self.project, role).count()
     }
 
     fn retried(&self) -> bool {
@@ -103,10 +120,13 @@ impl Blocked {
 /// unavailable". One refusal now blocks it, and names the reviewer's model.
 #[tokio::test(start_paused = true)]
 async fn a_review_the_harness_refuses_blocks_the_run_at_once() {
-    let run = blocked(ScriptedHarness {
-        oversize_review: Some("T001".into()),
-        ..Default::default()
-    })
+    let run = blocked(
+        ScriptedHarness {
+            oversize_review: Some("T001".into()),
+            ..Default::default()
+        },
+        &[],
+    )
     .await;
     run.assert_reason_has(&[
         "prompt too large: the harness refused the reviewer prompt of ",
@@ -114,7 +134,7 @@ async fn a_review_the_harness_refuses_blocks_the_run_at_once() {
         " characters; fake/reviewer's window is 65536 tokens",
         "lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume",
     ]);
-    assert_eq!(run.sessions("-reviewer-T001"), 1, "{}", run.log);
+    assert_eq!(run.sessions(Role::Reviewer), 1, "{}", run.log);
     assert!(!run.retried(), "{}", run.log);
 }
 
@@ -122,17 +142,20 @@ async fn a_review_the_harness_refuses_blocks_the_run_at_once() {
 /// given back, as after a pause.
 #[tokio::test(start_paused = true)]
 async fn a_builder_the_harness_refuses_is_not_charged_the_attempt() {
-    let run = blocked(ScriptedHarness {
-        oversize_task: Some("T001".into()),
-        ..Default::default()
-    })
+    let run = blocked(
+        ScriptedHarness {
+            oversize_task: Some("T001".into()),
+            ..Default::default()
+        },
+        &[],
+    )
     .await;
     run.assert_reason_has(&[
         "the harness refused the builder prompt of ",
         "fake/fake's window is 131072 tokens",
     ]);
     assert!(!run.reason.contains("--resume"), "{}", run.reason);
-    assert_eq!(run.sessions("-builder-T001"), 1, "{}", run.log);
+    assert_eq!(run.sessions(Role::Builder), 1, "{}", run.log);
     assert!(!run.retried(), "{}", run.log);
     let card = run.project.read(".tenaz/tasks/T001.md").unwrap();
     assert!(card.contains("attempts: 0"), "{card}");
@@ -145,7 +168,8 @@ async fn a_builder_the_harness_refuses_is_not_charged_the_attempt() {
 /// would give 127.
 #[tokio::test(start_paused = true)]
 async fn a_review_diff_takes_its_share_of_the_reviewer_budget() {
-    let (_work, project, log) = play(ScriptedHarness::default(), &["diffShare=0.0005"]).await;
+    let (_work, project, log) =
+        play(ScriptedHarness::default(), &["diffShare=0.0005"], |_| {}).await;
     assert_eq!(
         project.load_ledger().unwrap().phase,
         Phase::Complete,
@@ -171,4 +195,88 @@ async fn a_review_diff_takes_its_share_of_the_reviewer_budget() {
         .expect("the diff block ends")
         .0;
     assert_eq!(shown.len(), 63, "{prompt}");
+}
+
+/// A prompt estimated over its role's budget, with the harness's reserve,
+/// stops the run before the session opens: here a reserve that leaves the
+/// reviewer's 42598 tokens no room, while the builder's 85196 still fit.
+#[tokio::test(start_paused = true)]
+async fn a_prompt_over_its_budget_blocks_the_run_before_the_session() {
+    let run = blocked(ScriptedHarness::default(), &["harnessReserveTokens=42000"]).await;
+    run.assert_reason_has(&[
+        "prompt too large: the reviewer prompt for T001, ",
+        " tokens with the harness's reserve, over the reviewer's budget of 42598; ",
+        "fake/reviewer's window is 65536 tokens",
+        "lower params.diffShare",
+    ]);
+    assert_eq!(run.sessions(Role::Builder), 1, "{}", run.log);
+    assert_eq!(run.sessions(Role::Reviewer), 0, "{}", run.log);
+}
+
+/// The cap the engine set after it ran out of memory is not what a prompt
+/// must fit: it is raised again, and the engine refuses what it cannot
+/// hold. A reviewer prompt over a low cap still runs.
+#[tokio::test(start_paused = true)]
+async fn a_prompt_over_a_lowered_cap_still_runs() {
+    let (_work, project, log) = play(ScriptedHarness::default(), &[], |ledger| {
+        ledger.context_cap = Some(9000);
+    })
+    .await;
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    let review = sessions(&project, Role::Reviewer)
+        .next()
+        .expect("T001 is reviewed");
+    assert_eq!(review.context_budget, 9000, "{log}");
+    // The check's estimate, as `first_request_tokens` makes it.
+    let estimate = review.prompt_chars.div_ceil(CODE_BYTES_PER_TOKEN) as u64
+        + RunParams::default().harness_reserve_tokens;
+    assert!(estimate > 9000, "{estimate}");
+}
+
+/// A session paused mid-turn is continued on the next run. If its prompt
+/// is then over the budget, the run blocks and still owes the
+/// continuation, so `--resume` after the fix continues the work.
+#[tokio::test(start_paused = true)]
+async fn a_blocked_continuation_is_still_owed() {
+    let work = tempfile::tempdir().unwrap();
+    let (project, vcs) = fake_project(work.path(), &["maxAttempts=2"]);
+    let stop = CancellationToken::new();
+    let stopping = ScriptedHarness {
+        stop_at: Some(("T001".into(), stop.clone())),
+        ..Default::default()
+    };
+    let clock = Arc::new(VirtualClock::new());
+    run(
+        &project,
+        deps(&project, vcs.clone(), Arc::new(stopping), clock.clone()),
+        stop,
+    )
+    .await;
+    let mut ledger = project.load_ledger().unwrap();
+    assert!(ledger.pending_continuation);
+    ledger.params.harness_reserve_tokens = 1_000_000;
+    project.save_ledger(&ledger).unwrap();
+
+    let harness = Arc::new(ScriptedHarness::default());
+    run(
+        &project,
+        deps(&project, vcs, harness, clock),
+        CancellationToken::new(),
+    )
+    .await;
+    let ledger = project.load_ledger().unwrap();
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    assert_eq!(ledger.phase, Phase::Blocked, "{log}");
+    let reason = ledger.blocked_reason.unwrap_or_default();
+    assert!(
+        reason.starts_with("prompt too large: the builder prompt for T001, "),
+        "{reason}"
+    );
+    assert!(ledger.pending_continuation, "{log}");
+    let builders = sessions(&project, Role::Builder).count();
+    assert_eq!(builders, 1, "{log}");
 }

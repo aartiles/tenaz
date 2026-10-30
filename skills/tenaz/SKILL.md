@@ -94,10 +94,10 @@ Leave out the plan: Tenaz makes its own. Keep it to one page.
 
 When it is blocked, read `blocked_reason` and the newest notes in
 `.tenaz/notes/`. A reason that starts `prompt too large:` names the
-session, its role, its model and that model's window, and says what to
-change: for a review, `params.diffShare` or `params.diffLimitBytes` in
-`.tenaz/run.json`; otherwise tell the user the role needs a model with a
-larger window, which takes a new run. A task whose builder found it
+role, its model and that model's window, and says what to change: for a
+review, `params.diffShare` or `params.diffLimitBytes` in
+`.tenaz/run.json`; otherwise tell the user the role needs a model with
+a larger window, which takes a new run. A task whose builder found it
 cannot pass without changing a check of a done task leaves
 `.tenaz/conflicts/<TASK>.md`; a replan may then add a card whose
 `amends` lets its builder change those checks.

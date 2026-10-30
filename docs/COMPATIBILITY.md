@@ -182,7 +182,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
   reviewers that mlx-serve refused at 39468 tokens after three turns and
   then at 30245 tokens, before reading a file. The same refusal also came
   mid-session in two earlier reviews: one session finished anyway, and
-  the other's rerun ran to the end.
+  the other's rerun ran to the end. Before each session Tenaz now
+  estimates the first request (3 bytes per token plus
+  `harnessReserveTokens`) and blocks when it is over the role's budget.
+  The 8192-token reserve is fx 0.0.15's measured 6750 rounded up; Pi's
+  own prompt and tools were not measured, and a newer fx may add more.
+  The check is tested with the scripted harness only, not yet in a run
+  against fx or mlx-serve.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.

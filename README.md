@@ -368,7 +368,10 @@ swap between them. Not with `--harness pi` yet. See
 parameter; `tenaz params` lists them. Whatever its model, the diff a
 reviewer is shown takes at most `diffShare` (0.25) of the reviewer's
 context budget, counted at 3 bytes per token, and never more than
-`diffLimitBytes` (40000 bytes); see
+`diffLimitBytes` (40000 bytes). Before each session Tenaz estimates its
+first request, the prompt at 3 bytes per token plus
+`harnessReserveTokens` (8192) for the harness, and blocks the run when it
+is over the role's budget; see
 [ADR 0012](docs/adr/0012-prompts-that-fit-their-model.md). Tenaz
 does not set the sampling temperature, so each engine uses its own
 default; `--set temperature=0` pins it for the run (through the proxy),
