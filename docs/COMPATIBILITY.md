@@ -109,20 +109,30 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 - **A model per role** (`--model-for`, ADR 0010). fx is launched with each
   session's model: its `settings.json` is rewritten before the session
-  starts. Tested with an in-process ACP agent and the scripted harness; not
-  yet run against a real fx with two models served by one engine, nor
+  starts. Run once with fx 0.0.15 and mlx-serve 26.10.3 holding two
+  models on a 64 GB Mac (2026-10-29, stopped blocked at T003): a Ternary
+  Bonsai 2 27B (2-bit) builder with a 131072 window, and Qwen3.8-27B for
+  the other roles with 65536. In 31 sessions the journal names each
+  role's model, with a budget of 85196 tokens for the builder and 42598
+  for the rest. An earlier try with Flint int4 as the builder did not fit
+  beside Qwen3.8-27B and mlx-serve's prefix cache, and mlx-serve once
+  unloaded Qwen to load Flint (seen by the operator, not journaled). Not
   checked whether fx writes `settings.json` itself. The check that every
-  model is loaded, and the lease freeing and reloading them around an image,
-  are tested with fake engines and a stand-in server for the generic
-  engine's commands, not against Kapitsa, mlx-serve or a generic engine
-  holding two models. TensorFold's scripts have not been run again since a
-  generic engine that still serves its model after an image is no longer
-  started. The preflight's probes (reasoning, cache, a tool call, an image)
-  run on `--model` only, so a role's model is never probed; and every role's
-  model takes the run's `--vision`, so a reviewer that cannot read images is
-  still sent them when the run's model can. Not with Pi: `init` refuses the
-  map, and Pi refuses a session on another model than the one it was set up
-  for.
+  model is loaded passed against that mlx-serve; the lease freeing and
+  reloading them around an image is tested with fake engines and a
+  stand-in server for the generic engine's commands, not against Kapitsa,
+  mlx-serve or a generic engine holding two models. TensorFold's scripts
+  have not been run again since a generic engine that still serves its
+  model after an image is no longer started. The preflight's probes
+  (reasoning, cache, a tool call, an image) run on `--model` only, so a
+  role's model is never probed; and every role's model takes the run's
+  `--vision`, so a reviewer that cannot read images is still sent them
+  when the run's model can. Likewise one `diffLimitBytes` serves every
+  reviewer, whatever its window: in that run the reviewer's first request
+  was 30245 tokens of its 42598 budget, and the diff was half of Tenaz's
+  prompt (40.6k of 79.4k characters). Not with Pi: `init` refuses the
+  map, and Pi refuses a session on another model than the one it was set
+  up for.
 
 - **An engine error inside a stream** (Sushi's `GenerationOutOfMemory`),
   with fx; Pi reports engine errors itself. Its shape, `data: {"error":
@@ -135,6 +145,21 @@ above), so a 32k context is the practical floor (`contextFloor`).
   read; how llama.cpp, vLLM or Ollama send an error inside a stream has
   not been checked. With Pi, an out-of-memory error is tested only with
   the scripted harness's own wording; no real one has been seen.
+- **A prompt the engine cannot fit.** mlx-serve 26.10.3 refuses a request
+  whose prefill does not fit in free GPU memory ("This prompt (30245
+  tokens) does not fit in GPU memory even after freeing the prefix cache
+  … It was refused before any work started."), which fx reports as
+  `ProviderError`; fx refuses a prompt it cannot compact into the model's
+  window with `ContextCapacityExceeded`. Tenaz matches neither message: it
+  journals the first as an engine error and the second as a harness exit,
+  and sends the same prompt again after each wait, up to `engineRetries`,
+  then stops the run as engine unavailable. Seen twice in the Digger 3D
+  run of 2026-10-29, seven sessions each time: reviewers on a
+  281k-character prompt that fx refused, then, with the lists of changed
+  files clipped, reviewers that mlx-serve refused at 39468 tokens after
+  three turns and then at 30245 tokens, before reading a file. The same
+  refusal also came mid-session in two earlier reviews: one session
+  finished anyway, and the other's rerun ran to the end.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.
