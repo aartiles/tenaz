@@ -26,9 +26,6 @@ use reasons::{PromptLimit, give_up_reason, retry_notice, retry_reason};
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
 const CRITICAL_PRESSURE: u32 = 4;
-/// A cap this close to the largest configured budget is lifted rather than
-/// raised.
-const RAISE_STEP_MIN: u64 = 4096;
 
 /// What a session is about.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -250,18 +247,8 @@ impl Runner {
             reason = "a context limit times a fraction is far below 2^53 and floors to a positive u64"
         )]
         let cap = (limit as f64 * self.params.capacity_headroom).floor() as u64;
-        if self.ledger.context_cap.is_none_or(|current| cap < current) {
-            self.ledger.context_cap = Some(cap);
-        }
-        self.ledger.cap_clean_sessions = 0;
-        if std::mem::take(&mut self.ledger.cap_raised) {
-            // What the engine holds at a raised budget is what it holds
-            // without passing pressure: later raises stop there.
-            self.ledger.cap_failed_raises += 1;
-            self.ledger.cap_ceiling = Some(self.ledger.cap_ceiling.map_or(cap, |c| c.max(cap)));
-        }
+        let current = self.ledger.lower_cap(cap);
         self.save()?;
-        let current = self.ledger.context_cap.unwrap_or(cap);
         self.journal(JournalRecord::ContextCap {
             label: label.to_owned(),
             engine_max_context: limit,
@@ -272,15 +259,12 @@ impl Runner {
         Ok(())
     }
 
-    /// Counts a session the engine held at a lowered budget and, after
-    /// `capacityRecoverSessions` of them in a row, raises the budget halfway
-    /// back to the largest configured one (the run's models may have
-    /// different windows), or to the ceiling a failed raise set. A session
-    /// whose budget was under the cap does not count: it did not test it. The
+    /// Counts a session the engine held at a lowered budget toward a raise
+    /// (`Ledger::note_cap_held`, ADR 0014), and journals the raise when one
+    /// is due. A session whose budget was under the cap does not count: it
+    /// did not test it. Critical memory pressure starts the count again. The
     /// engine only says how much it can hold when a prompt overflows it, so
-    /// memory freed later is found by trying. Each raise that overflows again
-    /// doubles the sessions the next one waits for, up to four times as many;
-    /// a raise the engine held starts the count again.
+    /// memory freed later is found by trying.
     fn note_engine_held(&mut self, session: &SessionRecord) -> Result<(), RunError> {
         let Some(cap) = self.ledger.context_cap else {
             return Ok(());
@@ -294,42 +278,31 @@ impl Runner {
             .as_ref()
             .is_some_and(|m| m.pressure_max >= CRITICAL_PRESSURE)
         {
-            self.ledger.cap_clean_sessions = 0;
+            self.ledger.note_cap_pressed();
             return self.save();
         }
         if session.context_budget < cap {
             return Ok(());
         }
-        self.ledger.cap_clean_sessions += 1;
-        let needed = raise_wait(
-            self.params.capacity_recover_sessions,
-            self.ledger.cap_failed_raises,
-        );
-        let clean = self.ledger.cap_clean_sessions;
-        if clean < needed {
-            return self.save();
-        }
-        let full = self.ledger.largest_budget_tokens();
-        let Some(raised) = raised_cap(cap, full, self.ledger.cap_ceiling) else {
-            // Already at the ceiling: nothing to try.
-            self.ledger.cap_clean_sessions = 0;
+        let Some(raise) = self
+            .ledger
+            .note_cap_held(self.params.capacity_recover_sessions)
+        else {
             return self.save();
         };
-        let new_cap = (raised < full).then_some(raised);
-        if std::mem::take(&mut self.ledger.cap_raised) {
-            self.ledger.cap_failed_raises = 0;
-        }
-        self.ledger.context_cap = new_cap;
-        self.ledger.cap_clean_sessions = 0;
-        self.ledger.cap_raised = true;
         self.save()?;
         self.journal(JournalRecord::ContextCapRaised {
             label: label.to_owned(),
-            context_cap: new_cap,
-            clean_sessions: clean,
+            context_cap: raise.cap,
+            clean_sessions: raise.clean_sessions,
         });
-        let budget = new_cap.unwrap_or(full);
-        self.log(&format!("  {label}: {clean} sessions in a row without the engine running out of memory; context budget raised to {budget}"));
+        let budget = raise
+            .cap
+            .unwrap_or_else(|| self.ledger.largest_budget_tokens());
+        let past = raise
+            .past_ceiling
+            .map_or_else(String::new, |c| format!(", past the ceiling of {c}"));
+        self.log(&format!("  {label}: {} sessions in a row without the engine running out of memory; context budget raised to {budget}{past}", raise.clean_sessions));
         Ok(())
     }
 
@@ -362,29 +335,6 @@ impl Runner {
     }
 }
 
-/// Sessions the engine must hold before a lowered budget is raised: the
-/// configured count, doubled per raise that failed, at most four times it.
-fn raise_wait(recover_sessions: u32, failed_raises: u32) -> u32 {
-    recover_sessions.saturating_mul(1 << failed_raises.min(2))
-}
-
-/// The budget after a raise from `cap`: halfway to the largest configured
-/// budget `full`, or to `ceiling` when that is lower, and all the way when less
-/// than [`RAISE_STEP_MIN`] is left. `None` when `cap` is already there.
-fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
-    let target = ceiling.map_or(full, |c| c.min(full));
-    if cap >= target {
-        return None;
-    }
-    let raised = cap + (target - cap) / 2;
-    let raised = if target - raised < RAISE_STEP_MIN {
-        target
-    } else {
-        raised
-    };
-    Some(raised)
-}
-
 /// The prompt of a session: `prompt`, with the note a session that
 /// continues earlier work gets, and the one a builder rerun after the
 /// engine ran out of memory gets.
@@ -398,34 +348,4 @@ fn session_prompt(prompt: &str, recovery: &Recovery) -> String {
         text = format!("{text}\n\n{note}");
     }
     text
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn raises_go_halfway_and_stop_at_the_ceiling_a_failed_raise_set() {
-        // No ceiling: halfway to the configured budget, then all the way.
-        assert_eq!(raised_cap(49_190, 85_196, None), Some(67_193));
-        assert_eq!(raised_cap(83_000, 85_196, None), Some(85_196));
-        // The Wild West run: the engine held 86016 when a raise overflowed,
-        // so 68812 is the ceiling, and a passing low reading climbs back to it.
-        let ceiling = Some(68_812);
-        assert_eq!(raised_cap(38_215, 85_196, ceiling), Some(53_513));
-        assert_eq!(raised_cap(66_000, 85_196, ceiling), Some(68_812));
-        assert_eq!(raised_cap(68_812, 85_196, ceiling), None);
-        assert_eq!(raised_cap(70_000, 85_196, ceiling), None);
-        // A ceiling above the configured budget does not lift it further.
-        assert_eq!(raised_cap(60_000, 85_196, Some(90_000)), Some(72_598));
-    }
-
-    #[test]
-    fn the_wait_before_a_raise_doubles_at_most_twice() {
-        assert_eq!(raise_wait(4, 0), 4);
-        assert_eq!(raise_wait(4, 1), 8);
-        assert_eq!(raise_wait(4, 2), 16);
-        assert_eq!(raise_wait(4, 7), 16);
-        assert_eq!(raise_wait(0, 3), 0);
-    }
 }
