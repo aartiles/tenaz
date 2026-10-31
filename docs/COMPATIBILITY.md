@@ -256,6 +256,27 @@ above), so a 32k context is the practical floor (`contextFloor`).
   their `.sha256` files are attested; the installer script, the Homebrew
   formula, the source tarball and `sha256.sum` are not. The installer and
   the formula download attested archives.
+- **Release on macos-15.** v0.2.0 and earlier were built on `macos-14`.
+  The release now builds the macOS archive on `macos-15`
+  (`[dist.github-custom-runners]` in `dist-workspace.toml`). CI already
+  builds and tests on `macos-15`, but dist's release build has not run
+  there (pull requests only run `dist plan`). After the next `v*` tag's
+  Release run, check that its darwin job ran on `macos-15` and that the
+  binary still has `minos 11.0` (`otool` needs the Xcode Command Line
+  Tools), then remove this entry:
+
+  ```sh
+  id=$(gh run list -R aartiles/tenaz -w Release -e push --limit 1 \
+    --json databaseId --jq '.[0].databaseId')
+  gh api "repos/aartiles/tenaz/actions/runs/$id/jobs" \
+    --jq '.jobs[] | select(.name | test("darwin")) | .labels'
+  tag=$(gh run view "$id" -R aartiles/tenaz --json headBranch --jq .headBranch)
+  gh release download "$tag" -R aartiles/tenaz --clobber \
+    -p tenaz-aarch64-apple-darwin.tar.gz
+  tar xzf tenaz-aarch64-apple-darwin.tar.gz
+  otool -l tenaz-aarch64-apple-darwin/tenaz | grep minos
+  ```
+
 - **Media through fx with long jobs.** Which route fx takes for a
   10-minute tool call has not been measured.
 - **Linux and NVIDIA memory.** Memory pressure, swap and the engine's
