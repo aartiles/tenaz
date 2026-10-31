@@ -406,12 +406,7 @@ impl Player {
         if let Some(task) = self.script.tampered_card.clone()
             && self.cwd.join(format!(".tenaz/tasks/{task}.md")).exists()
         {
-            self.write_tool(
-                &format!(".tenaz/tasks/{task}.md"),
-                "tampered done card\n",
-                false,
-            )
-            .await; // must be reverted
+            self.tamper_card(&task).await;
         }
         self.finish("Done.");
     }
@@ -898,6 +893,7 @@ impl Player {
             false,
         )
         .await;
+        self.tamper_card(task).await;
         self.finish("Done.");
         true
     }
@@ -951,11 +947,17 @@ impl Player {
             // Context grows past 1.3x the budget: stopped and continued.
             return self.outgrow().await;
         }
+        self.tamper_card(task).await;
+        self.finish("Done.");
+    }
+
+    /// Writes `task`'s card, not the session's to change, when the script
+    /// says so: the edit must be reverted.
+    async fn tamper_card(&mut self, task: &str) {
         if names(self.script.tampered_card.as_deref(), task) {
             self.write_tool(&format!(".tenaz/tasks/{task}.md"), "tampered\n", false)
-                .await; // must be reverted
+                .await;
         }
-        self.finish("Done.");
     }
 
     async fn write_notes(&mut self, task: &str) {

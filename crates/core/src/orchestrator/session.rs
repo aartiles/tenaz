@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use crate::briefing::without_map;
 use crate::ledger::{JournalRecord, SessionRecord};
+use crate::ownership::builder_reverted_note;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
@@ -60,7 +61,7 @@ impl Runner {
     ) -> Result<SessionResult, RunError> {
         let mut recovery = Recovery::resuming(self.ledger.pending_continuation);
         loop {
-            let text = session_prompt(prompt, &recovery);
+            let text = self.with_reverted_note(role, session_prompt(prompt, &recovery));
             self.check_prompt_fits(role, &text, ctx)?;
             let result = self.session_once(role, &text, ctx).await?;
             let label = result.record.label.clone();
@@ -93,6 +94,21 @@ impl Runner {
                 Step::GiveUp(why) => return Err(self.give_up(&label, why)),
             }
         }
+    }
+
+    /// A builder's `prompt`, with what earlier builder sessions of its task
+    /// had reverted, so it does not write there again. Added to every
+    /// session, so a continuation within an attempt is told too.
+    fn with_reverted_note(&self, role: Role, prompt: String) -> String {
+        let reverted = self
+            .ledger
+            .current
+            .as_ref()
+            .map_or(&[][..], |c| c.reverted.as_slice());
+        if role != Role::Builder || reverted.is_empty() {
+            return prompt;
+        }
+        format!("{prompt}\n\n{}", builder_reverted_note(reverted))
     }
 
     /// Journals and logs that a fresh session continues the work of `result`.

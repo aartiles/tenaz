@@ -72,6 +72,7 @@ fn agent_rule(role: Role, agent_path: &str, task: Option<&TaskId>, repo: &dyn Re
 /// the map, its task's conflict and heavy job, and the notes of its task
 /// and of the tasks it was split from. A child finishes its parent's work,
 /// so a parent's note that later tasks read is its to correct (ADR 0013).
+/// `builder_reverted_note` says the same in prose: keep the two in step.
 fn builder_owns(agent_path: &str, task: Option<&TaskId>) -> bool {
     if ["verify", "map.md"].contains(&agent_path) {
         return true;
@@ -106,6 +107,16 @@ pub fn partition<'a>(
 pub fn reverted_note(role: Role, paths: &[String]) -> String {
     format!(
         "The orchestrator reverted your changes to {}, because a {role} session may not write there. Under .tenaz/ a bootstrap session writes only verify (in an existing project), spec.md, map.md, tasks/ and notes/; .tenaz/brief.md, .tenaz/protocol.md, .tenaz/prompts/ and the project's AGENTS.md and CLAUDE.md are never edited. Put verify and any code it runs in the project itself (for example a checks/ or scripts/ folder at the root), not under .tenaz/.",
+        paths.join(", ")
+    )
+}
+
+/// The section a builder gets when earlier builder sessions of its task
+/// had `paths` reverted. Says in prose what `builder_owns` allows: keep
+/// the two in step.
+pub fn builder_reverted_note(paths: &[String]) -> String {
+    format!(
+        "## Reverted by the orchestrator\n\nEarlier builder sessions of this task wrote to {}, and the orchestrator reverted those changes, because a builder may not write there. Under .tenaz/ a builder writes only verify, map.md, its task's notes, conflict and heavy job, and the notes of the tasks its task was split from; the project's AGENTS.md and CLAUDE.md are never edited. Do not write there again: a card that needs it cannot pass as written, so say so in your notes and stop.",
         paths.join(", ")
     )
 }
@@ -272,6 +283,15 @@ mod tests {
             !allowed(Role::FinalReviewer, ".tenaz/tasks/T002.md", None, &r),
             "existing card"
         );
+    }
+
+    /// A builder is told where a builder writes, not a bootstrap's rules.
+    #[test]
+    fn a_builder_s_note_names_the_paths_and_the_builder_s_rules() {
+        let note = builder_reverted_note(&[".tenaz/notes/T008.md".to_owned()]);
+        assert!(note.contains("wrote to .tenaz/notes/T008.md, and the orchestrator reverted"));
+        assert!(note.contains("a builder writes only verify, map.md, its task's notes"));
+        assert!(!note.contains("bootstrap"), "{note}");
     }
 
     #[test]
