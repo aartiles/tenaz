@@ -133,6 +133,10 @@ uses [Semantic Versioning](https://semver.org/).
   the Lotion Pump run the three attempts of T016b each left the scene at
   its starting numbers. The task is not escalated any sooner: a check
   that only says `exit 1` reads the same while real work goes on.
+- The release builds the macOS archive on GitHub's `macos-15` runner
+  instead of `macos-14`, whose retirement GitHub set for 2026-11-02. The
+  binary's minimum macOS should not change (11.0, Rust's default for
+  Apple silicon).
 
 ### Fixed
 
