@@ -77,13 +77,14 @@ impl BlockedAfterPause {
             run.log
         );
         for label in self.builders().iter().skip(1) {
-            self.assert_note(label, true, &run.log);
+            self.assert_note(label, true);
         }
         let card = run.project.read(".tenaz/tasks/T001.md").unwrap();
         assert!(card.contains("attempts: 0"), "{card}");
     }
 
-    /// Changes the ledger with `fix`, then runs again with `--resume`.
+    /// Changes the ledger with `fix`, then runs again with `--resume` and a
+    /// harness that fails nothing.
     async fn fix_and_resume(&self, fix: impl FnOnce(&mut Ledger)) {
         let project = &self.run.project;
         let mut ledger = project.load_ledger().unwrap();
@@ -111,9 +112,9 @@ impl BlockedAfterPause {
         );
         let builders = self.builders();
         assert_eq!(builders.len(), self.builders_blocked + 1, "{log}");
-        self.assert_note(&builders[self.builders_blocked], true, &log);
+        self.assert_note(&builders[self.builders_blocked], true);
         for review in sessions(project, Role::Reviewer) {
-            self.assert_note(&review.label, false, &log);
+            self.assert_note(&review.label, false);
         }
     }
 
@@ -125,13 +126,13 @@ impl BlockedAfterPause {
     }
 
     /// Asserts whether the session `label` was told it continues earlier
-    /// work; `log` is the run's log, shown if not.
-    fn assert_note(&self, label: &str, continues: bool, log: &str) {
-        let prompt = self
-            .run
-            .project
+    /// work; the run's log as it is now is shown if not.
+    fn assert_note(&self, label: &str, continues: bool) {
+        let project = &self.run.project;
+        let prompt = project
             .read(&format!(".tenaz/private/{label}.prompt.md"))
             .unwrap();
+        let log = project.read(".tenaz/private/orchestrator.log").unwrap();
         assert_eq!(
             prompt.contains("## Continuation"),
             continues,

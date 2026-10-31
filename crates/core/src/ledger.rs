@@ -362,6 +362,10 @@ pub struct Ledger {
     pub passed_checks: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_errors: Option<Vec<String>>,
+    /// A pause stopped a session, or the wait before its rerun: the next
+    /// session is told it continues that work. Cleared when a session is
+    /// done, or a paused task review is taken back; a block or an error
+    /// keeps it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pending_continuation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

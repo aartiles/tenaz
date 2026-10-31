@@ -462,8 +462,8 @@ impl Player {
         self.failed_request("error.GenerationOutOfMemory").await;
     }
 
-    /// Every session of the script's over-capacity task: the engine says
-    /// the turn's request is over the most context it can hold now.
+    /// Every builder session of the script's over-capacity task: the engine
+    /// says the turn's request is over the most context it can hold now.
     async fn over_capacity(&mut self, task: &str) -> bool {
         if !names(self.script.over_capacity_task.as_deref(), task) {
             return false;

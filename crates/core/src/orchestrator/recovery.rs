@@ -109,7 +109,7 @@ impl Recovery {
 
     /// Whether the next prompt carries a note: the session continues a
     /// paused one, or already ran once and was continued.
-    pub fn has_continued(&self) -> bool {
+    pub fn carries_note(&self) -> bool {
         self.resumed || self.continued > 0
     }
 
@@ -363,25 +363,21 @@ mod tests {
     }
 
     #[test]
-    fn only_a_continuation_makes_the_next_prompt_carry_a_note() {
+    fn a_continuation_carries_a_note_and_an_engine_retry_does_not() {
         let (retried, _) = steps(Role::Builder, &[engine_error()]);
-        assert!(!retried.has_continued());
+        assert!(!retried.carries_note());
         let (continued, _) = steps(Role::Builder, &[context_stop()]);
-        assert!(continued.has_continued());
-    }
-
-    #[test]
-    fn a_fresh_recovery_gives_the_plain_note_to_a_resumed_session() {
-        assert_eq!(Recovery::default().note(), CONTINUATION);
+        assert!(continued.carries_note());
     }
 
     #[test]
     fn a_resumed_session_keeps_its_note_through_its_reruns() {
         let mut recovery = Recovery::resuming(true);
-        assert!(recovery.has_continued());
+        assert!(recovery.carries_note());
+        assert_eq!(recovery.note(), CONTINUATION);
         let step = recovery.next(&engine_error(), Role::Builder, &params());
         assert!(matches!(step, Step::Retry { .. }), "{step:?}");
-        assert!(recovery.has_continued());
+        assert!(recovery.carries_note());
         assert_eq!(recovery.note(), CONTINUATION);
     }
 

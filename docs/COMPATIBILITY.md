@@ -206,6 +206,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - **The pause after a capacity error** (`capacityRetryWaitSec`), and a
   stop during it, are tested with the fake harness only, not against an
   engine that runs out of memory.
+- **A paused session's continuation** is kept through reruns and blocks
+  until a session that continues it is done; that is tested with the
+  scripted harness only, for builder sessions, not with fx or Pi. The
+  flag does not say which session it is owed to: the first session after
+  the pause gets the note, whatever its role or task; only a paused task
+  review is taken back without it. The note says the session ran out of
+  context even when a pause stopped it.
 - **fx and the skills above the project.** fx looks for skills from the
   project upward and stops only at `HOME`. Tenaz gives fx a `HOME` inside
   the project, so for a project under your home folder fx goes on past it

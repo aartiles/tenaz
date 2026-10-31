@@ -50,7 +50,8 @@ pub(crate) struct SessionResult {
 impl Runner {
     /// A session with the task loop's recovery around it: continuations
     /// after context stops and refused images, capacity caps, and engine
-    /// retries with backoff. None of these charge an attempt.
+    /// retries with backoff. None of these charge an attempt. A continuation
+    /// a pause left is owed until the session is done.
     pub(crate) async fn session(
         &mut self,
         role: Role,
@@ -178,10 +179,10 @@ impl Runner {
         self.record_pause(label, role, ctx)
     }
 
-    /// Saves that no continuation is owed, once a session has ended. Only
-    /// then: the reruns of a session that continues a paused one get the
+    /// Saves that no continuation is owed, once a session is done. Not
+    /// before: the reruns of a session that continues a paused one get the
     /// note too, a block leaves it to `--resume`, and an error to the next
-    /// run.
+    /// run. Taking back a paused review clears it too (`take_in_review`).
     fn clear_continuation(&mut self) -> Result<(), RunError> {
         if std::mem::take(&mut self.ledger.pending_continuation) {
             self.save()?;
@@ -372,7 +373,7 @@ fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
 /// continues earlier work gets, and the one a builder rerun after the
 /// engine ran out of memory gets.
 fn session_prompt(prompt: &str, recovery: &Recovery) -> String {
-    let mut text = if recovery.has_continued() {
+    let mut text = if recovery.carries_note() {
         format!("{}\n\n{}", without_map(prompt), recovery.note())
     } else {
         prompt.to_owned()
