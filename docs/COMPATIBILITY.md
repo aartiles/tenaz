@@ -270,7 +270,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
     --json databaseId --jq '.[0].databaseId')
   gh api "repos/aartiles/tenaz/actions/runs/$id/jobs" \
     --jq '.jobs[] | select(.name | test("darwin")) | .labels'
-  gh release download -R aartiles/tenaz -p tenaz-aarch64-apple-darwin.tar.gz
+  tag=$(gh run view "$id" -R aartiles/tenaz --json headBranch --jq .headBranch)
+  gh release download "$tag" -R aartiles/tenaz --clobber \
+    -p tenaz-aarch64-apple-darwin.tar.gz
   tar xzf tenaz-aarch64-apple-darwin.tar.gz
   otool -l tenaz-aarch64-apple-darwin/tenaz | grep minos
   ```
