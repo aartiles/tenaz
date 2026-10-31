@@ -136,6 +136,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A session paused with Ctrl-C keeps its continuation until a session
+  that continues it ends. A rerun after an engine error or a lowered
+  context budget is told it continues the paused work, and so is the
+  session after `--resume` when the run blocks because the harness refused
+  its prompt, or the engine or capacity retries ran out. Tenaz used to
+  clear the continuation before the first session, so these started the
+  work afresh with the paused session's changes in the tree.
 - A prompt the harness refuses as larger than the model's window (fx's
   `ContextCapacityExceeded` before any reply) blocks the run at once, with
   a reason that starts `prompt too large:`, names the session, its role,

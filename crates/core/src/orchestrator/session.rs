@@ -50,21 +50,18 @@ pub(crate) struct SessionResult {
 impl Runner {
     /// A session with the task loop's recovery around it: continuations
     /// after context stops and refused images, capacity caps, and engine
-    /// retries with backoff. None of these charge an attempt.
+    /// retries with backoff. None of these charge an attempt. A continuation
+    /// a pause left is owed until the session is done.
     pub(crate) async fn session(
         &mut self,
         role: Role,
         prompt: &str,
         ctx: &SessionCtx,
     ) -> Result<SessionResult, RunError> {
-        let mut recovery = Recovery::default();
+        let mut recovery = Recovery::resuming(self.ledger.pending_continuation);
         loop {
-            let resumed = self.ledger.pending_continuation;
-            let text = session_prompt(prompt, &recovery, resumed);
+            let text = session_prompt(prompt, &recovery);
             self.check_prompt_fits(role, &text, ctx)?;
-            if std::mem::take(&mut self.ledger.pending_continuation) {
-                self.save()?;
-            }
             let result = self.session_once(role, &text, ctx).await?;
             let label = result.record.label.clone();
             if self.stopping() {
@@ -74,7 +71,10 @@ impl Runner {
                 self.note_engine_held(&result.record)?;
             }
             match recovery.next(&result.metrics, role, &self.params) {
-                Step::Done => return Ok(result),
+                Step::Done => {
+                    self.clear_continuation()?;
+                    return Ok(result);
+                }
                 Step::Continue { kind, count } => self.continue_session(&result, kind, count),
                 Step::LowerCap { limit, count } => {
                     self.lower_context_cap(&label, limit, count)?;
@@ -177,6 +177,17 @@ impl Runner {
     fn pause(&mut self, label: &str, role: Role, ctx: &SessionCtx) -> Result<RunError, RunError> {
         self.ledger.pending_continuation = true;
         self.record_pause(label, role, ctx)
+    }
+
+    /// Saves that no continuation is owed, once a session is done. Not
+    /// before: the reruns of a session that continues a paused one get the
+    /// note too, a block leaves it to `--resume`, and an error to the next
+    /// run. Taking back a paused review clears it too (`take_in_review`).
+    fn clear_continuation(&mut self) -> Result<(), RunError> {
+        if std::mem::take(&mut self.ledger.pending_continuation) {
+            self.save()?;
+        }
+        Ok(())
     }
 
     /// Saves and journals a pause at `label`, without telling the next
@@ -361,8 +372,8 @@ fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
 /// The prompt of a session: `prompt`, with the note a session that
 /// continues earlier work gets, and the one a builder rerun after the
 /// engine ran out of memory gets.
-fn session_prompt(prompt: &str, recovery: &Recovery, resumed: bool) -> String {
-    let mut text = if recovery.has_continued() || resumed {
+fn session_prompt(prompt: &str, recovery: &Recovery) -> String {
+    let mut text = if recovery.carries_note() {
         format!("{}\n\n{}", without_map(prompt), recovery.note())
     } else {
         prompt.to_owned()

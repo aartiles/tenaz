@@ -4,6 +4,7 @@
 mod conflict;
 mod harness_exit;
 mod job;
+mod paused_continuation;
 mod prompt_fit;
 mod role_models;
 mod scripted_run;
@@ -18,10 +19,11 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use super::{Deps, InitOptions, RunOptions, Runner, Templates, init};
-use crate::ledger::{HarnessKind, JournalRecord, Launch, ModelConfig};
+use crate::ledger::{HarnessKind, JournalRecord, Launch, ModelConfig, Phase, SessionRecord};
 use crate::params::RunParams;
 use crate::ports::{Clock, Harness};
 use crate::project::Project;
+use crate::role::Role;
 use crate::testing::{
     ScriptedHarness, ScriptedJobs, ScriptedVerify, SilentNotifier, SnapshotVcs, VirtualClock,
 };
@@ -93,14 +95,86 @@ fn deps(
 
 /// Opens the run of `project` and runs it until it ends or pauses.
 async fn run(project: &Project, deps: Deps, stop: CancellationToken) {
+    run_with(project, deps, stop, false).await;
+}
+
+/// [`run`] with `--resume`, for a run that blocked.
+async fn resume(project: &Project, deps: Deps) {
+    run_with(project, deps, CancellationToken::new(), true).await;
+}
+
+/// Opens the run of `project` and runs it, with `--resume` when `resume`.
+async fn run_with(project: &Project, deps: Deps, stop: CancellationToken, resume: bool) {
     let mut runner = Runner::open(project.clone(), deps, stop).unwrap();
     runner
         .run(RunOptions {
+            resume,
             runner_version: "test".into(),
             ..Default::default()
         })
         .await
         .unwrap();
+}
+
+/// The journaled sessions of `role` for T001.
+fn sessions(project: &Project, role: Role) -> impl Iterator<Item = SessionRecord> {
+    project
+        .journal()
+        .into_iter()
+        .filter_map(move |e| match e.record {
+            JournalRecord::Session(s)
+                if s.role == role && s.task.as_ref().is_some_and(|t| t.as_str() == "T001") =>
+            {
+                Some(s)
+            }
+            _ => None,
+        })
+}
+
+/// A blocked run: the project, its log and why.
+struct Blocked {
+    _work: tempfile::TempDir,
+    project: Project,
+    log: String,
+    reason: String,
+}
+
+impl Blocked {
+    /// The run of `project`, which must have blocked.
+    fn read(work: tempfile::TempDir, project: Project) -> Self {
+        let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+        let ledger = project.load_ledger().unwrap();
+        assert_eq!(ledger.phase, Phase::Blocked, "{log}");
+        let reason = ledger.blocked_reason.unwrap_or_default();
+        Self {
+            _work: work,
+            project,
+            log,
+            reason,
+        }
+    }
+
+    /// How many sessions of `role` T001 had.
+    fn sessions(&self, role: Role) -> usize {
+        sessions(&self.project, role).count()
+    }
+
+    fn retried(&self) -> bool {
+        self.project
+            .journal()
+            .iter()
+            .any(|e| matches!(e.record, JournalRecord::EngineRetry { .. }))
+    }
+
+    fn assert_reason_has(&self, parts: &[&str]) {
+        for part in parts {
+            assert!(
+                self.reason.contains(part),
+                "{part:?} not in {}",
+                self.reason
+            );
+        }
+    }
 }
 
 /// The capacity wait the run is given; no other wait of the run is as long.
