@@ -213,6 +213,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   the pause gets the note, whatever its role or task; only a paused task
   review is taken back without it. The note says the session ran out of
   context even when a pause stopped it.
+- **A split child correcting its ancestors' notes** (ADR 0013) is tested
+  as an ownership rule only. No run has had a builder keep such an edit
+  yet; the Digger below the Mine run of 2026-10-30, whose T021dd asked for
+  one, ran a binary from before the change.
 - **fx and the skills above the project.** fx looks for skills from the
   project upward and stops only at `HOME`. Tenaz gives fx a `HOME` inside
   the project, so for a project under your home folder fx goes on past it

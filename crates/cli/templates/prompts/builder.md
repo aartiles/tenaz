@@ -12,7 +12,10 @@ and the map.
 3. Implement until `./verify --task <TASK>` and `./verify --all` both pass.
 4. Update `.tenaz/map.md` for files you created or whose purpose changed.
 5. Write `.tenaz/notes/<TASK>.md` (short, about 15 lines): what you did,
-   decisions later tasks must know, and anything left rough.
+   decisions later tasks must know, and anything left rough. A split task
+   may also correct the notes of the tasks it was split from (`T007ab` may
+   correct `.tenaz/notes/T007a.md` and `.tenaz/notes/T007.md`) when its work
+   made them wrong. No other task's notes.
 
 Do not edit `.tenaz/spec.md`, `.tenaz/tasks/`, or `.tenaz/reviews/`; the
 orchestrator reverts such changes. If the task cannot pass without changing

@@ -44,6 +44,11 @@ pub struct CurrentTask {
     /// The heavy jobs of the attempt being built (ADR 0010).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jobs: Option<AttemptJobs>,
+    /// Paths the task's builder sessions wrote where a builder may not,
+    /// reverted after them. Every later builder session of the task is
+    /// told so.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reverted: Vec<String>,
 }
 
 /// The heavy jobs an attempt's builder declared, kept so a pause neither
@@ -86,6 +91,17 @@ impl CurrentTask {
             in_review: None,
             verify_failure: None,
             jobs: None,
+            reverted: Vec::new(),
+        }
+    }
+
+    /// Adds the paths a builder session of the task had reverted, each
+    /// once.
+    pub fn note_reverted(&mut self, paths: &[String]) {
+        for path in paths {
+            if !self.reverted.contains(path) {
+                self.reverted.push(path.clone());
+            }
         }
     }
 
@@ -175,6 +191,32 @@ mod tests {
 
     fn current() -> CurrentTask {
         CurrentTask::new(TaskId::parse("T001").unwrap(), "base".to_owned())
+    }
+
+    #[test]
+    fn reverted_paths_are_kept_once_each() {
+        let mut task = current();
+        task.note_reverted(&[".tenaz/notes/T021.md".to_owned()]);
+        task.note_reverted(&[
+            ".tenaz/notes/T021.md".to_owned(),
+            ".tenaz/spec.md".to_owned(),
+        ]);
+        assert_eq!(task.reverted, [".tenaz/notes/T021.md", ".tenaz/spec.md"]);
+    }
+
+    /// `run.json` keeps the reverted paths across a pause, and a ledger
+    /// written before they were kept loads with none.
+    #[test]
+    fn reverted_paths_survive_run_json_and_old_ledgers_load() {
+        let mut task = current();
+        let json = serde_json::to_string(&task).unwrap();
+        assert!(!json.contains("reverted"), "{json}");
+        task.note_reverted(&[".tenaz/notes/T021.md".to_owned()]);
+        let resumed: CurrentTask =
+            serde_json::from_str(&serde_json::to_string(&task).unwrap()).unwrap();
+        assert_eq!(resumed, task);
+        let old: CurrentTask = serde_json::from_str(&json).unwrap();
+        assert!(old.reverted.is_empty());
     }
 
     /// In the Lotion Pump run of 2026-10-28 three attempts of T016b ended

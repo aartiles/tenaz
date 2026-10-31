@@ -140,6 +140,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The builder of a split task may write the notes of the tasks it was
+  split from: `T021dd` may correct `.tenaz/notes/T021d.md` and
+  `.tenaz/notes/T021.md`. Tenaz reverted those edits, so a card the split
+  wrote to fix a parent's stale handover could never pass. See ADR 0013.
+- A builder session after one whose writes Tenaz reverted is told which
+  paths were reverted, why, and where a builder may write. Only the
+  bootstrap was told before, so the builders of a task could write the
+  same forbidden file on every attempt without learning why `verify`
+  never saw it. `run.json` keeps the paths as `current.reverted` until
+  the task ends.
 - A session paused with Ctrl-C keeps its continuation until a session
   that continues it ends. A rerun after an engine error or a lowered
   context budget is told it continues the paused work, and so is the
