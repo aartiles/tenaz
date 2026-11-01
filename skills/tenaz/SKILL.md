@@ -27,10 +27,19 @@ Do this once, and again whenever a run fails before its first session.
 
 1. `tenaz --version`. If it is not found, give the user one of these and
    let them run it (it changes their machine):
-   - `curl -LsSf https://github.com/aartiles/tenaz/releases/latest/download/tenaz-installer.sh | sh`
-     installs to `~/.local/bin` and adds it to `PATH`; a new terminal
-     picks it up.
    - `brew install aartiles/tap/tenaz` on macOS with Homebrew.
+   - On Apple silicon macOS or Linux x86_64, the archive for their
+     platform from the
+     [releases page](https://github.com/aartiles/tenaz/releases), with
+     its SHA-256 checksum.
+     `gh attestation verify <archive> --repo aartiles/tenaz` checks it
+     was built by the release workflow. They unpack it and put `tenaz`
+     on their `PATH`.
+   - `cargo install --locked --git https://github.com/aartiles/tenaz tenaz`
+     with Rust 1.91 or later, on any platform.
+
+   The README's Install section has every way, with what each needs. Do
+   not download and run an install script yourself.
 2. `tenaz doctor`. It checks git, a coding agent (Pi or fx), an engine on
    the usual ports (`--base-url` adds another address) and a model with at
    least 32k tokens of context, prints `ok`, `check` or `missing` for each
