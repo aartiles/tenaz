@@ -18,7 +18,7 @@ uses [Semantic Versioning](https://semver.org/).
   `run.json`, and `status --json` has `swap_models`. When swapping, the
   journal's `lease` records name the model of each `load` and `unload`,
   and record a model the engine dropped by itself as `evicted`. See ADR
-  0013.
+  0015.
 
 ### Changed
 

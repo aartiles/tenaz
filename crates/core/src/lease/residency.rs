@@ -1,5 +1,5 @@
 //! What the lease keeps loaded for the sessions: every model of the run,
-//! or, when the run swaps them (ADR 0013), one at a time, the resident
+//! or, when the run swaps them (ADR 0015), one at a time, the resident
 //! one. Freeing and restoring the engine depend on it; with one resident
 //! model they go through `serve_alone`, so an engine error or a job never
 //! loads the others back next to it.
@@ -31,7 +31,7 @@ fn loaded(listed: &[ModelState], id: &str) -> bool {
 
 impl LeaseManager {
     /// Keeps one of the run's models loaded at a time, the run's own first
-    /// (ADR 0013). A lease over fewer than two models has nothing to swap,
+    /// (ADR 0015). A lease over fewer than two models has nothing to swap,
     /// and an engine that cannot unload one model and keep answering
     /// cannot swap.
     #[must_use]

@@ -169,7 +169,7 @@ impl Runner {
     }
 
     /// Before each try of a session of `role`, in a run that swaps its
-    /// models: makes the role's model the only one loaded (ADR 0013). A
+    /// models: makes the role's model the only one loaded (ADR 0015). A
     /// swap that fails is waited for as after an engine error, and one the
     /// engine never takes blocks the run. A stop before, during or after
     /// the swap pauses the run before the session: at `last`, the earlier

@@ -188,13 +188,13 @@ pub struct Launch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_timeout_sec: Option<u64>,
     /// Keep one of the run's models loaded at a time and swap them before
-    /// each session (ADR 0013).
+    /// each session (ADR 0015).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub swap_models: bool,
 }
 
 /// Why a run on `engine`, with (`role_models`) or without a model map,
-/// cannot `swap` its models (ADR 0013); `None` when it can, or does not
+/// cannot `swap` its models (ADR 0015); `None` when it can, or does not
 /// ask to.
 pub fn swap_refusal(engine: EngineApi, swap: bool, role_models: bool) -> Option<&'static str> {
     if !swap {

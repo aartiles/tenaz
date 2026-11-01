@@ -1,4 +1,4 @@
-//! Runs that swap their models (ADR 0013): the reviewer plays `critic`,
+//! Runs that swap their models (ADR 0015): the reviewer plays `critic`,
 //! every other role the run's model `fake`, on an engine that holds one
 //! of them at a time.
 

@@ -371,7 +371,7 @@ back. At every `tenaz run` start it loads each model once, alone, so one
 that will not load stops the run at once. `tenaz run --no-swap-models`
 goes back to keeping them all loaded. Not with `--harness pi` yet. See
 [ADR 0011](docs/adr/0011-a-model-per-role.md) and
-[ADR 0013](docs/adr/0013-swapping-role-models.md).
+[ADR 0015](docs/adr/0015-swapping-role-models.md).
 
 `--vision` says the model reads images. `--set key=value` overrides a
 parameter; `tenaz params` lists them. Whatever its model, the diff a

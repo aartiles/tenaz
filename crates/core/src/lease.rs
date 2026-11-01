@@ -3,7 +3,7 @@
 //! so does a heavy job a builder declared (ADR 0010: unload LLM, run,
 //! reload LLM). The proxy's gate holds LLM requests while the LLM is away.
 //! An engine that cannot unload keeps the LLM loaded, and the job runs next
-//! to it. A run that swaps its models (ADR 0013) keeps one of them loaded
+//! to it. A run that swaps its models (ADR 0015) keeps one of them loaded
 //! at a time, the resident one; `residency.rs` holds what depends on it.
 
 #[cfg(test)]
@@ -157,7 +157,7 @@ pub struct LeaseManager {
     llm: Arc<dyn EngineAdapter>,
     /// The run's model first, then the other roles' models (ADR 0011).
     llm_models: Vec<String>,
-    /// One model loaded at a time (ADR 0013); fixed by `with_swap`. It
+    /// One model loaded at a time (ADR 0015); fixed by `with_swap`. It
     /// mirrors `Residency::One` in `state` so that `swaps` needs no lock.
     swap: bool,
     media: BTreeMap<String, Arc<dyn MediaAdapter>>,

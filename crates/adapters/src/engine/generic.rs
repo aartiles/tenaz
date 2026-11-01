@@ -337,7 +337,7 @@ mod tests {
     }
 
     /// Its stop command stops every model with the engine, so a run cannot
-    /// swap its models on it (ADR 0013).
+    /// swap its models on it (ADR 0015).
     #[test]
     fn a_generic_engine_does_not_unload_each_model() {
         let commands = Commands {

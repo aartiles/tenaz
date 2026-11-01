@@ -136,7 +136,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
   real run has used it yet. Not with Pi: `init` refuses the map, and Pi
   refuses a session on another model than the one it was set up for.
 
-- **Swapping the role models** (`--swap-models`, ADR 0013). Tested with
+- **Swapping the role models** (`--swap-models`, ADR 0015). Tested with
   fake engines and scripted runs only: not yet run against mlx-serve or
   Sushi, nor with a pair that does not fit together, such as Flint int4
   and Qwen3.8-27B. How long a swap takes on those engines is not

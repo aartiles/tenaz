@@ -73,7 +73,7 @@ fn lease_over(
 pub struct EngineOptions {
     pub kind: EngineChoice,
     pub proxy: bool,
-    /// Keep one of the run's models loaded at a time (ADR 0013).
+    /// Keep one of the run's models loaded at a time (ADR 0015).
     pub swap: bool,
 }
 

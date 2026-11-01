@@ -265,7 +265,7 @@ impl Runner {
 
     /// Whether the engine lists the run's models as loaded: the run's and
     /// each role's, all resident at once (ADR 0011), or the resident one
-    /// when the run swaps them (ADR 0013). With a lease, the LLMs are
+    /// when the run swaps them (ADR 0015). With a lease, the LLMs are
     /// loaded first when they are not resident (after a media job whose
     /// reload failed, for example); when that fails, the refusal names the
     /// models still missing and says why.
@@ -297,7 +297,7 @@ impl Runner {
         }
     }
 
-    /// Whether the run keeps one model loaded at a time (ADR 0013).
+    /// Whether the run keeps one model loaded at a time (ADR 0015).
     fn swaps(&self) -> bool {
         self.deps.lease.as_ref().is_some_and(|l| l.swaps())
     }

@@ -1,4 +1,4 @@
-# ADR 0013: Swapping the role models
+# ADR 0015: Swapping the role models
 
 Status: accepted (1A, 2A, 3A, 4A, 5A), 2026-11-01. Amends ADR 0011, where every model of the
 map is resident at once.
