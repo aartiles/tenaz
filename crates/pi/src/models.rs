@@ -1,8 +1,8 @@
 //! Pi's provider configuration, `models.json`. The user's own file
 //! (`~/.pi/agent/models.json`) is an optional source: init reads the base
-//! URL, context window and inputs of a model it lists, and a run copies that
-//! model's provider settings. What Pi reads during a run is the file Tenaz
-//! writes into the run's own agent directory ([`agent_models_json`]).
+//! URL, context window and inputs of the run's models it lists, and a run
+//! copies their provider settings. What Pi reads during a run is the file
+//! Tenaz writes into the run's own agent directory ([`agent_models_json`]).
 
 use std::path::{Path, PathBuf};
 
@@ -119,33 +119,47 @@ pub fn default_models_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".pi/agent/models.json"))
 }
 
-/// The entry for `provider/id`; `Ok(None)` when the file, the provider or
-/// the model is absent: the run's own `models.json` describes the model
-/// from what init knows instead.
-pub fn model_entry(
-    path: &Path,
-    provider: &str,
-    id: &str,
-) -> Result<Option<ModelEntry>, ModelsError> {
-    let Some(file) = read_file(path)? else {
-        return Ok(None);
-    };
-    Ok(file.providers.get(provider).and_then(|config| {
-        config
-            .models
-            .iter()
-            .find(|m| m.id == id)
-            .map(|model| entry_of(config.base_url.clone(), model))
-    }))
-}
-
-/// The model a run pins, as Tenaz describes it to Pi.
+/// The run's models as Tenaz describes them to Pi: one provider at one
+/// base URL, the run's own model, and the other models its roles play
+/// (ADR 0011).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentModel {
+pub struct AgentModels {
     pub provider: String,
-    pub id: String,
     /// Where Pi sends its requests: the engine proxy, or the engine.
     pub base_url: String,
+    pub run: AgentModel,
+    pub others: Vec<AgentModel>,
+}
+
+impl AgentModels {
+    /// The run's model first, then the others.
+    pub fn all(&self) -> impl Iterator<Item = &AgentModel> {
+        std::iter::once(&self.run).chain(&self.others)
+    }
+
+    pub fn ids(&self) -> Vec<String> {
+        self.all().map(|m| m.id.clone()).collect()
+    }
+
+    /// The run's model as Pi names it, `provider/id`.
+    pub fn run_name(&self) -> String {
+        self.name(&self.run)
+    }
+
+    /// The other models as Pi names them.
+    pub fn other_names(&self) -> Vec<String> {
+        self.others.iter().map(|m| self.name(m)).collect()
+    }
+
+    fn name(&self, model: &AgentModel) -> String {
+        format!("{}/{}", self.provider, model.id)
+    }
+}
+
+/// One of the run's models, as Tenaz describes it to Pi.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentModel {
+    pub id: String,
     pub context_window: u64,
     /// `text`, `image`.
     pub input: Vec<String>,
@@ -204,19 +218,16 @@ pub fn provider_template(
     Ok(Some(config))
 }
 
-/// The `models.json` of a run: one provider with the run's `models`, its
-/// own first, all on the first one's provider and base URL. Built from
-/// `template` (see [`provider_template`]) for the models the user's file
-/// lists, otherwise from scratch for an OpenAI-compatible local engine. The
-/// base URL, context windows and inputs are always the run's.
+/// The `models.json` of a run: one provider with the run's models, its
+/// own first. Built from `template` (see [`provider_template`]) for the
+/// models the user's file lists, otherwise from scratch for an
+/// OpenAI-compatible local engine. The base URL, context windows and inputs
+/// are always the run's.
 pub fn agent_models_json(
-    models: &[AgentModel],
+    models: &AgentModels,
     template: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> serde_json::Value {
     use serde_json::{Value, json};
-    let Some(run) = models.first() else {
-        return json!({ "providers": {} });
-    };
     let mut provider = template.unwrap_or_else(|| {
         // Local servers do not all know OpenAI's `developer` role, `store`
         // or `max_completion_tokens`; the plain forms work everywhere.
@@ -237,10 +248,10 @@ pub fn agent_models_json(
         .cloned()
         .unwrap_or_default();
     let entries = models
-        .iter()
+        .all()
         .map(|model| model_json(model, &listed))
         .collect();
-    provider.insert("baseUrl".to_owned(), Value::String(run.base_url.clone()));
+    provider.insert("baseUrl".to_owned(), Value::String(models.base_url.clone()));
     provider
         .entry("api")
         .or_insert_with(|| Value::String("openai-completions".to_owned()));
@@ -251,7 +262,7 @@ pub fn agent_models_json(
         .entry("apiKey")
         .or_insert_with(|| Value::String("local".to_owned()));
     provider.insert("models".to_owned(), Value::Array(entries));
-    json!({ "providers": { &run.provider: provider } })
+    json!({ "providers": { &models.provider: provider } })
 }
 
 /// `model`'s entry: the user's own from `listed`, if any, with the run's
@@ -296,21 +307,29 @@ mod tests {
       }
     }"#;
 
+    /// The entry of the model `id` under `sushi` in `path`.
+    fn entry(path: &Path, id: &str) -> Option<ModelEntry> {
+        let listed = list_models(path).unwrap();
+        listed
+            .into_iter()
+            .find(|m| m.provider == "sushi" && m.id == id)
+            .map(|m| m.entry)
+    }
+
     #[test]
     fn the_entry_carries_base_url_context_window_and_inputs() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("models.json");
         std::fs::write(&path, SAMPLE).unwrap();
-        let entry = model_entry(&path, "sushi", "Qwen3.8").unwrap().unwrap();
         assert_eq!(
-            entry,
-            ModelEntry {
+            entry(&path, "Qwen3.8"),
+            Some(ModelEntry {
                 base_url: Some("http://127.0.0.1:12345/v1".into()),
                 context_window: Some(131072),
                 input: vec!["text".into(), "image".into()],
-            }
+            })
         );
-        let small = model_entry(&path, "sushi", "Small").unwrap().unwrap();
+        let small = entry(&path, "Small").unwrap();
         assert_eq!(small.context_window, None);
         assert_eq!(small.input, vec!["text".to_owned()]);
     }
@@ -335,31 +354,29 @@ mod tests {
     }
 
     #[test]
-    fn an_unlisted_model_has_no_entry() {
+    fn a_file_that_is_not_json_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("models.json");
-        std::fs::write(&path, SAMPLE).unwrap();
-        assert_eq!(model_entry(&path, "sushi", "Missing").unwrap(), None);
-        assert_eq!(model_entry(&path, "other", "Missing").unwrap(), None);
-        assert_eq!(
-            model_entry(&dir.path().join("absent.json"), "sushi", "Qwen3.8").unwrap(),
-            None
-        );
         std::fs::write(&path, "{not json").unwrap();
-        assert!(matches!(
-            model_entry(&path, "sushi", "Qwen3.8"),
-            Err(ModelsError::Parse { .. })
-        ));
+        assert!(matches!(list_models(&path), Err(ModelsError::Parse { .. })));
     }
 
     fn agent_model() -> AgentModel {
         AgentModel {
-            provider: "lmstudio".into(),
             id: "qwen3.8-27b".into(),
-            base_url: "http://127.0.0.1:4001/v1".into(),
             context_window: 65536,
             input: vec!["text".into()],
             reasoning: true,
+        }
+    }
+
+    /// The run's models on `provider`, at the proxy's address.
+    fn on(provider: &str, run: AgentModel, others: Vec<AgentModel>) -> AgentModels {
+        AgentModels {
+            provider: provider.into(),
+            base_url: "http://127.0.0.1:4001/v1".into(),
+            run,
+            others,
         }
     }
 
@@ -367,7 +384,7 @@ mod tests {
     /// knows, in the plain `OpenAI` forms every local server accepts.
     #[test]
     fn a_model_is_described_from_scratch() {
-        let json = agent_models_json(&[agent_model()], None);
+        let json = agent_models_json(&on("lmstudio", agent_model(), vec![]), None);
         assert_eq!(
             json,
             serde_json::json!({"providers": {"lmstudio": {
@@ -415,12 +432,11 @@ mod tests {
         );
         let template = provider_template(&path, "sushi", &ids("Qwen3.8")).unwrap();
         let model = AgentModel {
-            provider: "sushi".into(),
             id: "Qwen3.8".into(),
             reasoning: false,
             ..agent_model()
         };
-        let json = agent_models_json(&[model], template);
+        let json = agent_models_json(&on("sushi", model, vec![]), template);
         let provider = &json["providers"]["sushi"];
         assert_eq!(provider["baseUrl"], "http://127.0.0.1:4001/v1");
         assert_eq!(provider["apiKey"], "local");
@@ -436,8 +452,8 @@ mod tests {
     }
 
     /// A model per role: every model of the run is listed, the run's first,
-    /// each with its own window; one the user's file lists keeps its
-    /// settings, one it does not is described from scratch.
+    /// each with its own window and inputs; one the user's file lists keeps
+    /// its settings, one it does not is described from scratch.
     #[test]
     fn every_model_of_the_run_is_listed_with_its_own_window() {
         let dir = tempfile::tempdir().unwrap();
@@ -445,36 +461,39 @@ mod tests {
         std::fs::write(&path, SAMPLE).unwrap();
         let ids = ["Qwen3.8", "Small", "Unlisted"].map(str::to_owned);
         let template = provider_template(&path, "sushi", &ids).unwrap();
-        let model = |id: &str, context_window| AgentModel {
-            provider: "sushi".into(),
+        let model = |id: &str, context_window, input: &[&str]| AgentModel {
             id: id.into(),
             context_window,
+            input: input.iter().map(|i| (*i).to_owned()).collect(),
             ..agent_model()
         };
-        let models = [
-            model("Qwen3.8", 131_072),
-            model("Small", 32768),
-            model("Unlisted", 65536),
-        ];
+        let models = on(
+            "sushi",
+            model("Qwen3.8", 131_072, &["text", "image"]),
+            vec![
+                model("Small", 32768, &["text"]),
+                model("Unlisted", 65536, &["text"]),
+            ],
+        );
+        assert_eq!(models.run_name(), "sushi/Qwen3.8");
+        assert_eq!(models.other_names(), ["sushi/Small", "sushi/Unlisted"]);
         let json = agent_models_json(&models, template);
         let listed = json["providers"]["sushi"]["models"].as_array().unwrap();
-        let summary: Vec<(&str, &str, u64)> = listed
+        let summary: Vec<String> = listed
             .iter()
             .map(|m| {
-                let window = m["contextWindow"].as_u64().unwrap();
-                (
-                    m["id"].as_str().unwrap(),
-                    m["name"].as_str().unwrap(),
-                    window,
+                format!(
+                    "{} {} {} {}",
+                    m["id"], m["name"], m["contextWindow"], m["input"]
                 )
             })
             .collect();
         assert_eq!(
             summary,
             [
-                ("Qwen3.8", "Qwen", 131_072),
-                ("Small", "Small", 32768),
-                ("Unlisted", "Unlisted", 65536)
+                r#""Qwen3.8" "Qwen" 131072 ["text","image"]"#,
+                r#""Small" "Small" 32768 ["text"]"#,
+                r#""Unlisted" "Unlisted" 65536 ["text"]"#,
             ]
         );
         assert_eq!(listed[0]["thinkingLevelMap"]["off"], "off");

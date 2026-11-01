@@ -364,7 +364,7 @@ async fn a_session_on_an_unlisted_model_is_refused() {
 async fn a_role_s_session_launches_pi_with_its_model() {
     let dir = tempfile::tempdir().unwrap();
     let launch = PiLaunch::new(fake_pi(), "fake/fake")
-        .role_models(vec!["fake/critic".to_owned()])
+        .other_models(vec!["fake/critic".to_owned()])
         .env(vec![(
             "FAKE_PI_ARGS".to_owned(),
             dir.path().join("args.txt").display().to_string(),

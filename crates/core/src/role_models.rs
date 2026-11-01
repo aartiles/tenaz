@@ -46,12 +46,8 @@ impl RoleModel {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RolePick {
     pub id: String,
-    /// `--context-window-for`, or with Pi the model's window in the user's
-    /// `models.json`; without either, the run's window.
+    /// `--context-window-for`; without it, the run's window.
     pub context_window: Option<u64>,
-    /// With Pi, the model's inputs in the user's `models.json`; without
-    /// them, the run's.
-    pub input: Option<Vec<String>>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -121,7 +117,6 @@ impl RoleFlags<'_> {
             let pick = RolePick {
                 id,
                 context_window: None,
-                input: None,
             };
             if picks.insert(role, pick).is_some() {
                 return Err(RoleModelError::Twice { flag: &MODEL, role });
@@ -212,18 +207,35 @@ pub struct RunDefaults<'a> {
     pub input: &'a [String],
 }
 
-/// The models to pin: each pick under the run's provider, with the run's
-/// window and inputs where it gave none. A role's model is otherwise taken
+/// What the harness's own configuration says of a model, when it says
+/// anything: with Pi, the user's `models.json`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Known {
+    pub context_window: Option<u64>,
+    pub input: Option<Vec<String>>,
+}
+
+/// The models to pin: each pick under the run's provider. Its window is
+/// the flag's, else what `known` says of its model, else the run's; its
+/// inputs are what `known` says, else the run's: a role's model is taken
 /// to read images when the run's does.
-pub fn pin(picks: &BTreeMap<Role, RolePick>, run: RunDefaults<'_>) -> BTreeMap<Role, RoleModel> {
+pub fn pin(
+    picks: &BTreeMap<Role, RolePick>,
+    run: RunDefaults<'_>,
+    known: impl Fn(&str) -> Known,
+) -> BTreeMap<Role, RoleModel> {
     picks
         .iter()
         .map(|(role, pick)| {
+            let known = known(&pick.id);
             let model = RoleModel {
                 model: format!("{}/{}", run.provider, pick.id),
                 id: pick.id.clone(),
-                context_window: pick.context_window.unwrap_or(run.context_window),
-                input: pick.input.clone().unwrap_or_else(|| run.input.to_vec()),
+                context_window: pick
+                    .context_window
+                    .or(known.context_window)
+                    .unwrap_or(run.context_window),
+                input: known.input.unwrap_or_else(|| run.input.to_vec()),
             };
             (*role, model)
         })
@@ -238,7 +250,6 @@ mod tests {
         RolePick {
             id: id.into(),
             context_window,
-            input: None,
         }
     }
 
@@ -368,6 +379,7 @@ mod tests {
                 context_window: 131_072,
                 input: &input,
             },
+            |_| Known::default(),
         );
         let model = |id: &str, context_window| RoleModel {
             model: format!("sushi/{id}"),
@@ -381,6 +393,43 @@ mod tests {
                 (Role::Reviewer, model("B", 131_072)),
                 (Role::Split, model("C", 32768)),
             ]
+        );
+    }
+
+    /// What the harness's configuration knows of a model comes before the
+    /// run's window and inputs, and a window flag before both.
+    #[test]
+    fn what_is_known_of_a_model_comes_before_the_run_s() {
+        let picks = BTreeMap::from([
+            (Role::Reviewer, pick("B", None)),
+            (Role::Split, pick("C", Some(16384))),
+            (Role::Replan, pick("D", None)),
+        ]);
+        let input = ["text", "image"].map(String::from).to_vec();
+        let run = RunDefaults {
+            provider: "sushi",
+            context_window: 131_072,
+            input: &input,
+        };
+        let text = vec!["text".to_owned()];
+        let known = |id: &str| match id {
+            "B" | "C" => Known {
+                context_window: Some(32768),
+                input: Some(text.clone()),
+            },
+            _ => Known::default(),
+        };
+        let pinned: BTreeMap<Role, (u64, Vec<String>)> = pin(&picks, run, known)
+            .into_iter()
+            .map(|(role, m)| (role, (m.context_window, m.input)))
+            .collect();
+        assert_eq!(
+            pinned,
+            BTreeMap::from([
+                (Role::Reviewer, (32768, text.clone())),
+                (Role::Split, (16384, text.clone())),
+                (Role::Replan, (131_072, input.clone())),
+            ])
         );
     }
 }

@@ -11,7 +11,7 @@ use tenaz_core::orchestrator::{InitOptions, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
 use tenaz_core::role::Role;
-use tenaz_core::role_models::{self, RoleFlags, RolePick, RunDefaults};
+use tenaz_core::role_models::{self, Known, RoleFlags, RolePick, RunDefaults};
 use tenaz_pi::models::ModelEntry;
 
 use super::{
@@ -460,14 +460,10 @@ fn init_at(
 /// The model and harness to pin: the harness's version, and what the
 /// command line or Pi's models.json says of the model.
 fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
-    let (harness_version, entry) = pin_harness(
-        plan.harness,
-        plan.harness_bin.as_deref(),
-        &plan.provider,
-        &plan.model,
-    )?;
+    let (harness_version, listed) =
+        pin_harness(plan.harness, plan.harness_bin.as_deref(), &plan.provider)?;
     let (input, base_url, context_window) = resolve_model(
-        entry.as_ref(),
+        listed.entry(&plan.model),
         plan.args.vision,
         plan.args.base_url.clone(),
         plan.args.context_window,
@@ -477,16 +473,8 @@ fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
         context_window,
         input: &input,
     };
-    let pi_models = (plan.harness == HarnessKind::Pi)
-        .then(tenaz_pi::models::default_models_path)
-        .flatten();
-    let picks = from_pi_models(
-        &plan.role_picks,
-        pi_models.as_deref(),
-        &plan.provider,
-        plan.args.vision,
-    )?;
-    let role_models = role_models::pin(&picks, run);
+    let known = |id: &str| listed.known(id, plan.args.vision);
+    let role_models = role_models::pin(&plan.role_picks, run, known);
     Ok(ModelConfig {
         harness: plan.harness,
         harness_version,
@@ -499,35 +487,6 @@ fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
         thinking: Some(plan.args.thinking.clone()),
         role_models,
     })
-}
-
-/// `picks` with what Pi's `models` file lists for their models, as for
-/// `--model`: the context window when `--context-window-for` gave none,
-/// and the inputs unless `--vision` says the run's models read images.
-fn from_pi_models(
-    picks: &BTreeMap<Role, RolePick>,
-    models: Option<&Path>,
-    provider: &str,
-    vision: bool,
-) -> anyhow::Result<BTreeMap<Role, RolePick>> {
-    let mut picks = picks.clone();
-    let Some(path) = models.filter(|_| !picks.is_empty()) else {
-        return Ok(picks);
-    };
-    let listed = tenaz_pi::models::list_models(path)?;
-    for pick in picks.values_mut() {
-        let Some(found) = listed
-            .iter()
-            .find(|m| m.provider == provider && m.id == pick.id)
-        else {
-            continue;
-        };
-        pick.context_window = pick.context_window.or(found.entry.context_window);
-        if !vision {
-            pick.input = Some(found.entry.input.clone());
-        }
-    }
-    Ok(picks)
 }
 
 /// How to start the engine, the harness and the media tools.
@@ -585,31 +544,65 @@ fn pin_harness(
     harness: HarnessKind,
     bin: Option<&Path>,
     provider: &str,
-    model: &str,
-) -> anyhow::Result<(String, Option<ModelEntry>)> {
+) -> anyhow::Result<(String, Listed)> {
     let bin = bin.unwrap_or_else(|| Path::new(harness.as_str()));
     Ok(match harness {
         HarnessKind::Fx => (
             tenaz_acp::fx::fx_version(bin)
                 .with_context(|| format!("cannot run {} --version", bin.display()))?,
-            None,
+            Listed::default(),
         ),
         HarnessKind::Pi => {
-            let entry = match tenaz_pi::models::default_models_path() {
-                Some(path) => tenaz_pi::models::model_entry(&path, provider, model)?,
-                None => None,
-            };
+            let path = tenaz_pi::models::default_models_path();
+            let listed = Listed::read(path.as_deref(), provider)?;
             (
                 tenaz_pi::pi_version(bin)
                     .with_context(|| format!("cannot run {} --version", bin.display()))?,
-                entry,
+                listed,
             )
         }
         HarnessKind::Fake => (
             tenaz_core::testing::ScriptedHarness::default().version(),
-            None,
+            Listed::default(),
         ),
     })
+}
+
+/// The models the user's Pi `models` file lists under the run's provider:
+/// what init reads of `--model` and of each role's model there. Empty for
+/// another harness or without the file.
+#[derive(Debug, Default)]
+struct Listed(Vec<tenaz_pi::models::ListedModel>);
+
+impl Listed {
+    fn read(models: Option<&Path>, provider: &str) -> anyhow::Result<Self> {
+        let Some(path) = models else {
+            return Ok(Self::default());
+        };
+        let listed = tenaz_pi::models::list_models(path)?;
+        Ok(Self(
+            listed
+                .into_iter()
+                .filter(|m| m.provider == provider)
+                .collect(),
+        ))
+    }
+
+    fn entry(&self, id: &str) -> Option<&ModelEntry> {
+        self.0.iter().find(|m| m.id == id).map(|m| &m.entry)
+    }
+
+    /// What the file says of a role's model, as of `--model`: its window,
+    /// and its inputs unless `--vision` says the run's models read images.
+    fn known(&self, id: &str, vision: bool) -> Known {
+        let Some(entry) = self.entry(id) else {
+            return Known::default();
+        };
+        Known {
+            context_window: entry.context_window,
+            input: (!vision).then(|| entry.input.clone()),
+        }
+    }
 }
 
 /// Inputs, base URL and context window: the command line first, then the
@@ -873,62 +866,46 @@ mod tests {
                 RolePick {
                     id: "r".into(),
                     context_window: Some(32768),
-                    input: None,
                 }
             )]
         );
     }
 
-    /// With Pi, a role's model takes the window and inputs the user's
-    /// `models.json` lists for it, as `--model` does; a window flag still
-    /// wins, `--vision` keeps the run's inputs, and a model the file does
-    /// not list keeps the run's (ADR 0011).
-    #[test]
-    fn pi_s_models_file_gives_a_role_s_model_its_window_and_inputs() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("models.json");
-        let file = r#"{"providers": {"sushi": {"models": [
-            {"id": "critic", "contextWindow": 32768, "input": ["text"]},
-            {"id": "planner", "contextWindow": 65536, "input": ["text", "image"]}
-        ]}}}"#;
+    /// The user's Pi `models` file, with `critic` under the run's provider
+    /// and another window under another provider.
+    fn listed(dir: &Path) -> Listed {
+        let path = dir.join("models.json");
+        let file = r#"{"providers": {
+            "other": {"models": [{"id": "critic", "contextWindow": 8192}]},
+            "sushi": {"models": [{"id": "critic", "contextWindow": 32768, "input": ["text"]}]}
+        }}"#;
         std::fs::write(&path, file).unwrap();
-        let pick = |id: &str, context_window| RolePick {
-            id: id.into(),
-            context_window,
-            input: None,
+        Listed::read(Some(&path), "sushi").unwrap()
+    }
+
+    /// With Pi, a role's model takes the window and inputs the user's
+    /// `models.json` lists for it under the run's provider (ADR 0011).
+    #[test]
+    fn pi_s_models_file_says_a_role_s_window_and_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let known = listed(dir.path()).known("critic", false);
+        let expected = Known {
+            context_window: Some(32768),
+            input: Some(vec!["text".to_owned()]),
         };
-        let picks = BTreeMap::from([
-            (Role::Reviewer, pick("critic", None)),
-            (Role::Split, pick("planner", Some(16384))),
-            (Role::Replan, pick("unlisted", None)),
-        ]);
-        let read = |models: Option<&Path>, vision| {
-            from_pi_models(&picks, models, "sushi", vision)
-                .unwrap()
-                .into_iter()
-                .map(|(role, p)| (role, (p.context_window, p.input)))
-                .collect::<BTreeMap<_, _>>()
-        };
-        let text = Some(vec!["text".to_owned()]);
-        let images = Some(vec!["text".to_owned(), "image".to_owned()]);
-        assert_eq!(
-            read(Some(&path), false),
-            BTreeMap::from([
-                (Role::Reviewer, (Some(32768), text)),
-                (Role::Split, (Some(16384), images)),
-                (Role::Replan, (None, None)),
-            ])
-        );
-        let vision = read(Some(&path), true);
-        assert_eq!(vision[&Role::Reviewer], (Some(32768), None));
-        assert_eq!(
-            read(None, false),
-            BTreeMap::from([
-                (Role::Reviewer, (None, None)),
-                (Role::Split, (Some(16384), None)),
-                (Role::Replan, (None, None)),
-            ])
-        );
+        assert_eq!(known, expected);
+    }
+
+    /// `--vision` keeps the run's inputs; a model the file does not list,
+    /// or no file, says nothing.
+    #[test]
+    fn pi_s_models_file_says_nothing_of_what_it_does_not_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let listed = listed(dir.path());
+        assert_eq!(listed.known("critic", true).input, None);
+        assert_eq!(listed.known("unlisted", false), Known::default());
+        let none = Listed::read(None, "sushi").unwrap();
+        assert_eq!(none.known("critic", false), Known::default());
     }
 
     #[test]

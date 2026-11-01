@@ -107,8 +107,10 @@ module with unit tests turns the harness's own records into those events.
 
 `tenaz init --harness pi` pins `pi --version` and, when `~/.pi/agent/models.json`
 lists the provider, takes the base URL, context window and inputs from the
-model's entry (a provider that does not list the model is an error). The `fake-pi` binary in `tenaz-pi` is a scripted Pi that speaks the
-protocol without a model: the adapter's integration tests spawn it.
+model's entry, and each role's model's window and inputs from its own (a
+model it does not list takes the flags' values). The `fake-pi` binary in
+`tenaz-pi` is a scripted Pi that speaks the protocol without a model: the
+adapter's integration tests spawn it.
 
 ## Testing
 
