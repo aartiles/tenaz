@@ -108,7 +108,8 @@ launch.
   With swapping, this is the one way the lease restores the engine: the
   swap before a session, `ensure_llm`, the wait after an engine error, the
   wait after a heavy job, and the reload after a media or heavy job all
-  call it with the resident model. A refusal names that model and no
+  serve the resident model alone (in the code, `serve_only` is the
+  session's entry and `serve_alone` the shared step). A refusal names that model and no
   longer says to load every model at once. The resident model stays the
   target after a swap fails, so each wait tries the whole swap again.
 - B. Change only the swap. The first engine error would load every model
@@ -211,14 +212,14 @@ model, so a run can show whether that is worth doing.
   gains `swap_models` (true or false). Runs without the flag are
   unchanged.
 - ADR 0011's "every model in the map must be loaded before `tenaz run`"
-  holds only without swapping; 0011 gets a note pointing here once this is
-  accepted. The README (the model map, "Tenaz does not swap", how it
+  holds only without swapping; 0011 has a note pointing here. The README (the model map, "Tenaz does not swap", how it
   compares with model swappers), `skills/tenaz/SKILL.md`, the CHANGELOG
   and COMPATIBILITY change with it.
-- Lands in steps: the flag and its refusals; `serve_only` and the paths
-  that use it; the swap before each session and the check at the start;
-  docs. A real run with a pair that does not fit together, such as Flint
-  int4 and Qwen3.8-27B on mlx-serve, goes in COMPATIBILITY.
+- Landed in steps: the lease's swap and the paths that use it; the swap
+  before each session and the check at the start; the flag, its
+  refusals and the docs. A real run with a pair that does not fit
+  together, such as Flint int4 and Qwen3.8-27B on mlx-serve, goes in
+  COMPATIBILITY.
 
 ## Out of scope
 

@@ -41,7 +41,7 @@ uses [Semantic Versioning](https://semver.org/).
   builder's model. After the engine runs out of memory, the lowered budget
   is raised toward the largest model's budget. See ADR 0011.
 - With `--model-for`, every model of the run must be loaded before the
-  first session. Tenaz loads those that are not, as it does the run's
+  first session, unless `--swap-models` (below). Tenaz loads those that are not, as it does the run's
   model, and `tenaz run` stops and names any it could not load. Around an
   image job or a heavy job the lease frees every model and loads them all
   back; a generic engine's stop and start commands run once for all of
@@ -54,9 +54,10 @@ uses [Semantic Versioning](https://semver.org/).
   each model once, alone, and stops the run if one will not load. Needs
   `--engine load-api` (Sushi, mlx-serve). `tenaz run --swap-models` and
   `--no-swap-models` change it; it is kept as `launch.swapModels` in
-  `run.json`, and `status --json` has `swap_models`. The journal's
-  `lease` records name the model of each `load` and `unload`, and record
-  a model the engine dropped by itself as `evicted`. See ADR 0013.
+  `run.json`, and `status --json` has `swap_models`. When swapping, the
+  journal's `lease` records name the model of each `load` and `unload`,
+  and record a model the engine dropped by itself as `evicted`. See ADR
+  0013.
 - A builder whose task needs work too heavy for a session (a render, a
   long build) writes `.tenaz/jobs/<TASK>.json` with the command, its time
   limit and why, and stops. Tenaz runs the command between sessions of the
