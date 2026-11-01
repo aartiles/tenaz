@@ -6,20 +6,12 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use super::{deps, fake_project, run};
-use crate::ledger::{JournalRecord, Ledger, Phase, SessionRecord};
+use super::{Blocked, deps, fake_project, run, sessions};
+use crate::ledger::{JournalRecord, Ledger, Phase};
 use crate::project::Project;
 use crate::role::Role;
 use crate::role_models::RoleModel;
 use crate::testing::{ScriptedHarness, VirtualClock};
-
-/// A run blocked by a refused prompt: the project, its log and why.
-struct Blocked {
-    _work: tempfile::TempDir,
-    project: Project,
-    log: String,
-    reason: String,
-}
 
 /// The reviewer's own model: a smaller window than the run's 131072, as in
 /// the Digger 3D run.
@@ -60,57 +52,10 @@ async fn play(
     (work, project, log)
 }
 
-/// The journaled sessions of `role` for T001.
-fn sessions(project: &Project, role: Role) -> impl Iterator<Item = SessionRecord> {
-    project
-        .journal()
-        .into_iter()
-        .filter_map(move |e| match e.record {
-            JournalRecord::Session(s)
-                if s.role == role && s.task.as_ref().is_some_and(|t| t.as_str() == "T001") =>
-            {
-                Some(s)
-            }
-            _ => None,
-        })
-}
-
 /// [`play`], unchanged, that must block.
 async fn blocked(harness: ScriptedHarness, overrides: &[&str]) -> Blocked {
-    let (work, project, log) = play(harness, overrides, |_| {}).await;
-    let ledger = project.load_ledger().unwrap();
-    assert_eq!(ledger.phase, Phase::Blocked, "{log}");
-    let reason = ledger.blocked_reason.unwrap_or_default();
-    Blocked {
-        _work: work,
-        project,
-        log,
-        reason,
-    }
-}
-
-impl Blocked {
-    /// How many sessions of `role` T001 had.
-    fn sessions(&self, role: Role) -> usize {
-        sessions(&self.project, role).count()
-    }
-
-    fn retried(&self) -> bool {
-        self.project
-            .journal()
-            .iter()
-            .any(|e| matches!(e.record, JournalRecord::EngineRetry { .. }))
-    }
-
-    fn assert_reason_has(&self, parts: &[&str]) {
-        for part in parts {
-            assert!(
-                self.reason.contains(part),
-                "{part:?} not in {}",
-                self.reason
-            );
-        }
-    }
+    let (work, project, _) = play(harness, overrides, |_| {}).await;
+    Blocked::read(work, project)
 }
 
 /// In the Digger 3D run of 2026-10-29 fx refused T001's review seven
@@ -137,7 +82,8 @@ async fn a_review_the_harness_refuses_blocks_the_run_at_once() {
 }
 
 /// A builder's prompt refused is not the task's failure: the attempt is
-/// given back, as after a pause.
+/// given back, as after a pause. Nothing was paused, so no continuation is
+/// owed.
 #[tokio::test(start_paused = true)]
 async fn a_builder_the_harness_refuses_is_not_charged_the_attempt() {
     let run = blocked(
@@ -154,6 +100,8 @@ async fn a_builder_the_harness_refuses_is_not_charged_the_attempt() {
     ]);
     assert!(!run.reason.contains("--resume"), "{}", run.reason);
     assert_eq!(run.sessions(Role::Builder), 1, "{}", run.log);
+    let ledger = run.project.load_ledger().unwrap();
+    assert!(!ledger.pending_continuation, "{}", run.log);
     assert!(!run.retried(), "{}", run.log);
     let card = run.project.read(".tenaz/tasks/T001.md").unwrap();
     assert!(card.contains("attempts: 0"), "{card}");
@@ -234,51 +182,4 @@ async fn a_prompt_over_a_lowered_cap_still_runs() {
         .next()
         .expect("T001 is reviewed");
     assert_eq!(review.context_budget, 8000, "{log}");
-}
-
-/// A session paused mid-turn is continued on the next run. If its prompt
-/// is then over the budget, the run blocks, still owes the continuation
-/// and does not charge the attempt, so `--resume` after the fix continues
-/// the work.
-#[tokio::test(start_paused = true)]
-async fn a_blocked_continuation_is_still_owed() {
-    let work = tempfile::tempdir().unwrap();
-    let (project, vcs) = fake_project(work.path(), &["maxAttempts=2"]);
-    let stop = CancellationToken::new();
-    let stopping = ScriptedHarness {
-        stop_at: Some(("T001".into(), stop.clone())),
-        ..Default::default()
-    };
-    let clock = Arc::new(VirtualClock::new());
-    run(
-        &project,
-        deps(&project, vcs.clone(), Arc::new(stopping), clock.clone()),
-        stop,
-    )
-    .await;
-    let mut ledger = project.load_ledger().unwrap();
-    assert!(ledger.pending_continuation);
-    ledger.params.harness_reserve_tokens = 1_000_000;
-    project.save_ledger(&ledger).unwrap();
-
-    let harness = Arc::new(ScriptedHarness::default());
-    run(
-        &project,
-        deps(&project, vcs, harness, clock),
-        CancellationToken::new(),
-    )
-    .await;
-    let ledger = project.load_ledger().unwrap();
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
-    assert_eq!(ledger.phase, Phase::Blocked, "{log}");
-    let reason = ledger.blocked_reason.unwrap_or_default();
-    assert!(
-        reason.starts_with("prompt too large: the builder prompt for T001, "),
-        "{reason}"
-    );
-    assert!(ledger.pending_continuation, "{log}");
-    let builders = sessions(&project, Role::Builder).count();
-    assert_eq!(builders, 1, "{log}");
-    let card = project.read(".tenaz/tasks/T001.md").unwrap();
-    assert!(card.contains("attempts: 0"), "{card}");
 }

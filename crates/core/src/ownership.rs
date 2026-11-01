@@ -55,7 +55,7 @@ fn agent_rule(role: Role, agent_path: &str, task: Option<&TaskId>, repo: &dyn Re
                 || agent_path.starts_with("tasks/")
                 || agent_path.starts_with("notes/")
         }
-        Role::Builder => builder_owns(agent_path, task_id),
+        Role::Builder => builder_owns(agent_path, task),
         Role::Reviewer => agent_path == format!("reviews/{task_id}.md"),
         Role::Split | Role::Replan => {
             agent_path.starts_with("tasks/") || agent_path == "notes/PLANNER.md"
@@ -68,17 +68,25 @@ fn agent_rule(role: Role, agent_path: &str, task: Option<&TaskId>, repo: &dyn Re
     }
 }
 
-/// Whether a builder of `task_id` may write `.tenaz/<agent_path>`: `verify`,
-/// the map, and its task's notes, conflict and heavy job.
-fn builder_owns(agent_path: &str, task_id: &str) -> bool {
-    ["verify", "map.md"].contains(&agent_path)
-        || [
-            format!("notes/{task_id}.md"),
-            format!("conflicts/{task_id}.md"),
-            format!("jobs/{task_id}.json"),
-        ]
-        .iter()
-        .any(|own| own == agent_path)
+/// Whether a builder of `task` may write `.tenaz/<agent_path>`: `verify`,
+/// the map, its task's conflict and heavy job, and the notes of its task
+/// and of the tasks it was split from. A child finishes its parent's work,
+/// so a parent's note that later tasks read is its to correct (ADR 0013).
+/// `builder_reverted_note` says the same in prose: keep the two in step.
+fn builder_owns(agent_path: &str, task: Option<&TaskId>) -> bool {
+    if ["verify", "map.md"].contains(&agent_path) {
+        return true;
+    }
+    let Some(task) = task else {
+        return false;
+    };
+    let id = task.as_str();
+    agent_path == format!("conflicts/{id}.md")
+        || agent_path == format!("jobs/{id}.json")
+        || agent_path
+            .strip_prefix("notes/")
+            .and_then(|file| file.strip_suffix(".md"))
+            .is_some_and(|note| note == id || task.ancestors().any(|a| a == note))
 }
 
 /// Splits changed paths into kept and reverted.
@@ -99,6 +107,16 @@ pub fn partition<'a>(
 pub fn reverted_note(role: Role, paths: &[String]) -> String {
     format!(
         "The orchestrator reverted your changes to {}, because a {role} session may not write there. Under .tenaz/ a bootstrap session writes only verify (in an existing project), spec.md, map.md, tasks/ and notes/; .tenaz/brief.md, .tenaz/protocol.md, .tenaz/prompts/ and the project's AGENTS.md and CLAUDE.md are never edited. Put verify and any code it runs in the project itself (for example a checks/ or scripts/ folder at the root), not under .tenaz/.",
+        paths.join(", ")
+    )
+}
+
+/// The section a builder gets when earlier builder sessions of its task
+/// had `paths` reverted. Says in prose what `builder_owns` allows: keep
+/// the two in step.
+pub fn builder_reverted_note(paths: &[String]) -> String {
+    format!(
+        "## Reverted by the orchestrator\n\nEarlier builder sessions of this task wrote to {}, and the orchestrator reverted those changes, because a builder may not write there. Under .tenaz/ a builder writes only verify, map.md, its task's notes, conflict and heavy job, and the notes of the tasks its task was split from; the project's AGENTS.md and CLAUDE.md are never edited. Do not write there again: a card that needs it cannot pass as written, so say so in your notes and stop.",
         paths.join(", ")
     )
 }
@@ -165,6 +183,34 @@ mod tests {
         assert!(allowed(Role::Builder, &conflict("T007"), Some(&t), &r));
         assert!(!allowed(Role::Builder, &conflict("T008"), Some(&t), &r));
         assert!(!allowed(Role::Replan, &conflict("T007"), None, &r));
+    }
+
+    /// A split child corrects the notes of the tasks it was split from,
+    /// not those of its siblings or of other tasks.
+    #[test]
+    fn a_split_child_s_builder_writes_its_ancestors_notes() {
+        let r = repo();
+        let t = TaskId::parse("T007ab").unwrap();
+        let note = |task| format!(".tenaz/notes/{task}.md");
+        for own in ["T007ab", "T007a", "T007"] {
+            assert!(allowed(Role::Builder, &note(own), Some(&t), &r), "{own}");
+        }
+        for other in ["T007aa", "T007b", "T007abc", "T008"] {
+            assert!(
+                !allowed(Role::Builder, &note(other), Some(&t), &r),
+                "{other}"
+            );
+        }
+        assert!(
+            !allowed(Role::Builder, &note("T00"), Some(&t), &r),
+            "ancestors stop at the root task"
+        );
+        for parents_own in [".tenaz/conflicts/T007.md", ".tenaz/jobs/T007.json"] {
+            assert!(
+                !allowed(Role::Builder, parents_own, Some(&t), &r),
+                "{parents_own}"
+            );
+        }
     }
 
     /// A builder declares a heavy job for its own task only (ADR 0010).
@@ -237,6 +283,15 @@ mod tests {
             !allowed(Role::FinalReviewer, ".tenaz/tasks/T002.md", None, &r),
             "existing card"
         );
+    }
+
+    /// A builder is told where a builder writes, not a bootstrap's rules.
+    #[test]
+    fn a_builder_s_note_names_the_paths_and_the_builder_s_rules() {
+        let note = builder_reverted_note(&[".tenaz/notes/T008.md".to_owned()]);
+        assert!(note.contains("wrote to .tenaz/notes/T008.md, and the orchestrator reverted"));
+        assert!(note.contains("a builder writes only verify, map.md, its task's notes"));
+        assert!(!note.contains("bootstrap"), "{note}");
     }
 
     #[test]

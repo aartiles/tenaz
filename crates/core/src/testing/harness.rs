@@ -104,6 +104,9 @@ pub struct ScriptedHarness {
     pub oversize_review: Option<String>,
     /// Every builder session of this task is refused the same way.
     pub oversize_task: Option<String>,
+    /// Every builder session of this task fails in the engine: its prompt
+    /// is over the most context the engine can hold now.
+    pub over_capacity_task: Option<String>,
     /// The first review of this task reads until its context is stopped.
     pub outgrow_review: Option<String>,
     /// The first review of this task asks for changes with a MINOR finding.

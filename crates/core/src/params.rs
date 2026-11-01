@@ -56,7 +56,9 @@ pub struct RunParams {
     /// Sessions in a row held at a lowered context budget without a memory
     /// failure before it is raised halfway toward the largest model's
     /// budget; doubles after each raise that fails, up to four times as
-    /// many (0 keeps it lowered).
+    /// many. Held at the ceiling a failed raise set for two of those waits
+    /// in a row (8 to 32 sessions by default), it is raised past it. 0
+    /// keeps it lowered.
     pub capacity_recover_sessions: u32,
     /// A single tool result above this (about 4 characters per token) gets a steer.
     pub big_output_tokens: usize,

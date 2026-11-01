@@ -125,6 +125,7 @@ impl Runner {
             None => None,
         };
         let reverted = self.enforce_ownership(started.role, started.ctx.task.as_ref())?;
+        self.note_builder_reverts(started, &reverted);
         self.check_skills()?;
         if !reverted.is_empty() {
             self.log(&format!(
@@ -158,6 +159,22 @@ impl Runner {
             metrics.context_peak
         ));
         Ok(())
+    }
+
+    /// Keeps what a builder session of the current task had reverted, so
+    /// the task's later builder sessions are told.
+    fn note_builder_reverts(&mut self, started: &Started<'_>, reverted: &[String]) {
+        if started.role != Role::Builder {
+            return;
+        }
+        if let Some(current) = self
+            .ledger
+            .current
+            .as_mut()
+            .filter(|c| started.ctx.task.as_ref() == Some(&c.task))
+        {
+            current.note_reverted(reverted);
+        }
     }
 
     /// Reverts the changes a session left where its role may not write.

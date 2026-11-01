@@ -8,6 +8,36 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `tenaz init --swap-models` keeps one model of a `--model-for` map
+  loaded at a time, for models that do not fit in memory together: before
+  each session Tenaz unloads the others and loads that session's model,
+  so each review costs two loads. At every `tenaz run` start it loads
+  each model once, alone, and stops the run if one will not load. Needs
+  `--engine load-api` (Sushi, mlx-serve). `tenaz run --swap-models` and
+  `--no-swap-models` change it; it is kept as `launch.swapModels` in
+  `run.json`, and `status --json` has `swap_models`. When swapping, the
+  journal's `lease` records name the model of each `load` and `unload`,
+  and record a model the engine dropped by itself as `evicted`. See ADR
+  0013.
+
+### Changed
+
+- The journal's `lease` records end with `ready` whenever the lease loads
+  the LLMs back: also at the start of a run, after an engine error, and
+  after a failed reload or unload, not only after a media or heavy job.
+- A context budget held at the ceiling a failed raise set, for twice the
+  sessions a raise waits for then (8 to 32 with the default
+  `capacityRecoverSessions`), is raised past it, halfway to the largest
+  configured budget, and the log says so; an overflow sets the ceiling
+  again. The ceiling used to last the whole run: in the Digger below the
+  Mine run of 2026-10-30 it was set at 58419 while memory was short, and
+  the budget stayed there for hours after the pressure was gone, with
+  sessions reaching 77257 tokens unharmed. See ADR 0014.
+
+## [0.3.0] - 2026-10-31
+
+### Added
+
 - Before a session opens, Tenaz estimates its first request: the prompt
   at 3 bytes per token, plus `harnessReserveTokens` (default 8192) for the
   harness's own prompt and tools. Over the budget of the role's model,
@@ -41,23 +71,12 @@ uses [Semantic Versioning](https://semver.org/).
   builder's model. After the engine runs out of memory, the lowered budget
   is raised toward the largest model's budget. See ADR 0011.
 - With `--model-for`, every model of the run must be loaded before the
-  first session, unless `--swap-models` (below). Tenaz loads those that are not, as it does the run's
+  first session. Tenaz loads those that are not, as it does the run's
   model, and `tenaz run` stops and names any it could not load. Around an
   image job or a heavy job the lease frees every model and loads them all
   back; a generic engine's stop and start commands run once for all of
   them. A generic engine that serves only some of the run's models is not
   started a second time: `tenaz run` stops and names the others.
-- `tenaz init --swap-models` keeps one model of a `--model-for` map
-  loaded at a time, for models that do not fit in memory together: before
-  each session Tenaz unloads the others and loads that session's model,
-  so each review costs two loads. At every `tenaz run` start it loads
-  each model once, alone, and stops the run if one will not load. Needs
-  `--engine load-api` (Sushi, mlx-serve). `tenaz run --swap-models` and
-  `--no-swap-models` change it; it is kept as `launch.swapModels` in
-  `run.json`, and `status --json` has `swap_models`. When swapping, the
-  journal's `lease` records name the model of each `load` and `unload`,
-  and record a model the engine dropped by itself as `evicted`. See ADR
-  0013.
 - A builder whose task needs work too heavy for a session (a render, a
   long build) writes `.tenaz/jobs/<TASK>.json` with the command, its time
   limit and why, and stops. Tenaz runs the command between sessions of the
@@ -109,9 +128,6 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- The journal's `lease` records end with `ready` whenever the lease loads
-  the LLMs back: also at the start of a run, after an engine error, and
-  after a failed reload or unload, not only after a media or heavy job.
 - These apply to every run, with or without `--model-for`:
   - A session whose context budget is already under the cap a memory
     failure set (a card that asks for a small budget, for example) no
@@ -147,9 +163,30 @@ uses [Semantic Versioning](https://semver.org/).
   the Lotion Pump run the three attempts of T016b each left the scene at
   its starting numbers. The task is not escalated any sooner: a check
   that only says `exit 1` reads the same while real work goes on.
+- The release builds the macOS archive on GitHub's `macos-15` runner
+  instead of `macos-14`, whose retirement GitHub set for 2026-11-02. The
+  binary's minimum macOS should not change (11.0, Rust's default for
+  Apple silicon).
 
 ### Fixed
 
+- The builder of a split task may write the notes of the tasks it was
+  split from: `T021dd` may correct `.tenaz/notes/T021d.md` and
+  `.tenaz/notes/T021.md`. Tenaz reverted those edits, so a card the split
+  wrote to fix a parent's stale handover could never pass. See ADR 0013.
+- A builder session after one whose writes Tenaz reverted is told which
+  paths were reverted, why, and where a builder may write. Only the
+  bootstrap was told before, so the builders of a task could write the
+  same forbidden file on every attempt without learning why `verify`
+  never saw it. `run.json` keeps the paths as `current.reverted` until
+  the task ends.
+- A session paused with Ctrl-C keeps its continuation until a session
+  that continues it ends. A rerun after an engine error or a lowered
+  context budget is told it continues the paused work, and so is the
+  session after `--resume` when the run blocks because the harness refused
+  its prompt, or the engine or capacity retries ran out. Tenaz used to
+  clear the continuation before the first session, so these started the
+  work afresh with the paused session's changes in the tree.
 - A prompt the harness refuses as larger than the model's window (fx's
   `ContextCapacityExceeded` before any reply) blocks the run at once, with
   a reason that starts `prompt too large:`, names the session, its role,

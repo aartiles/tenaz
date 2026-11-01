@@ -90,15 +90,27 @@ pub(crate) struct Recovery {
     capacity: u32,
     retry: u32,
     note: Note,
+    /// The session continues one a pause stopped: it and every rerun of
+    /// it get the note.
+    resumed: bool,
     /// The engine ran out of memory in a builder session, and jobs are on:
     /// every later session of this loop gets the memory note.
     out_of_memory: bool,
 }
 
 impl Recovery {
-    /// Whether the session already ran once and the next prompt carries a note.
-    pub fn has_continued(&self) -> bool {
-        self.continued > 0
+    /// The counts for a session that continues a paused one when `resumed`.
+    pub fn resuming(resumed: bool) -> Self {
+        Self {
+            resumed,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the next prompt carries a note: the session continues a
+    /// paused one, or already ran once and was continued.
+    pub fn carries_note(&self) -> bool {
+        self.resumed || self.continued > 0
     }
 
     /// The note added to the prompt of a session that continues earlier work.
@@ -351,16 +363,22 @@ mod tests {
     }
 
     #[test]
-    fn only_a_continuation_makes_the_next_prompt_carry_a_note() {
+    fn a_continuation_carries_a_note_and_an_engine_retry_does_not() {
         let (retried, _) = steps(Role::Builder, &[engine_error()]);
-        assert!(!retried.has_continued());
+        assert!(!retried.carries_note());
         let (continued, _) = steps(Role::Builder, &[context_stop()]);
-        assert!(continued.has_continued());
+        assert!(continued.carries_note());
     }
 
     #[test]
-    fn a_fresh_recovery_gives_the_plain_note_to_a_resumed_session() {
-        assert_eq!(Recovery::default().note(), CONTINUATION);
+    fn a_resumed_session_keeps_its_note_through_its_reruns() {
+        let mut recovery = Recovery::resuming(true);
+        assert!(recovery.carries_note());
+        assert_eq!(recovery.note(), CONTINUATION);
+        let step = recovery.next(&engine_error(), Role::Builder, &params());
+        assert!(matches!(step, Step::Retry { .. }), "{step:?}");
+        assert!(recovery.carries_note());
+        assert_eq!(recovery.note(), CONTINUATION);
     }
 
     #[test]

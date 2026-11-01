@@ -41,6 +41,12 @@ impl TaskId {
             .count()
     }
 
+    /// The tasks this one was split from, nearest first: `T007ab` gives
+    /// `T007a`, then `T007`.
+    pub fn ancestors(&self) -> impl Iterator<Item = &str> {
+        (1..=self.split_depth()).map(|n| &self.0[..self.0.len() - n])
+    }
+
     /// `T007.md`.
     pub fn file_name(&self) -> String {
         format!("{}.md", self.0)
@@ -337,6 +343,16 @@ mod tests {
         assert_eq!(child.id.split_depth(), 1);
         assert_eq!(TaskId::parse("T007aa").unwrap().split_depth(), 2);
         assert_eq!(TaskId::parse("T007").unwrap().split_depth(), 0);
+        let ancestors = |id| {
+            TaskId::parse(id)
+                .unwrap()
+                .ancestors()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ancestors("T007ab"), ["T007a", "T007"]);
+        assert_eq!(ancestors("T007a"), ["T007"]);
+        assert_eq!(ancestors("T007"), Vec::<String>::new());
     }
 
     #[test]

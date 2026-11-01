@@ -35,7 +35,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-latest]
+        # GitHub retires the macOS 14 image on 2026-11-02 and fails its
+        # jobs in brownouts before then (actions/runner-images#13518).
+        os: [macos-15, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -51,7 +53,7 @@ jobs:
       # The CLI end-to-end test (crates/cli/tests/cli.rs) runs the fake
       # harness through a whole run and takes about two minutes. The macOS
       # memory probe test is ignored off macOS (cfg_attr in probe_macos.rs),
-      # so it only runs on the macos-14 job.
+      # so it only runs on the macos-15 job.
       - name: Test
         run: cargo test --workspace --locked
 

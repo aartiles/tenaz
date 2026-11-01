@@ -60,6 +60,9 @@ pub(super) fn field<'a>(prompt: &'a str, name: &str) -> Option<&'a str> {
 /// temporary directories the tests run in.
 pub const OUTSIDE: &str = "/elsewhere";
 
+/// mlx-serve's refusal of a prompt over the most context it can hold now.
+const OVER_CAPACITY: &str = "400: {\"message\":\"Prompt (98353 tokens) requires ~4406MB GPU memory but only ~3494MB is available. Maximum context at KV8 and prefill chunk 512: 61488 tokens.\"}";
+
 /// What fx 0.0.15 left on stderr, through tenaz-acp, when it refused a
 /// prompt larger than the model's window: the Digger 3D run of
 /// 2026-10-29, with the cargo registry path cut.
@@ -403,12 +406,7 @@ impl Player {
         if let Some(task) = self.script.tampered_card.clone()
             && self.cwd.join(format!(".tenaz/tasks/{task}.md")).exists()
         {
-            self.write_tool(
-                &format!(".tenaz/tasks/{task}.md"),
-                "tampered done card\n",
-                false,
-            )
-            .await; // must be reverted
+            self.tamper_card(&task).await;
         }
         self.finish("Done.");
     }
@@ -456,8 +454,24 @@ impl Player {
     /// The engine runs out of memory on the turn's request, and the harness
     /// exits on the error, as fx does with Sushi.
     async fn out_of_memory(&mut self) {
+        self.failed_request("error.GenerationOutOfMemory").await;
+    }
+
+    /// Every builder session of the script's over-capacity task: the engine
+    /// says the turn's request is over the most context it can hold now.
+    async fn over_capacity(&mut self, task: &str) -> bool {
+        if !names(self.script.over_capacity_task.as_deref(), task) {
+            return false;
+        }
+        self.failed_request(OVER_CAPACITY).await;
+        true
+    }
+
+    /// The engine fails the turn's request with `message`, and the harness
+    /// exits on the error.
+    async fn failed_request(&mut self, message: &str) {
         self.emit(SessionEvent::TurnStart);
-        self.engine_error("error.GenerationOutOfMemory");
+        self.engine_error(message);
         self.events.handled().await;
         self.emit(SessionEvent::Exited { code: Some(1) });
     }
@@ -646,9 +660,9 @@ impl Player {
     /// then a prompt over its current maximum. Rerun, not counted.
     async fn engine_failure(&mut self, n: u32) {
         let message = if n == 1 {
-            "400: not enough GPU memory".to_owned()
+            "400: not enough GPU memory"
         } else {
-            "400: {\"message\":\"Prompt (98353 tokens) requires ~4406MB GPU memory but only ~3494MB is available. Maximum context at KV8 and prefill chunk 512: 61488 tokens.\"}".to_owned()
+            OVER_CAPACITY
         };
         let big = "x".repeat(40_000); // about 10k tokens: steered
         let read = ToolCall {
@@ -656,7 +670,7 @@ impl Player {
             ..ToolCall::new("read", serde_json::json!({ "path": "big.md" }))
         };
         self.turn(read, |_| {}).await;
-        self.engine_error(&message);
+        self.engine_error(message);
     }
 
     async fn bootstrap_spec(&mut self) {
@@ -759,6 +773,7 @@ impl Player {
     /// True when one played.
     async fn failed_session(&mut self, task: &str, attempt: u32) -> bool {
         self.refused(|script| &script.oversize_task, task).await
+            || self.over_capacity(task).await
             || self.cut_short(task).await
             || self.stuck(task, attempt).await
             || self.stopped(task).await
@@ -878,6 +893,7 @@ impl Player {
             false,
         )
         .await;
+        self.tamper_card(task).await;
         self.finish("Done.");
         true
     }
@@ -931,11 +947,17 @@ impl Player {
             // Context grows past 1.3x the budget: stopped and continued.
             return self.outgrow().await;
         }
+        self.tamper_card(task).await;
+        self.finish("Done.");
+    }
+
+    /// Writes `task`'s card, not the session's to change, when the script
+    /// says so: the edit must be reverted.
+    async fn tamper_card(&mut self, task: &str) {
         if names(self.script.tampered_card.as_deref(), task) {
             self.write_tool(&format!(".tenaz/tasks/{task}.md"), "tampered\n", false)
-                .await; // must be reverted
+                .await;
         }
-        self.finish("Done.");
     }
 
     async fn write_notes(&mut self, task: &str) {

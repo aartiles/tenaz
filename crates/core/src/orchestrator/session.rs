@@ -2,33 +2,31 @@
 //! failures, capacity caps and context stops without charging the task an
 //! attempt, or pauses it. One session, start to journal record, is in
 //! `record`; the harness run itself in `harness`; its requests in
-//! `requests`.
+//! `requests`; what the run says when it reruns or stops one in `reasons`.
 
 use std::time::Duration;
 
 use crate::briefing::without_map;
 use crate::lease::{LeaseError, LeaseManager};
 use crate::ledger::{JournalRecord, SessionRecord};
-use crate::ports::SessionModel;
+use crate::ownership::builder_reverted_note;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
-use crate::util::approx_code_tokens;
 
 use super::recovery::{Continuation, FailureCause, GiveUp, Recovery, Step};
 use super::{RunError, Runner};
 
 mod harness;
+mod reasons;
 mod record;
 mod requests;
 
 pub(crate) use harness::HarnessRun;
+use reasons::{PromptLimit, give_up_reason, retry_notice, retry_reason};
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
 const CRITICAL_PRESSURE: u32 = 4;
-/// A cap this close to the largest configured budget is lifted rather than
-/// raised.
-const RAISE_STEP_MIN: u64 = 4096;
 
 /// What a session is about.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -51,25 +49,22 @@ pub(crate) struct SessionResult {
 impl Runner {
     /// A session with the task loop's recovery around it: continuations
     /// after context stops and refused images, capacity caps, and engine
-    /// retries with backoff. None of these charge an attempt.
+    /// retries with backoff. None of these charge an attempt. A continuation
+    /// a pause left is owed until the session is done.
     pub(crate) async fn session(
         &mut self,
         role: Role,
         prompt: &str,
         ctx: &SessionCtx,
     ) -> Result<SessionResult, RunError> {
-        let mut recovery = Recovery::default();
+        let mut recovery = Recovery::resuming(self.ledger.pending_continuation);
         // The last try of this session, which a stop during the next
         // swap pauses at, as a stop after it would.
         let mut last: Option<String> = None;
         loop {
-            let resumed = self.ledger.pending_continuation;
-            let text = session_prompt(prompt, &recovery, resumed);
+            let text = self.with_reverted_note(role, session_prompt(prompt, &recovery));
             self.check_prompt_fits(role, &text, ctx)?;
             self.swap_for(role, last.as_deref(), ctx).await?;
-            if std::mem::take(&mut self.ledger.pending_continuation) {
-                self.save()?;
-            }
             let result = self.session_once(role, &text, ctx).await?;
             let label = result.record.label.clone();
             last = Some(label.clone());
@@ -80,7 +75,10 @@ impl Runner {
                 self.note_engine_held(&result.record)?;
             }
             match recovery.next(&result.metrics, role, &self.params) {
-                Step::Done => return Ok(result),
+                Step::Done => {
+                    self.clear_continuation()?;
+                    return Ok(result);
+                }
                 Step::Continue { kind, count } => self.continue_session(&result, kind, count),
                 Step::LowerCap { limit, count } => {
                     self.lower_context_cap(&label, limit, count)?;
@@ -99,6 +97,21 @@ impl Runner {
                 Step::GiveUp(why) => return Err(self.give_up(&label, why)),
             }
         }
+    }
+
+    /// A builder's `prompt`, with what earlier builder sessions of its task
+    /// had reverted, so it does not write there again. Added to every
+    /// session, so a continuation within an attempt is told too.
+    fn with_reverted_note(&self, role: Role, prompt: String) -> String {
+        let reverted = self
+            .ledger
+            .current
+            .as_ref()
+            .map_or(&[][..], |c| c.reverted.as_slice());
+        if role != Role::Builder || reverted.is_empty() {
+            return prompt;
+        }
+        format!("{prompt}\n\n{}", builder_reverted_note(reverted))
     }
 
     /// Journals and logs that a fresh session continues the work of `result`.
@@ -149,14 +162,7 @@ impl Runner {
         prompt: &str,
         ctx: &SessionCtx,
     ) -> Result<(), RunError> {
-        let model = self.ledger.config.model_for(role);
-        let limit = PromptLimit {
-            role,
-            model: &model,
-            budget: self.ledger.model_budget_tokens(role),
-            reserve: self.params.harness_reserve_tokens,
-        };
-        match limit.over(prompt, ctx.task.as_ref()) {
+        match self.prompt_limit(role).over(prompt, ctx.task.as_ref()) {
             Some(reason) => Err(RunError::PromptTooLarge(reason)),
             None => Ok(()),
         }
@@ -218,13 +224,21 @@ impl Runner {
 
     /// The error that ends the run when the harness refused `record`'s prompt.
     fn prompt_refused(&self, record: &SessionRecord, role: Role) -> RunError {
-        let model = self.ledger.config.model_for(role);
-        RunError::PromptTooLarge(prompt_refused_reason(
-            &record.label,
+        RunError::PromptTooLarge(
+            self.prompt_limit(role)
+                .refused(&record.label, record.prompt_chars),
+        )
+    }
+
+    /// What a `role` prompt must fit: its model's budget, with the
+    /// harness's reserve.
+    fn prompt_limit(&self, role: Role) -> PromptLimit {
+        PromptLimit {
             role,
-            &model,
-            record.prompt_chars,
-        ))
+            model: self.ledger.config.model_for(role),
+            budget: self.ledger.model_budget_tokens(role),
+            reserve: self.params.harness_reserve_tokens,
+        }
     }
 
     /// The error that ends the run when a session keeps failing in the engine.
@@ -236,6 +250,17 @@ impl Runner {
     fn pause(&mut self, label: &str, role: Role, ctx: &SessionCtx) -> Result<RunError, RunError> {
         self.ledger.pending_continuation = true;
         self.record_pause(label, role, ctx)
+    }
+
+    /// Saves that no continuation is owed, once a session is done. Not
+    /// before: the reruns of a session that continues a paused one get the
+    /// note too, a block leaves it to `--resume`, and an error to the next
+    /// run. Taking back a paused review clears it too (`take_in_review`).
+    fn clear_continuation(&mut self) -> Result<(), RunError> {
+        if std::mem::take(&mut self.ledger.pending_continuation) {
+            self.save()?;
+        }
+        Ok(())
     }
 
     /// Saves and journals a pause at `label`, without telling the next
@@ -282,18 +307,8 @@ impl Runner {
             reason = "a context limit times a fraction is far below 2^53 and floors to a positive u64"
         )]
         let cap = (limit as f64 * self.params.capacity_headroom).floor() as u64;
-        if self.ledger.context_cap.is_none_or(|current| cap < current) {
-            self.ledger.context_cap = Some(cap);
-        }
-        self.ledger.cap_clean_sessions = 0;
-        if std::mem::take(&mut self.ledger.cap_raised) {
-            // What the engine holds at a raised budget is what it holds
-            // without passing pressure: later raises stop there.
-            self.ledger.cap_failed_raises += 1;
-            self.ledger.cap_ceiling = Some(self.ledger.cap_ceiling.map_or(cap, |c| c.max(cap)));
-        }
+        let current = self.ledger.lower_cap(cap);
         self.save()?;
-        let current = self.ledger.context_cap.unwrap_or(cap);
         self.journal(JournalRecord::ContextCap {
             label: label.to_owned(),
             engine_max_context: limit,
@@ -304,15 +319,12 @@ impl Runner {
         Ok(())
     }
 
-    /// Counts a session the engine held at a lowered budget and, after
-    /// `capacityRecoverSessions` of them in a row, raises the budget halfway
-    /// back to the largest configured one (the run's models may have
-    /// different windows), or to the ceiling a failed raise set. A session
-    /// whose budget was under the cap does not count: it did not test it. The
+    /// Counts a session the engine held at a lowered budget toward a raise
+    /// (`Ledger::note_cap_held`, ADR 0014), and journals the raise when one
+    /// is due. A session whose budget was under the cap does not count: it
+    /// did not test it. Critical memory pressure starts the count again. The
     /// engine only says how much it can hold when a prompt overflows it, so
-    /// memory freed later is found by trying. Each raise that overflows again
-    /// doubles the sessions the next one waits for, up to four times as many;
-    /// a raise the engine held starts the count again.
+    /// memory freed later is found by trying.
     fn note_engine_held(&mut self, session: &SessionRecord) -> Result<(), RunError> {
         let Some(cap) = self.ledger.context_cap else {
             return Ok(());
@@ -326,42 +338,31 @@ impl Runner {
             .as_ref()
             .is_some_and(|m| m.pressure_max >= CRITICAL_PRESSURE)
         {
-            self.ledger.cap_clean_sessions = 0;
+            self.ledger.note_cap_pressed();
             return self.save();
         }
         if session.context_budget < cap {
             return Ok(());
         }
-        self.ledger.cap_clean_sessions += 1;
-        let needed = raise_wait(
-            self.params.capacity_recover_sessions,
-            self.ledger.cap_failed_raises,
-        );
-        let clean = self.ledger.cap_clean_sessions;
-        if clean < needed {
-            return self.save();
-        }
-        let full = self.ledger.largest_budget_tokens();
-        let Some(raised) = raised_cap(cap, full, self.ledger.cap_ceiling) else {
-            // Already at the ceiling: nothing to try.
-            self.ledger.cap_clean_sessions = 0;
+        let Some(raise) = self
+            .ledger
+            .note_cap_held(self.params.capacity_recover_sessions)
+        else {
             return self.save();
         };
-        let new_cap = (raised < full).then_some(raised);
-        if std::mem::take(&mut self.ledger.cap_raised) {
-            self.ledger.cap_failed_raises = 0;
-        }
-        self.ledger.context_cap = new_cap;
-        self.ledger.cap_clean_sessions = 0;
-        self.ledger.cap_raised = true;
         self.save()?;
         self.journal(JournalRecord::ContextCapRaised {
             label: label.to_owned(),
-            context_cap: new_cap,
-            clean_sessions: clean,
+            context_cap: raise.cap,
+            clean_sessions: raise.clean_sessions,
         });
-        let budget = new_cap.unwrap_or(full);
-        self.log(&format!("  {label}: {clean} sessions in a row without the engine running out of memory; context budget raised to {budget}"));
+        let budget = raise
+            .cap
+            .unwrap_or_else(|| self.ledger.largest_budget_tokens());
+        let past = raise
+            .past_ceiling
+            .map_or_else(String::new, |c| format!(", past the ceiling of {c}"));
+        self.log(&format!("  {label}: {} sessions in a row without the engine running out of memory; context budget raised to {budget}{past}", raise.clean_sessions));
         Ok(())
     }
 
@@ -394,160 +395,11 @@ impl Runner {
     }
 }
 
-/// What the operator can do when the engine runs out of memory: in the
-/// Digger 3D run waits did not bring back the memory mlx-serve needed, a
-/// reload did (ADR 0012).
-const OUT_OF_MEMORY_ADVICE: &str =
-    "free memory (another program may be using the GPU) or reload the model";
-
-/// Why a session the engine failed is rerun, for the log.
-fn retry_reason(cause: FailureCause) -> String {
-    match cause {
-        FailureCause::Harness => "the harness ended before the turn settled".to_owned(),
-        FailureCause::Engine => "engine error".to_owned(),
-        FailureCause::OutOfMemory => {
-            format!("the engine ran out of memory; {OUT_OF_MEMORY_ADVICE}")
-        }
-    }
-}
-
-/// The notice at the first rerun of a session the engine failed; none for
-/// a harness that ended on its own.
-fn retry_notice(cause: FailureCause) -> Option<String> {
-    match cause {
-        FailureCause::Harness => None,
-        FailureCause::Engine => Some(
-            "The engine is failing (often memory). Free memory; the run retries the same session."
-                .to_owned(),
-        ),
-        FailureCause::OutOfMemory => Some(format!(
-            "The engine ran out of memory: {OUT_OF_MEMORY_ADVICE}. The run retries the same session."
-        )),
-    }
-}
-
-/// The first request of a session with `prompt`, estimated: the prompt at
-/// three bytes per token, plus the harness's `reserve`. Over the Digger 3D
-/// run, with a reserve of 8192, this was 2.2k to 4.5k tokens high and never
-/// low (ADR 0012).
-fn first_request_tokens(prompt: &str, reserve: u64) -> u64 {
-    approx_code_tokens(prompt) as u64 + reserve
-}
-
-/// What a prompt of a `role` session must fit: `budget` tokens of
-/// `model`, with the harness's `reserve` on top of the prompt.
-struct PromptLimit<'a> {
-    role: Role,
-    model: &'a SessionModel,
-    budget: u64,
-    reserve: u64,
-}
-
-impl PromptLimit<'_> {
-    /// Why `prompt`, for `task` when there is one, does not fit; `None`
-    /// when it does.
-    fn over(&self, prompt: &str, task: Option<&TaskId>) -> Option<String> {
-        let estimate = first_request_tokens(prompt, self.reserve);
-        if estimate <= self.budget {
-            return None;
-        }
-        let role = self.role;
-        let what = task.map_or_else(
-            || format!("{role} prompt"),
-            |task| format!("{role} prompt for {task}"),
-        );
-        Some(format!(
-            "the {what}, {} bytes, is about {estimate} tokens with the harness's reserve, over the {role}'s budget of {}; {}. To go on, {}",
-            prompt.len(),
-            self.budget,
-            window(self.model),
-            change_advice(role)
-        ))
-    }
-}
-
-/// `model`'s name and window, for a reason.
-fn window(model: &SessionModel) -> String {
-    format!("{}'s window is {} tokens", model.name, model.context_window)
-}
-
-/// What to change when a `role` prompt does not fit: a review can be made
-/// smaller; a model is changed in a new run only.
-fn change_advice(role: Role) -> String {
-    let larger = format!(
-        "give the {role} a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
-    );
-    if role == Role::Reviewer {
-        format!(
-            "lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or {larger}"
-        )
-    } else {
-        larger
-    }
-}
-
-/// Why the run stops at `label`, whose prompt of `prompt_bytes` the harness
-/// refused for `role`'s `model`: what was refused, and what to change.
-fn prompt_refused_reason(
-    label: &str,
-    role: Role,
-    model: &SessionModel,
-    prompt_bytes: usize,
-) -> String {
-    format!(
-        "the harness refused the {role} prompt of {label}, {prompt_bytes} bytes; {}. To go on, {}",
-        window(model),
-        change_advice(role)
-    )
-}
-
-/// Why the run stops rerunning `label`, under the run's `context_cap`.
-fn give_up_reason(label: &str, why: GiveUp, context_cap: Option<u64>) -> String {
-    match why {
-        GiveUp::Capacity => format!(
-            "sessions still overflow the engine's memory after the context budget was lowered to {} (last: {label})",
-            context_cap.unwrap_or(0)
-        ),
-        GiveUp::Engine {
-            sessions,
-            cause: FailureCause::OutOfMemory,
-        } => format!(
-            "{sessions} sessions in a row ended with engine errors, the last one out of memory (last: {label}); {OUT_OF_MEMORY_ADVICE}"
-        ),
-        GiveUp::Engine { sessions, .. } => {
-            format!("{sessions} sessions in a row ended with engine errors (last: {label})")
-        }
-    }
-}
-
-/// Sessions the engine must hold before a lowered budget is raised: the
-/// configured count, doubled per raise that failed, at most four times it.
-fn raise_wait(recover_sessions: u32, failed_raises: u32) -> u32 {
-    recover_sessions.saturating_mul(1 << failed_raises.min(2))
-}
-
-/// The budget after a raise from `cap`: halfway to the largest configured
-/// budget `full`, or to `ceiling` when that is lower, and all the way when less
-/// than [`RAISE_STEP_MIN`] is left. `None` when `cap` is already there.
-fn raised_cap(cap: u64, full: u64, ceiling: Option<u64>) -> Option<u64> {
-    let target = ceiling.map_or(full, |c| c.min(full));
-    if cap >= target {
-        return None;
-    }
-    let raised = cap + (target - cap) / 2;
-    let raised = if target - raised < RAISE_STEP_MIN {
-        target
-    } else {
-        raised
-    };
-    Some(raised)
-}
-
 /// The prompt of a session: `prompt`, with the note a session that
 /// continues earlier work gets, and the one a builder rerun after the
 /// engine ran out of memory gets.
-fn session_prompt(prompt: &str, recovery: &Recovery, resumed: bool) -> String {
-    let mut text = if recovery.has_continued() || resumed {
+fn session_prompt(prompt: &str, recovery: &Recovery) -> String {
+    let mut text = if recovery.carries_note() {
         format!("{}\n\n{}", without_map(prompt), recovery.note())
     } else {
         prompt.to_owned()
@@ -556,174 +408,4 @@ fn session_prompt(prompt: &str, recovery: &Recovery, resumed: bool) -> String {
         text = format!("{text}\n\n{note}");
     }
     text
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn raises_go_halfway_and_stop_at_the_ceiling_a_failed_raise_set() {
-        // No ceiling: halfway to the configured budget, then all the way.
-        assert_eq!(raised_cap(49_190, 85_196, None), Some(67_193));
-        assert_eq!(raised_cap(83_000, 85_196, None), Some(85_196));
-        // The Wild West run: the engine held 86016 when a raise overflowed,
-        // so 68812 is the ceiling, and a passing low reading climbs back to it.
-        let ceiling = Some(68_812);
-        assert_eq!(raised_cap(38_215, 85_196, ceiling), Some(53_513));
-        assert_eq!(raised_cap(66_000, 85_196, ceiling), Some(68_812));
-        assert_eq!(raised_cap(68_812, 85_196, ceiling), None);
-        assert_eq!(raised_cap(70_000, 85_196, ceiling), None);
-        // A ceiling above the configured budget does not lift it further.
-        assert_eq!(raised_cap(60_000, 85_196, Some(90_000)), Some(72_598));
-    }
-
-    /// mlx-serve refuses a prompt for memory until the model is reloaded
-    /// (the Digger 3D run of 2026-10-29): the reason says so.
-    #[test]
-    fn giving_up_after_the_engine_ran_out_of_memory_says_what_to_do() {
-        let why = GiveUp::Engine {
-            sessions: 7,
-            cause: FailureCause::OutOfMemory,
-        };
-        assert_eq!(
-            give_up_reason("031-reviewer-T003", why, None),
-            "7 sessions in a row ended with engine errors, the last one out of memory (last: 031-reviewer-T003); free memory (another program may be using the GPU) or reload the model"
-        );
-    }
-
-    #[test]
-    fn giving_up_after_other_engine_errors_gives_no_memory_advice() {
-        let why = GiveUp::Engine {
-            sessions: 7,
-            cause: FailureCause::Engine,
-        };
-        assert_eq!(
-            give_up_reason("020-reviewer-T003", why, None),
-            "7 sessions in a row ended with engine errors (last: 020-reviewer-T003)"
-        );
-    }
-
-    fn qwen() -> SessionModel {
-        SessionModel {
-            name: "mlx-serve/Qwen3.8-27B".into(),
-            id: "Qwen3.8-27B".into(),
-            context_window: 65_536,
-            supports_images: false,
-        }
-    }
-
-    /// The reviewer of T001 in the Digger 3D run of 2026-10-29.
-    #[test]
-    fn a_refused_review_names_its_size_and_window_and_what_to_lower() {
-        assert_eq!(
-            prompt_refused_reason("007-reviewer-T001", Role::Reviewer, &qwen(), 281_465),
-            "the harness refused the reviewer prompt of 007-reviewer-T001, 281465 bytes; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
-        );
-    }
-
-    #[test]
-    fn a_refused_prompt_of_another_role_asks_for_a_larger_window_only() {
-        assert_eq!(
-            prompt_refused_reason("005-builder-T001", Role::Builder, &qwen(), 300_000),
-            "the harness refused the builder prompt of 005-builder-T001, 300000 bytes; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the builder a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
-        );
-    }
-
-    /// Session 025 of the Digger 3D run: a reviewer prompt of 79670
-    /// bytes whose first request was 30245 tokens.
-    #[test]
-    fn a_first_request_is_estimated_high_from_the_prompt_and_the_reserve() {
-        let estimate = first_request_tokens(&"x".repeat(79_670), 8192);
-        assert_eq!(estimate, 34_749);
-        assert!(estimate >= 30_245);
-        assert_eq!(first_request_tokens("", 8192), 8192);
-    }
-
-    fn limit(role: Role, model: &SessionModel) -> PromptLimit<'_> {
-        PromptLimit {
-            role,
-            model,
-            budget: 8202,
-            reserve: 8192,
-        }
-    }
-
-    /// 30 bytes are 10 tokens: with the reserve, exactly the budget.
-    #[test]
-    fn a_prompt_fits_up_to_its_budget_and_not_a_token_more() {
-        let model = qwen();
-        let reviewer = limit(Role::Reviewer, &model);
-        assert_eq!(reviewer.over(&"x".repeat(30), None), None);
-        assert!(reviewer.over(&"x".repeat(31), None).is_some());
-    }
-
-    #[test]
-    fn a_prompt_over_its_budget_says_whose_it_is_and_what_to_change() {
-        let model = qwen();
-        let task = TaskId::parse("T003").unwrap();
-        assert_eq!(
-            limit(Role::Reviewer, &model).over(&"x".repeat(31), Some(&task)),
-            Some("the reviewer prompt for T003, 31 bytes, is about 8203 tokens with the harness's reserve, over the reviewer's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or give the reviewer a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
-        );
-        assert_eq!(
-            limit(Role::Replan, &model).over(&"x".repeat(31), None),
-            Some("the replan prompt, 31 bytes, is about 8203 tokens with the harness's reserve, over the replan's budget of 8202; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, give the replan a model with a larger window in a new run (tenaz init --model-for, --context-window-for)".to_owned())
-        );
-    }
-
-    #[test]
-    fn giving_up_on_capacity_names_the_lowered_budget() {
-        assert_eq!(
-            give_up_reason("009-builder-T002", GiveUp::Capacity, Some(30_000)),
-            "sessions still overflow the engine's memory after the context budget was lowered to 30000 (last: 009-builder-T002)"
-        );
-    }
-
-    #[test]
-    fn the_log_line_of_a_rerun_names_its_cause() {
-        for (cause, reason) in [
-            (
-                FailureCause::OutOfMemory,
-                "the engine ran out of memory; free memory (another program may be using the GPU) or reload the model",
-            ),
-            (FailureCause::Engine, "engine error"),
-            (
-                FailureCause::Harness,
-                "the harness ended before the turn settled",
-            ),
-        ] {
-            assert_eq!(retry_reason(cause), reason, "{cause:?}");
-        }
-    }
-
-    #[test]
-    fn the_first_rerun_notice_says_what_to_do_and_none_follows_a_harness_exit() {
-        for (cause, notice) in [
-            (
-                FailureCause::OutOfMemory,
-                Some(
-                    "The engine ran out of memory: free memory (another program may be using the GPU) or reload the model. The run retries the same session.",
-                ),
-            ),
-            (
-                FailureCause::Engine,
-                Some(
-                    "The engine is failing (often memory). Free memory; the run retries the same session.",
-                ),
-            ),
-            (FailureCause::Harness, None),
-        ] {
-            assert_eq!(retry_notice(cause).as_deref(), notice, "{cause:?}");
-        }
-    }
-
-    #[test]
-    fn the_wait_before_a_raise_doubles_at_most_twice() {
-        assert_eq!(raise_wait(4, 0), 4);
-        assert_eq!(raise_wait(4, 1), 8);
-        assert_eq!(raise_wait(4, 2), 16);
-        assert_eq!(raise_wait(4, 7), 16);
-        assert_eq!(raise_wait(0, 3), 0);
-    }
 }

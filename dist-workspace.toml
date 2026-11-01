@@ -22,3 +22,10 @@ pr-run-mode = "plan"
 # Sign each archive with a build provenance attestation, which
 # `gh attestation verify` checks against this repository.
 github-attestations = true
+
+# dist 0.32.0 builds aarch64-apple-darwin on macos-14 by default, an image
+# whose retirement GitHub set for 2026-11-02 (actions/runner-images#13518).
+# CI's macOS job runs on macos-15 too.
+# Drop this once dist's own default is macos-15 or newer.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"

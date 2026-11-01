@@ -17,6 +17,7 @@ use crate::task::TaskId;
 mod budget;
 mod config;
 mod current;
+pub use budget::CapRaise;
 pub use config::ModelConfig;
 pub use current::{AttemptJobs, CurrentTask, StoppedAttempt, VerifyFailure};
 
@@ -372,7 +373,8 @@ pub struct Ledger {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cap_raised: bool,
     /// The highest budget a raise may reach: the headroom share of what the
-    /// engine said it can hold when a raised budget overflowed it.
+    /// engine said it can hold when a raised budget overflowed it. Dropped
+    /// when a raise is tried past it (ADR 0014).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cap_ceiling: Option<u64>,
     /// The last session's reply stopped at the output limit: the next one
@@ -385,6 +387,10 @@ pub struct Ledger {
     pub passed_checks: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_errors: Option<Vec<String>>,
+    /// A pause stopped a session, or the wait before its rerun: the next
+    /// session is told it continues that work. Cleared when a session is
+    /// done, or a paused task review is taken back; a block or an error
+    /// keeps it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pending_continuation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

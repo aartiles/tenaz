@@ -77,14 +77,19 @@ impl Played {
     }
 
     /// The prompts of the sessions labelled `…-<session>`, such as
-    /// `builder-T001`.
+    /// `builder-T001`, in the order the sessions ran.
     fn prompts(&self, session: &str) -> Vec<String> {
         let suffix = format!("-{session}.prompt.md");
-        std::fs::read_dir(self.project.private_dir())
+        let mut paths: Vec<_> = std::fs::read_dir(self.project.private_dir())
             .unwrap()
             .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().ends_with(&suffix))
-            .map(|e| std::fs::read_to_string(e.path()).unwrap())
+            .map(|e| e.path())
+            .collect();
+        paths.sort();
+        paths
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
             .collect()
     }
 
@@ -575,6 +580,38 @@ async fn out_of_role_card_edits_are_reverted() {
     assert!(reverted_by("-replan"), "{}", run.log);
     assert_eq!(run.card_field("T001", "status").as_deref(), Some("done"));
     assert!(run.has(completed), "{}", run.log);
+}
+
+/// In the Digger below the Mine run of 2026-10-30 T021dd's builders wrote
+/// another task's note on every attempt, and none was told it had been
+/// reverted. Every builder session of the task after the first revert is
+/// told, once; its split children start afresh.
+#[tokio::test(start_paused = true)]
+async fn later_builders_are_told_what_was_reverted() {
+    let run = Played::with(ScriptedHarness {
+        failing_task: Some("T003".into()),
+        tampered_card: Some("T003".into()),
+        ..Default::default()
+    })
+    .await;
+    let note = "Earlier builder sessions of this task wrote to .tenaz/tasks/T003.md";
+    let prompts = run.prompts("builder-T003");
+    assert!(prompts.len() >= 2, "{}", run.log);
+    assert!(
+        !prompts[0].contains(note),
+        "the first builder was told:\n{}",
+        prompts[0]
+    );
+    assert!(
+        prompts[1..].iter().all(|p| p.matches(note).count() == 1),
+        "a later builder was not told, or told twice:\n{}",
+        run.log
+    );
+    for other in ["builder-T003a", "builder-T004", "split-T003"] {
+        let prompts = run.prompts(other);
+        assert!(!prompts.is_empty(), "{other} never ran:\n{}", run.log);
+        assert!(!prompts.concat().contains(note), "{other}");
+    }
 }
 
 #[tokio::test(start_paused = true)]
