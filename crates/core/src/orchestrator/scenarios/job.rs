@@ -10,12 +10,11 @@ use async_trait::async_trait;
 
 use tokio_util::sync::CancellationToken;
 
-use super::{deps, fake_project, run};
+use super::{StopOnEngineWait, deps, fake_project, run};
 use crate::briefing::OUT_OF_MEMORY;
 use crate::lease::{Gate, LeaseManager};
 use crate::ledger::JournalRecord::JobFinished;
 use crate::ledger::{JournalRecord, Phase};
-use crate::orchestrator::ENGINE_WAIT;
 use crate::ports::{
     Clock, EngineAdapter, EngineError, Harness, HarnessError, HarnessInfo, ModelState, Session,
     SessionSpec,
@@ -648,31 +647,6 @@ async fn an_llm_that_does_not_serve_again_after_a_job_blocks_the_run() {
     assert!(card.contains("attempts: 0"), "{card}");
     let jobs = ledger.current.unwrap().jobs.unwrap();
     assert!(jobs.report.is_some_and(|r| r.contains("sh render.sh")));
-}
-
-/// The virtual clock, except that the first wait for the engine stops the
-/// run, as a person stopping it during that wait.
-struct StopOnEngineWait {
-    clock: VirtualClock,
-    stop: CancellationToken,
-}
-
-#[async_trait]
-impl Clock for StopOnEngineWait {
-    fn now_rfc3339(&self) -> String {
-        self.clock.now_rfc3339()
-    }
-
-    fn monotonic_ms(&self) -> u64 {
-        self.clock.monotonic_ms()
-    }
-
-    async fn sleep(&self, duration: std::time::Duration) {
-        if duration == ENGINE_WAIT {
-            self.stop.cancel();
-        }
-        self.clock.sleep(duration).await;
-    }
 }
 
 /// A stop while the run waits for the LLM after a job pauses the run, with

@@ -172,9 +172,11 @@ model after its unload failed is not an option: on a machine that needs
 swapping, that is the out-of-memory the swap avoids.
 
 A stop during a swap, or during its wait, pauses the run before the
-session, as a stop during the wait after a job does: nothing is charged,
-and the continuation flag is left as it was. On resume the check at the
-start (decision 5) runs again.
+session, as a stop during the wait after a job does: nothing is charged.
+After an earlier try of the same session (an engine rerun, a
+continuation), the pause is at that try, with its continuation note, as
+a stop after it would be; otherwise the continuation flag is left as it
+was. On resume the check at the start (decision 5) runs again.
 
 ### 7. Engines and the capacity cap
 
