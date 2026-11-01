@@ -184,7 +184,7 @@ impl LeaseManager {
     /// Unloads the run's models the engine lists as loaded, but `model`,
     /// then loads `model` unless it serves; `None` frees them all. First
     /// journals the model left serving before when the engine no longer
-    /// lists it. Closes the gate while it changes anything and leaves it
+    /// lists it. Closes the gate while it changes models and leaves it
     /// to the caller to open.
     pub(super) async fn serve_alone(
         &self,
@@ -196,7 +196,7 @@ impl LeaseManager {
         if plan.evicted.is_some() {
             resident.left = None;
         }
-        let changes = !plan.is_empty();
+        let changes = plan.changes_models();
         if changes {
             self.gate.close();
         }
@@ -263,8 +263,9 @@ struct Plan<'a> {
 }
 
 impl Plan<'_> {
-    fn is_empty(&self) -> bool {
-        self.evicted.is_none() && self.unload.is_empty() && self.load.is_none()
+    /// Whether the engine's models change: an eviction alone does not.
+    fn changes_models(&self) -> bool {
+        !self.unload.is_empty() || self.load.is_some()
     }
 }
 
@@ -311,13 +312,20 @@ mod tests {
         assert!(manager.swaps());
     }
 
-    /// A swap after a job whose reload failed gives the lease back to the LLMs.
-    #[tokio::test]
-    async fn a_swap_gives_the_lease_back_to_the_llms() {
-        let ((manager, log, _), llm) = on_r(&["m"]).await;
+    /// As `on_r`, after a job whose reload of `r` failed: the job holds
+    /// the lease, and `r` does not load until `refuse_load(None)`.
+    async fn after_a_failed_reload() -> (Setup, Arc<FakeLlm>) {
+        let ((manager, log, transitions), llm) = on_r(&["m"]).await;
         llm.refuse_load(Some("r"));
         let ran = manager.run_job(noting_job(&manager, &log)).await;
         assert!(ran.lease.is_err(), "{:?}", ran.lease);
+        ((manager, log, transitions), llm)
+    }
+
+    /// A swap after a job whose reload failed gives the lease back to the LLMs.
+    #[tokio::test]
+    async fn a_swap_gives_the_lease_back_to_the_llms() {
+        let ((manager, _, _), llm) = after_a_failed_reload().await;
         assert_eq!(manager.holder().await, Holder::Job);
         llm.refuse_load(None);
         manager.serve_only("m").await.unwrap();
@@ -328,10 +336,7 @@ mod tests {
     /// A swap that fails leaves the lease with whoever held it.
     #[tokio::test]
     async fn a_failed_swap_leaves_the_holder_as_it_was() {
-        let ((manager, log, _), llm) = on_r(&["m"]).await;
-        llm.refuse_load(Some("r"));
-        let ran = manager.run_job(noting_job(&manager, &log)).await;
-        assert!(ran.lease.is_err(), "{:?}", ran.lease);
+        let ((manager, _, _), llm) = after_a_failed_reload().await;
         llm.refuse_load(Some("m"));
         assert!(manager.serve_only("m").await.is_err());
         assert_eq!(manager.holder().await, Holder::Job);
@@ -368,10 +373,7 @@ mod tests {
     /// whoever held it, and the gate closed.
     #[tokio::test]
     async fn a_failed_check_leaves_the_holder_as_it_was() {
-        let ((manager, log, _), llm) = on_r(&["m"]).await;
-        llm.refuse_load(Some("r"));
-        let ran = manager.run_job(noting_job(&manager, &log)).await;
-        assert!(ran.lease.is_err(), "{:?}", ran.lease);
+        let ((manager, _, _), _) = after_a_failed_reload().await;
         assert!(manager.prepare_llms().await.is_err());
         let after = (manager.holder().await, manager.gate().is_open());
         assert_eq!(after, (Holder::Job, false));
@@ -461,6 +463,7 @@ mod tests {
         }
     }
 
+    /// A model outside the run's is refused, not served.
     #[tokio::test]
     async fn a_model_that_is_not_the_run_s_cannot_be_served() {
         let ((manager, log, _), _) = swapping(two(&["m"], Unload::Works, None));
@@ -483,6 +486,17 @@ mod tests {
             records(&transitions),
             ["llm evicted r", "llm load m", "llm ready m"]
         );
+    }
+
+    /// An eviction alone changes no model: it is journaled, with no `ready`.
+    #[tokio::test]
+    async fn an_eviction_alone_is_journaled_without_ready() {
+        let ((manager, _, transitions), llm) = swapping(two(&["m"], Unload::Works, None));
+        manager.serve_only("m").await.unwrap();
+        llm.drop_all();
+        llm.take_up("r");
+        manager.serve_only("r").await.unwrap();
+        assert_eq!(records(&transitions), ["llm evicted m"]);
     }
 
     /// A model still loading is not evicted.

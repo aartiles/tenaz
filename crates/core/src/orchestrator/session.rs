@@ -178,42 +178,41 @@ impl Runner {
             return Ok(());
         };
         let model = self.ledger.config.model_for(role).id;
-        let mut unserved = None;
-        if !self.stopping() {
-            unserved = self.serve(&lease, role, &model).await?;
-        }
+        let served = if self.stopping() {
+            Ok(())
+        } else {
+            self.serve(&lease, role, &model).await
+        };
         if self.stopping() {
             return Err(match last {
                 Some(label) => self.pause(label, role, ctx)?,
                 None => self.record_pause(&format!("the swap to {model}"), role, ctx)?,
             });
         }
-        match unserved {
+        served
+    }
+
+    /// Serves `model` alone through `lease`, waiting for the engine when
+    /// that fails; engine unavailable when it never serves.
+    async fn serve(&self, lease: &LeaseManager, role: Role, model: &str) -> Result<(), RunError> {
+        let error = match lease.serve_only(model).await {
+            Ok(()) => return Ok(()),
+            // Cannot happen while the lease is built from the run's models;
+            // the wait below would serve another model.
+            Err(LeaseError::UnknownLlm(id)) => {
+                return Err(RunError::Precondition(format!(
+                    "the {role} session's model {id} is not one the lease swaps"
+                )));
+            }
+            Err(error) => error,
+        };
+        self.log(&format!("  could not swap to {model}: {error}"));
+        let why = format!("for the {role} session's model {model}");
+        match self.wait_for_engine(&why).await {
             None => Ok(()),
             Some(error) => Err(RunError::EngineUnavailable(format!(
                 "{model} did not load for the {role} session: {error}"
             ))),
-        }
-    }
-
-    /// Serves `model` alone through `lease`, waiting for the engine when
-    /// that fails; the engine's last error when it never serves.
-    async fn serve(
-        &self,
-        lease: &LeaseManager,
-        role: Role,
-        model: &str,
-    ) -> Result<Option<RunError>, RunError> {
-        match lease.serve_only(model).await {
-            Ok(()) => Ok(None),
-            Err(LeaseError::UnknownLlm(id)) => Err(RunError::Precondition(format!(
-                "the {role} session's model {id} is not one the lease swaps"
-            ))),
-            Err(error) => {
-                self.log(&format!("  could not swap to {model}: {error}"));
-                let why = format!("for the {role} session's model {model}");
-                Ok(self.wait_for_engine(&why).await)
-            }
         }
     }
 

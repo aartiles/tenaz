@@ -157,7 +157,8 @@ pub struct LeaseManager {
     llm: Arc<dyn EngineAdapter>,
     /// The run's model first, then the other roles' models (ADR 0011).
     llm_models: Vec<String>,
-    /// One model loaded at a time (ADR 0013); fixed by `with_swap`.
+    /// One model loaded at a time (ADR 0013); fixed by `with_swap`. It
+    /// mirrors `Residency::One` in `state` so that `swaps` needs no lock.
     swap: bool,
     media: BTreeMap<String, Arc<dyn MediaAdapter>>,
     gate: Gate,
