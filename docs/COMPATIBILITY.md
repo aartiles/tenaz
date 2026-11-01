@@ -136,6 +136,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   real run has used it yet. Not with Pi: `init` refuses the map, and Pi
   refuses a session on another model than the one it was set up for.
 
+- **Swapping the role models** (`--swap-models`, ADR 0013). Tested with
+  fake engines and scripted runs only: not yet run against mlx-serve or
+  Sushi, nor with a pair that does not fit together, such as Flint int4
+  and Qwen3.8-27B. How long a swap takes on those engines is not
+  measured; the journal's `lease` records will say. Whether mlx-serve or
+  Sushi load a model by themselves when a request names one that is not
+  loaded is not known: a run would show it as `evicted` records. Only the
+  load-api engine swaps; a generic engine is refused, since its stop
+  ends every model.
+
 - **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
   job runner; the lease cycle with fake engines, and whole runs with a
   lease over a fake LLM whose reload after the job fails or that cannot

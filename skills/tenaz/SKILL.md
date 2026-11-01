@@ -63,7 +63,10 @@ When the user wants another model for some roles, for example a reviewer
 of another family, add `--model-for reviewer=<id>` (repeatable, one role
 each) and `--context-window-for reviewer=<tokens>` when its window
 differs; roles on the same model need the same window. The engine must
-have every model named loaded at once. Not with `--harness pi`.
+have every model named loaded at once, unless they do not fit together:
+then add `--swap-models` (only with `--engine load-api`, Sushi or
+mlx-serve), and Tenaz loads one at a time, swapping before each session.
+Not with `--harness pi`.
 
 ## Write the brief
 

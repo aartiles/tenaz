@@ -228,6 +228,47 @@ fn init_pins_a_model_per_role() {
     );
 }
 
+/// `init --swap-models` pins swapping, `status` shows it, and `run` refuses
+/// a launch that cannot swap before it starts anything.
+#[test]
+fn swap_models_is_pinned_and_checked_again_by_run() {
+    let work = tempfile::tempdir().unwrap();
+    let brief = work.path().join("brief.md");
+    std::fs::write(&brief, "# Brief\n").unwrap();
+    let project = work.path().join("project");
+    let init = tenaz()
+        .args(["init", "--project"])
+        .arg(&project)
+        .arg("--brief")
+        .arg(&brief)
+        .args(["--harness", "fake", "--model", "m", "--provider", "p"])
+        .args(["--model-for", "reviewer=critic", "--swap-models"])
+        .args(["--engine", "load-api"])
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let ledger: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(project.join(".tenaz/run.json")).unwrap())
+            .unwrap();
+    assert_eq!(ledger["launch"]["swapModels"], true);
+    assert_eq!(status_json(&project)["swap_models"], true);
+    let run = tenaz()
+        .args(["run", "--engine", "generic", "--project"])
+        .arg(&project)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("needs --engine load-api") && stderr.contains("--no-swap-models"),
+        "{stderr}"
+    );
+}
+
 /// `init --harness pi` pins `pi --version` and reads the provider's base URL,
 /// context window and inputs from `~/.pi/agent/models.json` when it lists
 /// the model; a model it does not list takes them from the flags.

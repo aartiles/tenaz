@@ -47,6 +47,16 @@ uses [Semantic Versioning](https://semver.org/).
   back; a generic engine's stop and start commands run once for all of
   them. A generic engine that serves only some of the run's models is not
   started a second time: `tenaz run` stops and names the others.
+- `tenaz init --swap-models` keeps one model of a `--model-for` map
+  loaded at a time, for models that do not fit in memory together: before
+  each session Tenaz unloads the others and loads that session's model,
+  so each review costs two loads. At every `tenaz run` start it loads
+  each model once, alone, and stops the run if one will not load. Needs
+  `--engine load-api` (Sushi, mlx-serve). `tenaz run --swap-models` and
+  `--no-swap-models` change it; it is kept as `launch.swapModels` in
+  `run.json`, and `status --json` has `swap_models`. The journal's
+  `lease` records name the model of each `load` and `unload`, and record
+  a model the engine dropped by itself as `evicted`. See ADR 0013.
 - A builder whose task needs work too heavy for a session (a render, a
   long build) writes `.tenaz/jobs/<TASK>.json` with the command, its time
   limit and why, and stops. Tenaz runs the command between sessions of the

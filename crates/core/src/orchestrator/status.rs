@@ -152,7 +152,12 @@ fn model_lines(ledger: &Ledger) -> Vec<String> {
             .iter()
             .map(|(role, m)| format!("{role} {} ({} tokens)", m.model, m.context_window))
             .collect();
-        lines.push(format!("Role models: {}", models.join(", ")));
+        let swapped = if ledger.launch.swap_models {
+            "; one loaded at a time (--swap-models)"
+        } else {
+            ""
+        };
+        lines.push(format!("Role models: {}{swapped}", models.join(", ")));
     }
     lines
 }
@@ -272,6 +277,7 @@ pub fn status_json(project: &Project) -> Value {
                 "context_window": m.context_window,
             })))
             .collect::<BTreeMap<_, _>>(),
+        "swap_models": ledger.launch.swap_models,
         "harness": ledger.config.harness,
         "origin": ledger.origin,
     })
@@ -343,6 +349,29 @@ mod tests {
             json["role_models"],
             json!({"reviewer": {"model": "sushi/B", "context_window": 65536}})
         );
+    }
+
+    #[test]
+    fn status_says_when_the_role_models_are_swapped() {
+        let reviewer = RoleModel {
+            model: "sushi/B".into(),
+            id: "B".into(),
+            context_window: 65536,
+            input: vec!["text".into()],
+        };
+        let (_work, project) = project_with(BTreeMap::from([(Role::Reviewer, reviewer)]));
+        assert_eq!(status_json(&project)["swap_models"], false);
+        let mut ledger = project.load_ledger().unwrap();
+        ledger.launch.swap_models = true;
+        project.save_ledger(&ledger).unwrap();
+        let text = status_text(&project);
+        assert!(
+            text.contains(
+                "Role models: reviewer sushi/B (65536 tokens); one loaded at a time (--swap-models)\n"
+            ),
+            "{text}"
+        );
+        assert_eq!(status_json(&project)["swap_models"], true);
     }
 
     #[test]

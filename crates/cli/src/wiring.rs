@@ -24,7 +24,7 @@ use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::cache_report::CacheReport;
 use tenaz_core::effort::EffortDial;
 use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
-use tenaz_core::ledger::{HarnessKind, JournalRecord, SkillPin};
+use tenaz_core::ledger::{HarnessKind, JournalRecord, ModelConfig, SkillPin};
 use tenaz_core::orchestrator::Deps;
 use tenaz_core::params::RunParams;
 use tenaz_core::ports::{EngineAdapter, Harness, MediaAdapter};
@@ -45,9 +45,36 @@ pub enum EngineChoice {
     },
 }
 
+/// The lease over the run's models on `adapter`, its transitions
+/// journaled, before media and swapping are added.
+fn lease_over(
+    project: &Project,
+    adapter: Arc<dyn EngineAdapter>,
+    config: &ModelConfig,
+    gate: &Gate,
+) -> LeaseManager {
+    let journal_project = project.clone();
+    let clock_for_lease = SystemClock::new();
+    let observer: tenaz_core::lease::Observer = Arc::new(move |t: LeaseTransition| {
+        use tenaz_core::ports::Clock as _;
+        let _ = journal_project.append_journal(
+            clock_for_lease.now_rfc3339(),
+            JournalRecord::Lease {
+                holder: t.holder.to_string(),
+                transition: t.transition,
+                ms: t.ms,
+                detail: t.detail,
+            },
+        );
+    });
+    LeaseManager::new(adapter, config.model_ids(), gate.clone(), observer)
+}
+
 pub struct EngineOptions {
     pub kind: EngineChoice,
     pub proxy: bool,
+    /// Keep one of the run's models loaded at a time (ADR 0013).
+    pub swap: bool,
 }
 
 pub struct HarnessOptions {
@@ -218,26 +245,10 @@ pub async fn wire(
         }
     };
     let gate = Gate::new();
-    let journal_project = project.clone();
-    let clock_for_lease = SystemClock::new();
-    let observer: tenaz_core::lease::Observer = Arc::new(move |t: LeaseTransition| {
-        use tenaz_core::ports::Clock as _;
-        let _ = journal_project.append_journal(
-            clock_for_lease.now_rfc3339(),
-            JournalRecord::Lease {
-                holder: t.holder.to_string(),
-                transition: t.transition,
-                ms: t.ms,
-                detail: t.detail,
-            },
-        );
-    });
-    let mut lease = LeaseManager::new(
-        engine_adapter.clone(),
-        config.model_ids(),
-        gate.clone(),
-        observer,
-    );
+    let mut lease = lease_over(project, engine_adapter.clone(), config, &gate);
+    if engine.swap {
+        lease = lease.with_swap();
+    }
     let mut services = Services::default();
     let mut mcp_endpoints = Vec::new();
     let media_engine = media_adapter(media, &base_url)?;

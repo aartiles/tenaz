@@ -92,10 +92,12 @@ project's own tests.
   outside the project is logged and the session told so.
 - **Resident models.** When the agent asks for an image, Tenaz unloads
   the LLM, runs the image model, frees it and reloads the LLM. With
-  `--model-for`, every model named must be loaded at once: Tenaz checks
-  before the first session (loading what it can, as for `--model`), does
-  not swap between them, and frees and reloads them all around an image
-  or a heavy job. The agent's requests wait meanwhile instead of failing.
+  `--model-for`, every model named is loaded at once: Tenaz checks before
+  the first session (loading what it can, as for `--model`) and frees and
+  reloads them all around an image or a heavy job. With `--swap-models`
+  it keeps one loaded at a time instead, and swaps to each session's
+  model before the session opens. The agent's requests wait meanwhile
+  instead of failing.
   See [Images](#images) for what that needs from your engine.
 - **Pause and resume.** Ctrl-C pauses after the current session; run again
   to continue.
@@ -360,9 +362,16 @@ model family; the other roles keep `--model`. Repeat it for more roles
 (bootstrap, builder, reviewer, split, replan, final-reviewer), and add
 `--context-window-for ROLE=N` when that model's window is not
 `--context-window`; roles that name the same model get the same window.
-The engine serves every model named, all loaded at once: Tenaz does not
-swap between them. Not with `--harness pi` yet. See
-[ADR 0011](docs/adr/0011-a-model-per-role.md).
+The engine serves every model named, all loaded at once. When they do
+not fit in memory together, add `--swap-models` (with `--engine
+load-api`, as for Sushi and mlx-serve): Tenaz keeps one loaded at a time
+and, before each session, unloads the others and loads that session's
+model. Each review then costs two loads, to the reviewer's model and
+back. At every `tenaz run` start it loads each model once, alone, so one
+that will not load stops the run at once. `tenaz run --no-swap-models`
+goes back to keeping them all loaded. Not with `--harness pi` yet. See
+[ADR 0011](docs/adr/0011-a-model-per-role.md) and
+[ADR 0013](docs/adr/0013-swapping-role-models.md).
 
 `--vision` says the model reads images. `--set key=value` overrides a
 parameter; `tenaz params` lists them. Whatever its model, the diff a
@@ -509,7 +518,8 @@ The run then treats the brief as a change to that project:
 ## How it compares
 
 Model swappers such as llama-swap, Ollama's `keep_alive` or LM Studio's JIT
-loading load models on demand, but know nothing of a goal or a task. Loop
+loading load models on demand, but know nothing of a goal or a task;
+Tenaz's `--swap-models` swaps between sessions and journals each load. Loop
 patterns such as Ralph keep an agent going, but assume the engine is always
 there and count an engine failure as a task failure. Tenaz combines a
 deterministic goal loop with one lease over every model the run uses.

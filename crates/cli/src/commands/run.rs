@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, Phase};
+use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, Phase, swap_refusal};
 use tenaz_core::orchestrator::{RunOptions, Runner};
 use tokio_util::sync::CancellationToken;
 
@@ -48,6 +48,13 @@ pub(crate) struct RunArgs {
     /// Talk to the engine directly instead of through the proxy.
     #[arg(long)]
     no_proxy: bool,
+    /// Keep one of the run's models loaded at a time and swap them before
+    /// each session (needs a --model-for map and --engine load-api).
+    #[arg(long, conflicts_with = "no_swap_models")]
+    swap_models: bool,
+    /// Keep every model of the run loaded at once again.
+    #[arg(long)]
+    no_swap_models: bool,
     /// `ComfyUI` base URL; enables the image tool.
     #[arg(long)]
     comfyui: Option<String>,
@@ -75,6 +82,9 @@ impl RunArgs {
         replace(&mut next.engine_start, self.engine_start.as_ref());
         replace(&mut next.engine_stop, self.engine_stop.as_ref());
         next.no_proxy |= self.no_proxy;
+        if self.swap_models || self.no_swap_models {
+            next.swap_models = self.swap_models;
+        }
         if let Some(bin) = self.harness_bin(harness) {
             next.harness_bin = Some(pinned_path(bin));
         }
@@ -87,6 +97,17 @@ impl RunArgs {
         replace(&mut next.image_model, self.image_model.as_ref());
         replace(&mut next.media_timeout_sec, self.media_timeout.as_ref());
         Ok(next)
+    }
+
+    /// The run's pinned launch with these flags applied, refused when it
+    /// swaps models the run cannot swap.
+    fn launch_for(&self, ledger: &tenaz_core::ledger::Ledger) -> anyhow::Result<Launch> {
+        let launch = self.apply(&ledger.launch, ledger.config.harness)?;
+        let role_models = !ledger.config.role_models.is_empty();
+        if let Some(why) = swap_refusal(launch.engine, launch.swap_models, role_models) {
+            anyhow::bail!("{why}; tenaz run --no-swap-models turns swapping off");
+        }
+        Ok(launch)
     }
 
     /// The `--fx-bin` or `--pi-bin` given for `harness`.
@@ -113,7 +134,7 @@ pub(crate) async fn execute(args: RunArgs) -> anyhow::Result<ExitCode> {
     if let Some(origin) = &ledger.origin {
         tracing::info!("{}", worktree::describe(origin));
     }
-    let launch = args.apply(&ledger.launch, ledger.config.harness)?;
+    let launch = args.launch_for(&ledger)?;
     if launch != ledger.launch {
         ledger.launch = launch.clone();
         project.save_ledger(&ledger)?;
@@ -142,6 +163,7 @@ pub(crate) async fn execute(args: RunArgs) -> anyhow::Result<ExitCode> {
             },
         },
         proxy: !launch.no_proxy,
+        swap: launch.swap_models,
     };
     let bin = |kind: HarnessKind| {
         PathBuf::from(
@@ -208,4 +230,36 @@ fn spawn_signal_handler(stop: CancellationToken) {
         tracing::info!("stop requested: the run pauses after the current session");
         stop.cancel();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+
+    use super::*;
+
+    fn run_args(line: &[&str]) -> RunArgs {
+        let crate::Command::Run(args) = crate::Cli::parse_from(line).command else {
+            panic!("not a run line: {line:?}");
+        };
+        args
+    }
+
+    /// `run` turns swapping on and off; without either flag the pinned
+    /// value stays.
+    #[test]
+    fn swap_models_is_turned_on_and_off_by_run() {
+        let swap = |line: &[&str], pinned: bool| {
+            let launch = Launch {
+                swap_models: pinned,
+                ..Launch::default()
+            };
+            let next = run_args(line).apply(&launch, HarnessKind::Fx).unwrap();
+            next.swap_models
+        };
+        assert!(swap(&["tenaz", "run", "--swap-models"], false));
+        assert!(!swap(&["tenaz", "run", "--no-swap-models"], true));
+        assert!(swap(&["tenaz", "run"], true));
+        assert!(!swap(&["tenaz", "run"], false));
+    }
 }
