@@ -588,22 +588,15 @@ fn build_harness(
             // Pi gets an agent directory of its own pointing it at the proxy
             // (or the engine); the media MCP server is not on its path.
             let agent_dir = project.private_dir().join("pi-agent");
-            let provider = config
-                .provider
-                .clone()
-                .or_else(|| config.model.split_once('/').map(|(p, _)| p.to_owned()))
-                .unwrap_or_else(|| "engine".to_owned());
-            let model = tenaz_pi::models::AgentModel {
-                provider: provider.clone(),
-                id: config.id.clone(),
-                base_url: harness_base_url,
-                context_window: config.context_window,
-                input: config.input.clone(),
-                reasoning: reasoning_effort(config.thinking.as_deref()).is_some(),
-            };
-            tenaz_pi::write_agent_dir(&agent_dir, &model, pi_template(&provider, &config.id))
-                .context("cannot write Pi's agent directory")?;
-            let launch = PiLaunch::new(&options.pi_bin, format!("{provider}/{}", config.id))
+            let user_models = tenaz_pi::models::default_models_path();
+            let models = write_pi_agent(
+                &agent_dir,
+                config,
+                &harness_base_url,
+                user_models.as_deref(),
+            )?;
+            let launch = PiLaunch::new(&options.pi_bin, models.run_name())
+                .other_models(models.other_names())
                 .thinking(
                     config
                         .thinking
@@ -678,11 +671,57 @@ fn build_harness(
     }
 }
 
-/// The user's own settings for the model, when `~/.pi/agent/models.json`
-/// lists it; the file is optional, so a broken one is only logged.
-fn pi_template(provider: &str, id: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let path = tenaz_pi::models::default_models_path()?;
-    tenaz_pi::models::provider_template(&path, provider, id)
+/// Writes Pi's agent directory for the run's models, the run's own first
+/// and each role's model once with its own window and inputs (ADR 0011),
+/// keeping what the user's `models` file (`user_models`) has for them.
+fn write_pi_agent(
+    agent_dir: &Path,
+    config: &ModelConfig,
+    base_url: &str,
+    user_models: Option<&Path>,
+) -> anyhow::Result<tenaz_pi::models::AgentModels> {
+    let models = pi_models(config, base_url);
+    let template = user_models.and_then(|path| pi_template(path, &models));
+    tenaz_pi::write_agent_dir(agent_dir, &models, template)
+        .context("cannot write Pi's agent directory")?;
+    Ok(models)
+}
+
+/// The run's models as Pi's `models.json` describes them, on the run's
+/// provider at `base_url`.
+fn pi_models(config: &ModelConfig, base_url: &str) -> tenaz_pi::models::AgentModels {
+    let reasoning = reasoning_effort(config.thinking.as_deref()).is_some();
+    let model = |id: &str, context_window, input: &[String]| tenaz_pi::models::AgentModel {
+        id: id.to_owned(),
+        context_window,
+        input: input.to_vec(),
+        reasoning,
+    };
+    let mut others: Vec<tenaz_pi::models::AgentModel> = Vec::new();
+    for role in config.role_models.values() {
+        if role.id != config.id && others.iter().all(|m| m.id != role.id) {
+            others.push(model(&role.id, role.context_window, &role.input));
+        }
+    }
+    tenaz_pi::models::AgentModels {
+        provider: config
+            .provider
+            .clone()
+            .or_else(|| config.model.split_once('/').map(|(p, _)| p.to_owned()))
+            .unwrap_or_else(|| "engine".to_owned()),
+        base_url: base_url.to_owned(),
+        run: model(&config.id, config.context_window, &config.input),
+        others,
+    }
+}
+
+/// The user's own settings for `models`, when their Pi `models` file at
+/// `path` lists them; the file is optional, so a broken one is only logged.
+fn pi_template(
+    path: &Path,
+    models: &tenaz_pi::models::AgentModels,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    tenaz_pi::models::provider_template(path, &models.provider, &models.ids())
         .inspect_err(|error| tracing::warn!(%error, "ignoring Pi's models.json"))
         .ok()
         .flatten()
@@ -722,6 +761,70 @@ mod tests {
         BTreeMap, Duration, MediaOptions, harness_usage, media_adapter, reasoning_effort,
         request_defaults, swapping,
     };
+
+    /// Pi's agent directory lists the run's model first, then each role's
+    /// model once with its own window and inputs, keeping the user's
+    /// settings for it; every role's session finds its model there.
+    #[test]
+    fn pi_s_agent_directory_lists_each_model_of_the_run_once() {
+        use tenaz_core::ledger::{HarnessKind, ModelConfig};
+        use tenaz_core::role::Role;
+        use tenaz_core::role_models::RoleModel;
+        let dir = tempfile::tempdir().unwrap();
+        let user_models = dir.path().join("user-models.json");
+        let user = r#"{"providers": {"sushi": {"apiKey": "user-key", "models": [
+            {"id": "critic", "thinkingLevelMap": {"off": "none"}}]}}}"#;
+        std::fs::write(&user_models, user).unwrap();
+        let critic = RoleModel {
+            model: "sushi/critic".into(),
+            id: "critic".into(),
+            context_window: 32768,
+            input: vec!["text".into()],
+        };
+        let config = ModelConfig {
+            harness: HarnessKind::Pi,
+            harness_version: "1.1.0".into(),
+            model: "sushi/m".into(),
+            provider: Some("sushi".into()),
+            id: "m".into(),
+            base_url: None,
+            context_window: 131_072,
+            input: vec!["text".into(), "image".into()],
+            thinking: None,
+            role_models: BTreeMap::from([(Role::Reviewer, critic.clone()), (Role::Split, critic)]),
+        };
+        let agent = dir.path().join("pi-agent");
+        let base_url = "http://127.0.0.1:4001/v1";
+        let models = super::write_pi_agent(&agent, &config, base_url, Some(&user_models)).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(agent.join("models.json")).unwrap())
+                .unwrap();
+        let sushi = &written["providers"]["sushi"];
+        assert_eq!(
+            (&sushi["apiKey"], &sushi["baseUrl"]),
+            (&"user-key".into(), &base_url.into())
+        );
+        let listed: Vec<String> = sushi["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| format!("{} {} {}", m["id"], m["contextWindow"], m["input"]))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                r#""m" 131072 ["text","image"]"#,
+                r#""critic" 32768 ["text"]"#
+            ]
+        );
+        assert_eq!(sushi["models"][1]["thinkingLevelMap"]["off"], "none");
+        let launch =
+            tenaz_pi::PiLaunch::new("pi", models.run_name()).other_models(models.other_names());
+        for role in Role::ALL {
+            let id = config.model_for(role).id;
+            assert!(launch.for_model(&id).is_some(), "{role}: {id}");
+        }
+    }
 
     /// A lease over two models on `engine`, swapped when `swap` asks.
     fn lease_on(engine: Arc<dyn EngineAdapter>, swap: bool) -> anyhow::Result<LeaseManager> {

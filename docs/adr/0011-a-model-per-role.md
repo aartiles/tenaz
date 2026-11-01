@@ -46,7 +46,8 @@ model. It cannot give the review to another family.
   ones that are not. Tenaz does not swap between them: the lease still
   unloads the LLMs only for a media job or a heavy job (ADR 0010), and
   then all of them.
-- fx is the harness covered. `init` refuses a map with `--harness pi`.
+- fx is the harness covered. `init` refuses a map with `--harness pi`
+  (until the amendment "Pi with a map" below).
 
 ### C. Swap the models through the lease
 
@@ -78,7 +79,8 @@ model's session hit it.
 
 - Swapping LLMs through the lease when they do not fit together (C).
 - Pi with a map. It is small: pass the session's model as `--model` and
-  list every model of the map in the run's `models.json`.
+  list every model of the map in the run's `models.json`. (Done: see the
+  amendment "Pi with a map" below.)
 - Reasoning effort per role: a separate change.
 - Reading a role model's context window from the engine instead of from a
   flag.
@@ -101,3 +103,15 @@ Option C is taken up by ADR 0015. With `--swap-models`, a run keeps one
 model of the map loaded at a time and swaps them through the lease
 before each session; "every model in the map must be loaded before
 `tenaz run`" holds only without it.
+
+## Amendment, 2026-11-01: Pi with a map
+
+Pi takes the map as this ADR said it would: the run's `models.json`
+lists every model of the map on the run's provider, and each session's
+Pi process is launched with `--model` set to its role's model. A session
+on a model the file does not list is refused. A role's model without
+`--context-window-for` takes the `contextWindow` the user's
+`~/.pi/agent/models.json` lists for it, as `--model` does with Pi, before
+falling back to the run's window; and it takes the inputs that file lists
+for it unless `--vision` is given, so a text-only reviewer is not sent
+images. With fx, a role's inputs are still the run's.

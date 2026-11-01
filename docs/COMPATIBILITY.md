@@ -133,8 +133,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
   tokens of its 42598 budget, and the diff was half of Tenaz's prompt
   (40.6k of 79.4k characters). The diff now takes `diffShare` of the
   reviewer's own budget (ADR 0012), tested with the scripted harness; no
-  real run has used it yet. Not with Pi: `init` refuses the map, and Pi
-  refuses a session on another model than the one it was set up for.
+  real run has used it yet. With Pi, each session's Pi process is
+  launched with its role's model, and the run's `models.json` lists every
+  model of the map; a role's window and inputs come from the user's
+  `~/.pi/agent/models.json` when it lists the model. Tested with a
+  stand-in Pi that records its arguments, not with Pi 1.1.0 and two
+  models.
 
 - **Swapping the role models** (`--swap-models`, ADR 0015). Tested with
   fake engines and scripted runs only: not yet run against mlx-serve or

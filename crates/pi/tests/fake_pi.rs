@@ -342,17 +342,48 @@ async fn a_process_that_ignores_stdin_eof_is_killed_after_the_grace() {
     ));
 }
 
+/// A session on a model the run's `models.json` does not list is refused,
+/// naming the ones it lists.
 #[tokio::test]
-async fn a_session_on_another_model_is_refused() {
+async fn a_session_on_an_unlisted_model_is_refused() {
     let dir = tempfile::tempdir().unwrap();
-    let mut spec = spec(dir.path(), false);
-    spec.model.name = "fake/critic".into();
-    spec.model.id = "critic".into();
-    let error = harness(dir.path()).open(spec).await.err().unwrap();
+    let error = harness(dir.path())
+        .open(on_critic(spec(dir.path(), false)))
+        .await
+        .err()
+        .unwrap();
     assert!(
-        matches!(&error, HarnessError::Spawn(m) if m.contains("set up for fake/fake, not fake/critic")),
+        matches!(&error, HarnessError::Spawn(m) if m.contains("does not list fake/critic; it lists fake/fake")),
         "{error}"
     );
+}
+
+/// A session of a role played by another model launches Pi with that
+/// model (ADR 0011).
+#[tokio::test]
+async fn a_role_s_session_launches_pi_with_its_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = PiLaunch::new(fake_pi(), "fake/fake")
+        .other_models(vec!["fake/critic".to_owned()])
+        .env(vec![(
+            "FAKE_PI_ARGS".to_owned(),
+            dir.path().join("args.txt").display().to_string(),
+        )]);
+    let harness = launch.harness("fake-pi 0.0.1".to_owned());
+    let mut session = harness
+        .open(on_critic(spec(dir.path(), false)))
+        .await
+        .unwrap();
+    assert_eq!(session.close(Duration::from_secs(5)).await.code, Some(0));
+    let args = std::fs::read_to_string(dir.path().join("args.txt")).unwrap();
+    assert!(args.contains("--model\nfake/critic\n"), "{args}");
+}
+
+/// `spec` for a session of the model `fake/critic`.
+fn on_critic(mut spec: SessionSpec) -> SessionSpec {
+    spec.model.name = "fake/critic".into();
+    spec.model.id = "critic".into();
+    spec
 }
 
 #[tokio::test]

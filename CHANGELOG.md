@@ -8,6 +8,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `--model-for` works with `--harness pi`: each session's Pi is launched
+  with its role's model, and the run's `models.json` lists every model of
+  the map, keeping the settings your `~/.pi/agent/models.json` has for
+  each. A role's model without `--context-window-for` takes the window
+  that file lists for it, and its inputs unless `--vision` is given.
+  `--swap-models` works with Pi too. See ADR 0011.
 - `tenaz init --swap-models` keeps one model of a `--model-for` map
   loaded at a time, for models that do not fit in memory together: before
   each session Tenaz unloads the others and loads that session's model,

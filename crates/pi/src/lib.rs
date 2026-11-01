@@ -20,19 +20,20 @@ pub use translate::Translator;
 /// Pi's agent directory: settings, models, credentials (Pi 1.1.0).
 pub const AGENT_DIR_ENV: &str = "PI_CODING_AGENT_DIR";
 
-/// Writes the run's agent directory: `models.json` with the one model (see
-/// [`models::agent_models_json`]) and a `settings.json` with an HTTP idle
-/// timeout long enough for a local engine's prefill and install telemetry
-/// off. Pi keeps its own `auth.json` and catalog cache there too.
+/// Writes the run's agent directory: `models.json` with the run's models,
+/// its own first (see [`models::agent_models_json`]), and a
+/// `settings.json` with an HTTP idle timeout long enough for a local
+/// engine's prefill and install telemetry off. Pi keeps its own
+/// `auth.json` and catalog cache there too.
 pub fn write_agent_dir(
     dir: &Path,
-    model: &models::AgentModel,
+    models: &models::AgentModels,
     template: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     std::fs::write(
         dir.join("models.json"),
-        serde_json::to_string_pretty(&models::agent_models_json(model, template))?,
+        serde_json::to_string_pretty(&models::agent_models_json(models, template))?,
     )?;
     std::fs::write(
         dir.join("settings.json"),
@@ -51,8 +52,11 @@ pub const PI_TOOLS: &str = "read,bash,write,edit,grep,find,ls";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PiLaunch {
     pub binary: PathBuf,
-    /// `provider/id`, as Pi names models.
+    /// `provider/id`, as Pi names models: the run's model.
     pub model: String,
+    /// The other models the run's `models.json` lists (`provider/id`),
+    /// which a role's session may ask for (ADR 0011).
+    pub other_models: Vec<String>,
     /// `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`.
     pub thinking: String,
     /// Comma-separated tool allowlist.
@@ -74,6 +78,7 @@ impl PiLaunch {
         Self {
             binary: binary.into(),
             model: model.into(),
+            other_models: Vec::new(),
             thinking: "medium".to_owned(),
             tools: PI_TOOLS.to_owned(),
             skills: Vec::new(),
@@ -82,6 +87,26 @@ impl PiLaunch {
             env: Vec::new(),
             wrapper: Vec::new(),
         }
+    }
+
+    /// Lets sessions ask for `models` (`provider/id`) besides the run's.
+    #[must_use]
+    pub fn other_models(mut self, models: Vec<String>) -> Self {
+        self.other_models = models;
+        self
+    }
+
+    /// This launch for a session of the model `id`, by the name the run's
+    /// `models.json` lists it under; `None` when it does not list it.
+    pub fn for_model(&self, id: &str) -> Option<Self> {
+        let name = self
+            .listed()
+            .into_iter()
+            .find(|name| name.split_once('/').is_some_and(|(_, listed)| listed == id))?;
+        Some(Self {
+            model: name,
+            ..self.clone()
+        })
     }
 
     #[must_use]
@@ -167,6 +192,13 @@ impl PiLaunch {
         args
     }
 
+    /// The models a session may ask for, the run's first.
+    fn listed(&self) -> Vec<String> {
+        std::iter::once(self.model.clone())
+            .chain(self.other_models.iter().cloned())
+            .collect()
+    }
+
     /// The harness, with the version pinned in the ledger.
     pub fn harness(self, version: String) -> PiHarness {
         PiHarness {
@@ -225,21 +257,22 @@ impl Harness for PiHarness {
     }
 
     async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
-        // Pi takes its model at launch; a session asking for another is
-        // refused rather than run on the wrong one (ADR 0011).
-        let launched = self.launch.model.split_once('/').map(|(_, id)| id);
-        if launched != Some(spec.model.id.as_str()) {
+        // Pi takes its model at launch, one process per session: each is
+        // launched with its role's model (ADR 0011). One the run's
+        // `models.json` does not list is refused rather than run on another.
+        let Some(launch) = self.launch.for_model(&spec.model.id) else {
             return Err(HarnessError::Spawn(format!(
-                "Pi was set up for {}, not {}; a model per role is not supported with Pi yet",
-                self.launch.model, spec.model.name
+                "the run's models.json for Pi does not list {}; it lists {}",
+                spec.model.name,
+                self.launch.listed().join(", ")
             )));
-        }
+        };
         let (program, args) = tenaz_core::util::wrap_command(
-            &self.launch.wrapper,
-            &self.launch.binary,
-            self.launch.args(spec.persist_dir.as_deref()),
+            &launch.wrapper,
+            &launch.binary,
+            launch.args(spec.persist_dir.as_deref()),
         );
-        let session = session::PiSession::spawn(&program, &args, &self.launch.env, &spec)?;
+        let session = session::PiSession::spawn(&program, &args, &launch.env, &spec)?;
         Ok(Box::new(session))
     }
 }
@@ -290,6 +323,33 @@ mod tests {
         assert_eq!(launch.harness("1.1.0".into()).info().version, "1.1.0");
     }
 
+    /// A session is launched with its role's model when the run's
+    /// `models.json` lists it, and refused otherwise (ADR 0011).
+    #[test]
+    fn a_session_runs_its_role_s_model_when_the_run_lists_it() {
+        let launch = PiLaunch::new("pi", "sushi/Qwen")
+            .other_models(vec!["sushi/Critic".into()])
+            .thinking("high")
+            .skills(vec![PathBuf::from("/s/rust")])
+            .agent_dir(Path::new("/a/pi-agent"))
+            .wrapper(vec!["sandbox".into()]);
+        let model_of = |id: &str| {
+            let args = launch.for_model(id)?.args(None);
+            let at = args.iter().position(|a| a == "--model")?;
+            Some(args[at + 1].clone())
+        };
+        assert_eq!(model_of("Critic").as_deref(), Some("sushi/Critic"));
+        assert_eq!(model_of("Qwen").as_deref(), Some("sushi/Qwen"));
+        assert_eq!(model_of("Other"), None);
+        // Only the model changes: the rest of the launch is the run's.
+        let critic = launch.for_model("Critic").unwrap();
+        let as_run = PiLaunch {
+            model: launch.model.clone(),
+            ..critic
+        };
+        assert_eq!(as_run, launch);
+    }
+
     /// Pi runs in the project directory; a relative `--project` must not
     /// make it write its sessions under `<project>/<project>/`.
     #[test]
@@ -313,15 +373,19 @@ mod tests {
     fn the_agent_directory_holds_the_model_and_the_settings() {
         let dir = tempfile::tempdir().unwrap();
         let agent = dir.path().join("pi-agent");
-        let model = models::AgentModel {
-            provider: "ollama".into(),
+        let run = models::AgentModel {
             id: "qwen3.8:27b".into(),
-            base_url: "http://127.0.0.1:4001/v1".into(),
             context_window: 32768,
             input: vec!["text".into(), "image".into()],
             reasoning: true,
         };
-        write_agent_dir(&agent, &model, None).unwrap();
+        let models = models::AgentModels {
+            provider: "ollama".into(),
+            base_url: "http://127.0.0.1:4001/v1".into(),
+            run,
+            others: vec![],
+        };
+        write_agent_dir(&agent, &models, None).unwrap();
         let read = |name: &str| -> serde_json::Value {
             serde_json::from_str(&std::fs::read_to_string(agent.join(name)).unwrap()).unwrap()
         };
