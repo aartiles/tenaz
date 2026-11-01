@@ -6,6 +6,17 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- A context budget held at the ceiling a failed raise set, for twice the
+  sessions a raise waits for then (8 to 32 with the default
+  `capacityRecoverSessions`), is raised past it, halfway to the largest
+  configured budget, and the log says so; an overflow sets the ceiling
+  again. The ceiling used to last the whole run: in the Digger below the
+  Mine run of 2026-10-30 it was set at 58419 while memory was short, and
+  the budget stayed there for hours after the pressure was gone, with
+  sessions reaching 77257 tokens unharmed. See ADR 0014.
+
 ## [0.3.0] - 2026-10-31
 
 ### Added
