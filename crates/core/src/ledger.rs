@@ -187,6 +187,29 @@ pub struct Launch {
     /// Media job time limit, in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_timeout_sec: Option<u64>,
+    /// Keep one of the run's models loaded at a time and swap them before
+    /// each session (ADR 0015).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub swap_models: bool,
+}
+
+/// Why a run on `engine`, with (`role_models`) or without a model map,
+/// cannot `swap` its models (ADR 0015); `None` when it can, or does not
+/// ask to.
+pub fn swap_refusal(engine: EngineApi, swap: bool, role_models: bool) -> Option<&'static str> {
+    if !swap {
+        None
+    } else if !role_models {
+        Some(
+            "--swap-models needs a --model-for map, set at tenaz init: a run with one model has nothing to swap",
+        )
+    } else if engine == EngineApi::Generic {
+        Some(
+            "--swap-models needs --engine load-api: a generic engine starts and stops all its models together",
+        )
+    } else {
+        None
+    }
 }
 
 /// The engine preflight (reasoning, prefix cache, vision).
@@ -753,6 +776,29 @@ fn is_zero(n: &u32) -> bool {
 mod tests {
     use super::*;
     use crate::role_models::RoleModel;
+
+    #[test]
+    fn swapping_needs_a_model_map_and_the_load_api() {
+        let refused = |engine, role_models| swap_refusal(engine, true, role_models);
+        assert_eq!(refused(EngineApi::LoadApi, true), None);
+        assert!(refused(EngineApi::LoadApi, false).is_some_and(|r| r.contains("--model-for")));
+        assert!(refused(EngineApi::Generic, true).is_some_and(|r| r.contains("load-api")));
+        assert_eq!(swap_refusal(EngineApi::Generic, false, false), None);
+    }
+
+    #[test]
+    fn swap_models_is_pinned_as_swap_models_and_left_out_when_off() {
+        let on = Launch {
+            swap_models: true,
+            ..Launch::default()
+        };
+        let json = serde_json::to_value(&on).unwrap();
+        assert_eq!(json["swapModels"], true);
+        let off = serde_json::to_value(Launch::default()).unwrap();
+        assert!(off.get("swapModels").is_none(), "{off}");
+        let read: Launch = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!read.swap_models);
+    }
 
     #[test]
     fn the_harness_is_pinned_by_its_lowercase_name() {

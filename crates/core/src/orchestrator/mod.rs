@@ -30,8 +30,8 @@ use crate::lease::LeaseError;
 use crate::ledger::{JournalRecord, Ledger, Phase, Preflight};
 use crate::params::RunParams;
 use crate::ports::{
-    Clock, EngineAdapter, EngineMetricsSource, Harness, HarnessError, MemoryProbe, Notifier, Vcs,
-    VcsError, VerifyRunner,
+    Clock, EngineAdapter, EngineError, EngineMetricsSource, Harness, HarnessError, MemoryProbe,
+    Notifier, Vcs, VcsError, VerifyRunner,
 };
 use crate::project::{BRIEF, PROTOCOL, Project, RunLock};
 use crate::util::sha256_hex;
@@ -238,10 +238,11 @@ impl Runner {
         Ok(())
     }
 
-    /// Waits for the engine to serve every model of the run (up to 30
-    /// tries, [`ENGINE_WAIT`] apart), and logs the wait, `why`, once the first try
-    /// fails. The last error when it still does not serve; `None` once it
-    /// serves, or when the run is stopping, which callers check.
+    /// Waits for the engine to serve the run's models, or the resident one
+    /// when the run swaps them (up to 30 tries, [`ENGINE_WAIT`] apart), and
+    /// logs the wait, `why`, once the first try fails. The last error when
+    /// it still does not serve; `None` once it serves, or when the run is
+    /// stopping, which callers check.
     async fn wait_for_engine(&self, why: &str) -> Option<RunError> {
         const TRIES: u32 = 30;
         for tried in 1..=TRIES {
@@ -262,16 +263,48 @@ impl Runner {
         None
     }
 
-    /// Whether the engine lists every model of the run as loaded: the
-    /// run's and each role's, all resident at once (ADR 0011). With a
-    /// lease, the LLMs are loaded first when they are not resident (after a
-    /// media job whose reload failed, for example); when that fails, the
-    /// refusal names the models still missing and says why.
+    /// Whether the engine lists the run's models as loaded: the run's and
+    /// each role's, all resident at once (ADR 0011), or the resident one
+    /// when the run swaps them (ADR 0015). With a lease, the LLMs are
+    /// loaded first when they are not resident (after a media job whose
+    /// reload failed, for example); when that fails, the refusal names the
+    /// models still missing and says why.
     async fn engine_serving(&self) -> Result<(), RunError> {
         let load_error = match &self.deps.lease {
             Some(lease) => lease.ensure_llm().await.err(),
             None => None,
         };
+        self.serving_after(load_error).await
+    }
+
+    /// As `engine_serving`, before the first session of a `tenaz run`: a
+    /// run that swaps its models loads each of them alone, in turn, so a
+    /// model that cannot load stops it now.
+    async fn engine_ready(&self) -> Result<(), RunError> {
+        let load_error = match &self.deps.lease {
+            Some(lease) => lease.prepare_llms().await.err(),
+            None => None,
+        };
+        match load_error {
+            Some(error) if self.swaps() && !unreachable(&error) => {
+                Err(RunError::Precondition(format!(
+                    "a model of the run did not load alone at {} ({error}). The run swaps its \
+                 models: each must load on its own.",
+                    self.ledger.config.base_url.clone().unwrap_or_default(),
+                )))
+            }
+            load_error => self.serving_after(load_error).await,
+        }
+    }
+
+    /// Whether the run keeps one model loaded at a time (ADR 0015).
+    fn swaps(&self) -> bool {
+        self.deps.lease.as_ref().is_some_and(|l| l.swaps())
+    }
+
+    /// The refusal, if any, once the lease has loaded the LLMs or failed
+    /// with `load_error`.
+    async fn serving_after(&self, load_error: Option<LeaseError>) -> Result<(), RunError> {
         let missing = self.models_not_listed().await?;
         match (missing.is_empty(), load_error) {
             (true, None) => Ok(()),
@@ -290,7 +323,10 @@ impl Runner {
         let Some(engine) = &self.deps.engine else {
             return Ok(Vec::new());
         };
-        let ids = self.ledger.config.model_ids();
+        let ids = match &self.deps.lease {
+            Some(lease) => lease.resident_models().await,
+            None => self.ledger.config.model_ids(),
+        };
         let listed = engine.models().await.map_err(|e| {
             RunError::Precondition(format!(
                 "{} not being served ({e}). Start the inference server first.",
@@ -310,13 +346,15 @@ impl Runner {
         let why = load_error
             .map(|e| format!(" (loading failed: {e})"))
             .unwrap_or_default();
-        let at_once = if self.ledger.config.model_ids().len() > 1 {
-            ", with every model of the run loaded at once"
+        let advice = if self.swaps() {
+            "The run swaps its models: each must load on its own."
+        } else if self.ledger.config.model_ids().len() > 1 {
+            "Start the inference server first, with every model of the run loaded at once."
         } else {
-            ""
+            "Start the inference server first."
         };
         format!(
-            "{} not being served at {}{why}. Start the inference server first{at_once}.",
+            "{} not being served at {}{why}. {advice}",
             models_are(missing),
             self.ledger.config.base_url.clone().unwrap_or_default(),
         )
@@ -462,7 +500,7 @@ impl Runner {
             }
             return Ok(());
         }
-        self.engine_serving().await?;
+        self.engine_ready().await?;
         if !self.ensure_preflight(options.allow_weak_engine).await? {
             return Ok(());
         }
@@ -569,6 +607,11 @@ fn take_run_lock(project: &Project) -> Result<RunLock, RunError> {
             "Another tenaz run is working on this project{pid}; stop it with Ctrl-C or wait for it to end"
         ))
     })
+}
+
+/// Whether `error` says the engine did not answer.
+fn unreachable(error: &LeaseError) -> bool {
+    matches!(error, LeaseError::Engine(EngineError::Unreachable(_)))
 }
 
 /// `Model A is` or `Models A, B are`.

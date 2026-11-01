@@ -9,6 +9,7 @@ mod prompt_fit;
 mod role_models;
 mod scripted_run;
 mod stop_grace;
+mod swap;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -114,6 +115,33 @@ async fn run_with(project: &Project, deps: Deps, stop: CancellationToken, resume
         })
         .await
         .unwrap();
+}
+
+/// The virtual clock, except that a wait as long as [`ENGINE_WAIT`] stops
+/// the run, as a person stopping it during the first wait for the engine.
+/// The scenarios that use it wait that long for nothing else: their engine
+/// backoff is 0 (`engineRetryBaseSec`).
+struct StopOnEngineWait {
+    clock: VirtualClock,
+    stop: CancellationToken,
+}
+
+#[async_trait]
+impl Clock for StopOnEngineWait {
+    fn now_rfc3339(&self) -> String {
+        self.clock.now_rfc3339()
+    }
+
+    fn monotonic_ms(&self) -> u64 {
+        self.clock.monotonic_ms()
+    }
+
+    async fn sleep(&self, duration: Duration) {
+        if duration == super::ENGINE_WAIT {
+            self.stop.cancel();
+        }
+        self.clock.sleep(duration).await;
+    }
 }
 
 /// The journaled sessions of `role` for T001.

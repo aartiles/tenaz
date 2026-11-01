@@ -44,7 +44,7 @@ Pure modules, each unit-tested without I/O:
 | `ledger` | `run.json` and the `journal.jsonl` record types. |
 | `metrics` | Engine Prometheus counters, per-request deltas, engine summary. |
 | `memory` | Memory samples and per-session windows. |
-| `lease` | One resident engine: the lease manager state machine over the engine and media ports, and the heavy jobs builders declare (ADR 0010). |
+| `lease` | One resident engine: the lease manager state machine over the engine and media ports, the heavy jobs builders declare (ADR 0010), and the swap between the run's models when one is loaded at a time (`residency.rs`, ADR 0015). |
 
 `ports` declares the traits the orchestration needs: `Harness` and
 `Session`, `Vcs`, `VerifyRunner`, `JobRunner`, `Clock`, `Notifier`,

@@ -6,7 +6,7 @@ use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
-use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, ModelConfig};
+use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, ModelConfig, swap_refusal};
 use tenaz_core::orchestrator::{InitOptions, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
@@ -126,6 +126,11 @@ pub(crate) struct InitArgs {
     /// Talk to the engine directly instead of through the proxy.
     #[arg(long)]
     pub(crate) no_proxy: bool,
+    /// Keep one of the --model-for models loaded at a time and swap them
+    /// before each session, for models that do not fit together. Needs
+    /// --engine load-api.
+    #[arg(long)]
+    pub(crate) swap_models: bool,
     /// `ComfyUI` base URL; enables the image tool.
     #[arg(long)]
     pub(crate) comfyui: Option<String>,
@@ -217,6 +222,7 @@ impl InitArgs {
         let switches = [
             ("vision", self.vision),
             ("no-proxy", self.no_proxy),
+            ("swap-models", self.swap_models),
             ("in-place", self.in_place),
         ];
         let place = [
@@ -299,6 +305,10 @@ impl InitPlan {
             .provider
             .clone()
             .unwrap_or_else(|| default_provider(engine, args.base_url.as_deref()));
+        let api = engine_api(&args, engine);
+        if let Some(why) = swap_refusal(api, args.swap_models, !role_picks.is_empty()) {
+            anyhow::bail!("{why}");
+        }
         Ok(Self {
             project,
             harness,
@@ -306,7 +316,7 @@ impl InitPlan {
             model,
             role_picks,
             provider,
-            api: engine_api(&args, engine),
+            api,
             brief_text,
             args,
         })
@@ -491,6 +501,7 @@ fn launch(plan: &InitPlan) -> anyhow::Result<Launch> {
         engine_start: plan.args.engine_start.clone(),
         engine_stop: plan.args.engine_stop.clone(),
         no_proxy: plan.args.no_proxy,
+        swap_models: plan.args.swap_models,
         harness_bin: plan.harness_bin.as_deref().map(pinned_path),
         fx_args: None,
         comfyui: plan.args.comfyui.clone(),
@@ -645,6 +656,7 @@ mod tests {
             "--engine-stop",
             "stop",
             "--no-proxy",
+            "--swap-models",
             "--comfyui",
             "http://c",
             "--workflow",
@@ -669,7 +681,7 @@ mod tests {
              --context-window 65536 --thinking high --set a=1 --set b=2 --skill s1 --skill s2 \
              --engine generic --engine-start 'serve it' --engine-stop stop \
              --comfyui http://c --workflow w=w.json --workflow v=v.json --images http://i/v1 --image-model im \
-             --media-timeout 60 --vision --no-proxy --worktree ../wt --name slug"
+             --media-timeout 60 --vision --no-proxy --swap-models --worktree ../wt --name slug"
         );
     }
 
@@ -836,6 +848,19 @@ mod tests {
             plan_error(&["--harness", "pi", "--model-for", "reviewer=r"]),
             "--model-for is not supported with --harness pi yet"
         );
+    }
+
+    #[test]
+    fn swapping_is_refused_without_a_map_or_with_a_generic_engine() {
+        assert!(plan_error(&["--swap-models"]).contains("needs a --model-for map"));
+        let generic = [
+            "--swap-models",
+            "--model-for",
+            "reviewer=r",
+            "--engine",
+            "generic",
+        ];
+        assert!(plan_error(&generic).contains("needs --engine load-api"));
     }
 
     /// The picks are checked against `--model` as given.

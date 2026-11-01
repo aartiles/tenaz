@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use crate::briefing::without_map;
+use crate::lease::{LeaseError, LeaseManager};
 use crate::ledger::{JournalRecord, SessionRecord};
 use crate::ownership::builder_reverted_note;
 use crate::role::Role;
@@ -57,11 +58,16 @@ impl Runner {
         ctx: &SessionCtx,
     ) -> Result<SessionResult, RunError> {
         let mut recovery = Recovery::resuming(self.ledger.pending_continuation);
+        // The last try of this session, which a stop during the next
+        // swap pauses at, as a stop after it would.
+        let mut last: Option<String> = None;
         loop {
             let text = self.with_reverted_note(role, session_prompt(prompt, &recovery));
             self.check_prompt_fits(role, &text, ctx)?;
+            self.swap_for(role, last.as_deref(), ctx).await?;
             let result = self.session_once(role, &text, ctx).await?;
             let label = result.record.label.clone();
+            last = Some(label.clone());
             if self.stopping() {
                 return Err(self.pause(&label, role, ctx)?);
             }
@@ -159,6 +165,60 @@ impl Runner {
         match self.prompt_limit(role).over(prompt, ctx.task.as_ref()) {
             Some(reason) => Err(RunError::PromptTooLarge(reason)),
             None => Ok(()),
+        }
+    }
+
+    /// Before each try of a session of `role`, in a run that swaps its
+    /// models: makes the role's model the only one loaded (ADR 0015). A
+    /// swap that fails is waited for as after an engine error, and one the
+    /// engine never takes blocks the run. A stop before, during or after
+    /// the swap pauses the run before the session: at `last`, the earlier
+    /// try of this session, as a stop after it would, else at the swap.
+    async fn swap_for(
+        &mut self,
+        role: Role,
+        last: Option<&str>,
+        ctx: &SessionCtx,
+    ) -> Result<(), RunError> {
+        let Some(lease) = self.deps.lease.clone().filter(|l| l.swaps()) else {
+            return Ok(());
+        };
+        let model = self.ledger.config.model_for(role).id;
+        let served = if self.stopping() {
+            Ok(())
+        } else {
+            self.serve(&lease, role, &model).await
+        };
+        if self.stopping() {
+            return Err(match last {
+                Some(label) => self.pause(label, role, ctx)?,
+                None => self.record_pause(&format!("the swap to {model}"), role, ctx)?,
+            });
+        }
+        served
+    }
+
+    /// Serves `model` alone through `lease`, waiting for the engine when
+    /// that fails; engine unavailable when it never serves.
+    async fn serve(&self, lease: &LeaseManager, role: Role, model: &str) -> Result<(), RunError> {
+        let error = match lease.serve_only(model).await {
+            Ok(()) => return Ok(()),
+            // Cannot happen while the lease is built from the run's models;
+            // the wait below would serve another model.
+            Err(LeaseError::UnknownLlm(id)) => {
+                return Err(RunError::Precondition(format!(
+                    "the {role} session's model {id} is not one the lease swaps"
+                )));
+            }
+            Err(error) => error,
+        };
+        self.log(&format!("  could not swap to {model}: {error}"));
+        let why = format!("for the {role} session's model {model}");
+        match self.wait_for_engine(&why).await {
+            None => Ok(()),
+            Some(error) => Err(RunError::EngineUnavailable(format!(
+                "{model} did not load for the {role} session: {error}"
+            ))),
         }
     }
 

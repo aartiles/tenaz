@@ -6,8 +6,25 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `tenaz init --swap-models` keeps one model of a `--model-for` map
+  loaded at a time, for models that do not fit in memory together: before
+  each session Tenaz unloads the others and loads that session's model,
+  so each review costs two loads. At every `tenaz run` start it loads
+  each model once, alone, and stops the run if one will not load. Needs
+  `--engine load-api` (Sushi, mlx-serve). `tenaz run --swap-models` and
+  `--no-swap-models` change it; it is kept as `launch.swapModels` in
+  `run.json`, and `status --json` has `swap_models`. When swapping, the
+  journal's `lease` records name the model of each `load` and `unload`,
+  and record a model the engine dropped by itself as `evicted`. See ADR
+  0015.
+
 ### Changed
 
+- The journal's `lease` records end with `ready` whenever the lease loads
+  the LLMs back: also at the start of a run, after an engine error, and
+  after a failed reload or unload, not only after a media or heavy job.
 - A context budget held at the ceiling a failed raise set, for twice the
   sessions a raise waits for then (8 to 32 with the default
   `capacityRecoverSessions`), is raised past it, halfway to the largest
