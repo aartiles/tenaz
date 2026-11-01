@@ -197,6 +197,8 @@ struct Plan {
     /// The engine drops its models as the session with this index opens
     /// (0 is the preflight).
     drop_at: Option<usize>,
+    /// A paused session's continuation is owed when the run starts.
+    owed: bool,
 }
 
 impl Plan {
@@ -205,6 +207,7 @@ impl Plan {
             role,
             scripted: ScriptedHarness::default(),
             drop_at: None,
+            owed: false,
         }
     }
 }
@@ -232,6 +235,7 @@ impl Swapped {
             input: vec!["text".into()],
         };
         ledger.config.role_models.insert(plan.role, critic);
+        ledger.pending_continuation = plan.owed;
         project.save_ledger(&ledger).unwrap();
         let harness = Arc::new(Watching {
             scripted: plan.scripted,
@@ -256,7 +260,7 @@ impl Swapped {
         let mut deps = deps(&self.project, self.vcs.clone(), self.harness.clone(), clock);
         let ids = self.project.load_ledger().unwrap().config.model_ids();
         let lease = LeaseManager::new(self.engine.clone(), ids, Gate::new(), Arc::new(|_| {}));
-        deps.lease = Some(Arc::new(lease.with_swap()));
+        deps.lease = Some(Arc::new(lease.with_swap().unwrap()));
         deps.engine = Some(self.engine.clone());
         let mut runner = Runner::open(self.project.clone(), deps, stop).unwrap();
         let options = RunOptions {
@@ -460,4 +464,36 @@ async fn an_engine_that_does_not_answer_is_told_to_start() {
         "{refusal}"
     );
     assert!(run.opened().is_empty(), "{:?}", run.opened());
+}
+
+/// A stop during the swap before a session's first try leaves an owed
+/// continuation owed: the next run still tells the session it continues a
+/// paused one.
+#[tokio::test(start_paused = true)]
+async fn a_stop_during_a_swap_keeps_an_owed_continuation() {
+    let stop = CancellationToken::new();
+    let clock: Arc<dyn Clock> = Arc::new(StopOnEngineWait {
+        clock: VirtualClock::new(),
+        stop: stop.clone(),
+    });
+    let plan = Plan {
+        owed: true,
+        ..Plan::critic_as(Role::Bootstrap)
+    };
+    let run = Swapped::run_with(OneAtATime::critic_once(), plan, clock, stop).await;
+    let paused = run
+        .project
+        .journal()
+        .into_iter()
+        .find_map(|e| match e.record {
+            JournalRecord::Paused { label, .. } => Some(label),
+            _ => None,
+        });
+    assert_eq!(
+        paused,
+        Some(Some("the swap to critic".to_owned())),
+        "{}",
+        run.log()
+    );
+    assert!(run.project.load_ledger().unwrap().pending_continuation);
 }

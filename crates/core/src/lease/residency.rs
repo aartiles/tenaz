@@ -31,21 +31,19 @@ fn loaded(listed: &[ModelState], id: &str) -> bool {
 
 impl LeaseManager {
     /// Keeps one of the run's models loaded at a time, the run's own first
-    /// (ADR 0015). A lease over fewer than two models has nothing to swap,
-    /// and an engine that cannot unload one model and keep answering
-    /// cannot swap.
-    #[must_use]
-    pub fn with_swap(mut self) -> Self {
-        if self.llm.unloads_each_model()
-            && let [run_model, _, ..] = self.llm_models.as_slice()
-        {
-            self.state.get_mut().residency = Residency::One(Resident {
-                target: run_model.clone(),
-                left: None,
-            });
-            self.swap = true;
+    /// (ADR 0015). Errs with why it cannot: the engine cannot unload one
+    /// model and keep answering, or the run has one model.
+    pub fn with_swap(mut self) -> Result<Self, &'static str> {
+        if !self.llm.unloads_each_model() {
+            return Err("the engine cannot unload one model and keep answering");
         }
-        self
+        let [run_model, _, ..] = self.llm_models.as_slice() else {
+            return Err("a run with one model has nothing to swap");
+        };
+        let target = run_model.clone();
+        self.state.get_mut().residency = Residency::One(Resident { target, left: None });
+        self.swap = true;
+        Ok(self)
     }
 
     /// Whether the lease keeps one model loaded at a time.
@@ -148,11 +146,15 @@ impl LeaseManager {
     /// As `restore`, but only for an engine that answers: one that does not
     /// is not started here, where it may only be slow.
     pub(super) async fn recover(&self, residency: &mut Residency) -> Result<(), EngineError> {
-        if let Residency::All = residency {
-            let listed = self.llm.models().await?;
-            if self.llm_models.iter().all(|id| serves(&listed, id)) {
-                return Ok(());
+        match residency {
+            Residency::All => {
+                let listed = self.llm.models().await?;
+                if self.llm_models.iter().all(|id| serves(&listed, id)) {
+                    return Ok(());
+                }
             }
+            // `serve_alone` asks the engine first and starts nothing.
+            Residency::One(_) => {}
         }
         self.restore(residency).await
     }
@@ -164,8 +166,11 @@ impl LeaseManager {
     /// `ensure_llm` loads it, and loading next to a model that would not
     /// unload is what swapping avoids.
     pub(super) async fn undo_free(&self, residency: &mut Residency) {
-        if let Residency::All = residency {
-            let _ = self.recover(residency).await;
+        match residency {
+            Residency::All => {
+                let _ = self.recover(residency).await;
+            }
+            Residency::One(_) => {}
         }
     }
 
@@ -283,7 +288,7 @@ mod tests {
     fn swapping(llm: FakeLlm) -> (Setup, Arc<FakeLlm>) {
         let llm = Arc::new(llm);
         let (manager, log, transitions) = setup_engine(llm.clone(), false, false);
-        ((manager.with_swap(), log, transitions), llm)
+        ((manager.with_swap().unwrap(), log, transitions), llm)
     }
 
     /// A swapping lease over `m` (the run's) and `r`, of which `loaded`
@@ -411,7 +416,7 @@ mod tests {
         ));
         let models = vec!["m".to_owned(), "r".to_owned()];
         let (manager, log, _) = setup_run(llm, models, false, false);
-        manager.with_swap().serve_only("r").await.unwrap();
+        manager.with_swap().unwrap().serve_only("r").await.unwrap();
         assert_eq!(log.lines(), ["llm unload m", "llm load r"]);
     }
 
@@ -437,19 +442,17 @@ mod tests {
         assert!(!manager.swaps());
     }
 
-    /// A run with one model has nothing to swap.
+    /// A run with one model has nothing to swap: swapping is refused.
     #[tokio::test]
     async fn one_model_is_not_swapped() {
         let llm = Arc::new(FakeLlm::new(&["m"], &["m"], Unload::Works));
-        let (manager, log, _) = setup_engine(llm, false, false);
-        let manager = manager.with_swap();
-        manager.prepare_llms().await.unwrap();
-        assert!(log.lines().is_empty(), "{:?}", log.lines());
-        assert!(!manager.swaps());
+        let (manager, _, _) = setup_engine(llm, false, false);
+        let refused = manager.with_swap().err();
+        assert_eq!(refused, Some("a run with one model has nothing to swap"));
     }
 
     /// An engine that cannot unload, or whose unload stops it as a whole,
-    /// cannot swap.
+    /// cannot swap: swapping is refused.
     #[tokio::test]
     async fn an_engine_that_cannot_unload_one_model_is_not_swapped() {
         let unsupported = two(&["m", "r"], Unload::Unsupported, None);
@@ -459,7 +462,11 @@ mod tests {
         };
         for llm in [unsupported, stops] {
             let (manager, _, _) = setup_engine(Arc::new(llm), false, false);
-            assert!(!manager.with_swap().swaps());
+            let refused = manager.with_swap().err();
+            assert_eq!(
+                refused,
+                Some("the engine cannot unload one model and keep answering")
+            );
         }
     }
 
@@ -738,8 +745,8 @@ mod tests {
         );
     }
 
-    /// A job whose unload fails does not run, and the resident model is
-    /// served again.
+    /// A job whose unload fails does not run, and the resident model
+    /// stays: nothing is loaded next to the model that would not unload.
     #[tokio::test]
     async fn a_job_whose_unload_fails_does_not_run() {
         let ((manager, log, _), _) = swapping(two(&["m"], Unload::FailsFor("r"), None));

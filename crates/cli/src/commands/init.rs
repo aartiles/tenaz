@@ -851,8 +851,16 @@ mod tests {
     }
 
     #[test]
-    fn swapping_is_refused_without_a_map() {
+    fn swapping_is_refused_without_a_map_or_with_a_generic_engine() {
         assert!(plan_error(&["--swap-models"]).contains("needs a --model-for map"));
+        let generic = [
+            "--swap-models",
+            "--model-for",
+            "reviewer=r",
+            "--engine",
+            "generic",
+        ];
+        assert!(plan_error(&generic).contains("needs --engine load-api"));
     }
 
     /// The picks are checked against `--model` as given.

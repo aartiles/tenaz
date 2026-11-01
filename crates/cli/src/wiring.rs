@@ -70,6 +70,18 @@ fn lease_over(
     LeaseManager::new(adapter, config.model_ids(), gate.clone(), observer)
 }
 
+/// `lease`, keeping one model loaded at a time when `swap` asks; an engine
+/// or a run that cannot swap is refused rather than run with every model
+/// loaded.
+fn swapping(lease: LeaseManager, swap: bool) -> anyhow::Result<LeaseManager> {
+    if !swap {
+        return Ok(lease);
+    }
+    lease.with_swap().map_err(|why| {
+        anyhow::anyhow!("--swap-models: {why}; tenaz run --no-swap-models turns swapping off")
+    })
+}
+
 pub struct EngineOptions {
     pub kind: EngineChoice,
     pub proxy: bool,
@@ -245,10 +257,8 @@ pub async fn wire(
         }
     };
     let gate = Gate::new();
-    let mut lease = lease_over(project, engine_adapter.clone(), config, &gate);
-    if engine.swap {
-        lease = lease.with_swap();
-    }
+    let lease = lease_over(project, engine_adapter.clone(), config, &gate);
+    let mut lease = swapping(lease, engine.swap)?;
     let mut services = Services::default();
     let mut mcp_endpoints = Vec::new();
     let media_engine = media_adapter(media, &base_url)?;
@@ -701,10 +711,53 @@ fn link_fx_skills(project: &Project, home: &Path, skills: &[SkillPin]) -> anyhow
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tenaz_adapters::engine::generic::{Commands, GenericEngine};
+    use tenaz_adapters::engine::load_api::LoadApiEngine;
+    use tenaz_core::lease::{Gate, LeaseManager};
+    use tenaz_core::ports::EngineAdapter;
+
     use super::{
         BTreeMap, Duration, MediaOptions, harness_usage, media_adapter, reasoning_effort,
-        request_defaults,
+        request_defaults, swapping,
     };
+
+    /// A lease over two models on `engine`, swapped when `swap` asks.
+    fn lease_on(engine: Arc<dyn EngineAdapter>, swap: bool) -> anyhow::Result<LeaseManager> {
+        let models = vec!["m".to_owned(), "r".to_owned()];
+        let lease = LeaseManager::new(engine, models, Gate::new(), Arc::new(|_| {}));
+        swapping(lease, swap)
+    }
+
+    /// `--swap-models` reaches the lease, which a load-api engine lets swap;
+    /// a generic engine's lease is refused instead of keeping every model.
+    #[test]
+    fn swap_models_makes_the_lease_swap_or_refuses() {
+        let load_api = || Arc::new(LoadApiEngine::new("http://127.0.0.1:1/v1"));
+        assert!(lease_on(load_api(), true).unwrap().swaps());
+        assert!(!lease_on(load_api(), false).unwrap().swaps());
+        let commands = Commands {
+            start: Some(vec!["start".into()]),
+            stop: Some(vec!["stop".into()]),
+        };
+        let generic = GenericEngine::new(
+            "g",
+            "http://127.0.0.1:1/v1",
+            commands,
+            Duration::from_secs(1),
+        );
+        let refused = lease_on(Arc::new(generic), true)
+            .err()
+            .map(|e| e.to_string());
+        assert_eq!(
+            refused.as_deref(),
+            Some(
+                "--swap-models: the engine cannot unload one model and keep answering; \
+                 tenaz run --no-swap-models turns swapping off"
+            )
+        );
+    }
 
     #[test]
     fn cached_tokens_the_engine_did_not_name_count_as_zero() {

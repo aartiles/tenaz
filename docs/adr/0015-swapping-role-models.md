@@ -1,7 +1,7 @@
 # ADR 0015: Swapping the role models
 
-Status: accepted (1A, 2A, 3A, 4A, 5A), 2026-11-01. Amends ADR 0011, where every model of the
-map is resident at once.
+Status: accepted (1A, 2A, 3A, 4A, 5A), 2026-11-01. Amends ADR 0011,
+where every model of the map is resident at once.
 
 ## Context
 
@@ -90,7 +90,8 @@ it, as it does not decide which role gets which model (ADR 0011).
 
 `init` and `run` refuse swapping with `--engine generic` (decision 6) or
 without a map; `run` checks after merging its flags into the pinned
-launch.
+launch. Building the lease refuses it too, rather than keep every model
+loaded, when the engine cannot unload one model and keep answering.
 
 ### 3. One lease operation: serve a model alone
 
@@ -109,9 +110,10 @@ launch.
   swap before a session, `ensure_llm`, the wait after an engine error, the
   wait after a heavy job, and the reload after a media or heavy job all
   serve the resident model alone (in the code, `serve_only` is the
-  session's entry and `serve_alone` the shared step). A refusal names that model and no
-  longer says to load every model at once. The resident model stays the
-  target after a swap fails, so each wait tries the whole swap again.
+  session's entry and `serve_alone` the shared step). A refusal names
+  that model and no longer says to load every model at once. The
+  resident model stays the target after a swap fails, so each wait
+  tries the whole swap again.
 - B. Change only the swap. The first engine error would load every model
   again, the out-of-memory the swap is there to avoid, and the run would
   then fail the check that every model is loaded.
@@ -129,8 +131,8 @@ show whether an engine swaps by itself.
 ### 4. When to swap
 
 - **A. Before each try of a session** (recommended). In the session loop,
-  after the prompt check of ADR 0012 and before the continuation flag is
-  taken, the lease serves the session's model alone (decision 3). That
+  after the prompt check of ADR 0012 and before the session opens, the
+  lease serves the session's model alone (decision 3). That
   covers continuations, capacity reruns and engine reruns: a model the
   engine evicted is loaded back. The swap is outside the session's timing
   and its `inflight` record. A builder after a builder needs no swap.
@@ -177,7 +179,8 @@ session, as a stop during the wait after a job does: nothing is charged.
 After an earlier try of the same session (an engine rerun, a
 continuation), the pause is at that try, with its continuation note, as
 a stop after it would be; otherwise the continuation flag is left as it
-was. On resume the check at the start (decision 5) runs again.
+was, so a continuation an earlier pause owed is still owed. On resume the
+check at the start (decision 5) runs again.
 
 ### 7. Engines and the capacity cap
 
@@ -212,9 +215,10 @@ model, so a run can show whether that is worth doing.
   gains `swap_models` (true or false). Runs without the flag are
   unchanged.
 - ADR 0011's "every model in the map must be loaded before `tenaz run`"
-  holds only without swapping; 0011 has a note pointing here. The README (the model map, "Tenaz does not swap", how it
-  compares with model swappers), `skills/tenaz/SKILL.md`, the CHANGELOG
-  and COMPATIBILITY change with it.
+  holds only without swapping; 0011 has a note pointing here. The README
+  (the model map, "Tenaz does not swap", how it compares with model
+  swappers), `skills/tenaz/SKILL.md`, the CHANGELOG and COMPATIBILITY
+  change with it.
 - Landed in steps: the lease's swap and the paths that use it; the swap
   before each session and the check at the start; the flag, its
   refusals and the docs. A real run with a pair that does not fit
