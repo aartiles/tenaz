@@ -98,6 +98,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The journal's `lease` records end with `ready` whenever the lease loads
+  the LLMs back: also at the start of a run, after an engine error, and
+  after a failed reload or unload, not only after a media or heavy job.
 - These apply to every run, with or without `--model-for`:
   - A session whose context budget is already under the cap a memory
     failure set (a card that asks for a small budget, for example) no

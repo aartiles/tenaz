@@ -335,4 +335,21 @@ mod tests {
         assert!(!engine(false, true).can_unload());
         assert!(!engine(false, false).can_unload());
     }
+
+    /// Its stop command stops every model with the engine, so a run cannot
+    /// swap its models on it (ADR 0013).
+    #[test]
+    fn a_generic_engine_does_not_unload_each_model() {
+        let commands = Commands {
+            start: Some(vec!["start".into()]),
+            stop: Some(vec!["stop".into()]),
+        };
+        let engine = GenericEngine::new(
+            "g",
+            "http://127.0.0.1:1/v1",
+            commands,
+            Duration::from_secs(1),
+        );
+        assert!(!engine.unloads_each_model());
+    }
 }

@@ -295,6 +295,12 @@ pub trait EngineAdapter: Send + Sync {
     fn can_unload(&self) -> bool {
         true
     }
+    /// Whether `unload` frees one model and leaves the engine answering,
+    /// so that a run's models can be swapped one at a time (ADR 0013).
+    /// An engine that stops as a whole cannot.
+    fn unloads_each_model(&self) -> bool {
+        false
+    }
 }
 
 /// A request to a media engine.

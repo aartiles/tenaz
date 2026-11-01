@@ -75,6 +75,11 @@ impl EngineAdapter for LoadApiEngine {
         self.post("unload-model", model, Duration::from_secs(120))
             .await
     }
+
+    /// The engine keeps answering while it unloads one model.
+    fn unloads_each_model(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +109,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let engine = LoadApiEngine::new(format!("http://127.0.0.1:{port}/v1/"));
+        assert!(engine.unloads_each_model());
         let models = engine.models().await.unwrap();
         assert_eq!(
             models[0],
