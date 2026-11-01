@@ -28,6 +28,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The agent skill no longer offers to pipe the install script into `sh`:
+  it gives Homebrew, a release archive with its checksum and attestation,
+  or `cargo install`, and points to the README for the rest. skills.sh's
+  Snyk audit flagged the script's URL as an unverifiable dependency.
 - The journal's `lease` records end with `ready` whenever the lease loads
   the LLMs back: also at the start of a run, after an engine error, and
   after a failed reload or unload, not only after a media or heavy job.
