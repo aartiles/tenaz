@@ -94,3 +94,10 @@ model's session hit it.
   stops the run before its first session, as a missing `--model` does.
 - `run.json` files without `roleModels` load as before: every role plays
   the run's model.
+
+## Amendment, 2026-11-01: swapping (ADR 0013)
+
+Option C is taken up by ADR 0013. With `--swap-models`, a run keeps one
+model of the map loaded at a time and swaps them through the lease
+before each session; "every model in the map must be loaded before
+`tenaz run`" holds only without it.
