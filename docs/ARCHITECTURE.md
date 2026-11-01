@@ -95,7 +95,7 @@ module with unit tests turns the harness's own records into those events.
 | | `tenaz-acp` (fx) | `tenaz-pi` (Pi) |
 |---|---|---|
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
-| Per session | `settings.json` written for the session's model, then `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
+| Per session | `settings.json` written for the session's model, then `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID (the session role's model) --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
 | Prompt | `session/prompt` | `{"id":"prompt-N","type":"prompt","message":...}`; a `response` that is not `success` or whose disposition is `handled` becomes `PromptRejected` |
 | Steer | fx's extension: a `session/prompt` with `_meta.fx.steer: true` while a prompt runs; otherwise dropped | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
 | Abort | `session/cancel` | `clear_queue` then `abort`; `agent_settled {aborted:true}` follows |
@@ -103,7 +103,7 @@ module with unit tests turns the harness's own records into those events.
 | Permissions | `request_permission`, answered by the runner | none: Pi's built-in tools run unasked in RPC mode |
 | Raw log | the translated events, one JSON line each; the reasoning text goes to `<label>.thinking.md` | Pi's own stdout lines, verbatim |
 | Close | end the connection, wait, kill after the grace | end stdin (Pi's orderly shutdown), wait, kill after the grace |
-| Engine path | through the proxy (usage, hold while swapping) | direct: Pi reads the provider's `baseUrl` from `~/.pi/agent/models.json`; the proxy is not on its path |
+| Engine path | through the proxy (usage, hold while swapping) | the `baseUrl` of the run's own agent directory (`.tenaz/private/pi-agent/models.json`), which points at the proxy, or at the engine with `--no-proxy` |
 
 `tenaz init --harness pi` pins `pi --version` and, when `~/.pi/agent/models.json`
 lists the provider, takes the base URL, context window and inputs from the

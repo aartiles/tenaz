@@ -593,17 +593,12 @@ fn build_harness(
                 .clone()
                 .or_else(|| config.model.split_once('/').map(|(p, _)| p.to_owned()))
                 .unwrap_or_else(|| "engine".to_owned());
-            let model = tenaz_pi::models::AgentModel {
-                provider: provider.clone(),
-                id: config.id.clone(),
-                base_url: harness_base_url,
-                context_window: config.context_window,
-                input: config.input.clone(),
-                reasoning: reasoning_effort(config.thinking.as_deref()).is_some(),
-            };
-            tenaz_pi::write_agent_dir(&agent_dir, &model, pi_template(&provider, &config.id))
+            let models = pi_models(config, &provider, &harness_base_url);
+            let template = pi_template(&provider, &config.model_ids());
+            tenaz_pi::write_agent_dir(&agent_dir, &models, template)
                 .context("cannot write Pi's agent directory")?;
-            let launch = PiLaunch::new(&options.pi_bin, format!("{provider}/{}", config.id))
+            let launch = PiLaunch::new(&options.pi_bin, config.model.clone())
+                .role_models(pi_role_models(config))
                 .thinking(
                     config
                         .thinking
@@ -678,11 +673,53 @@ fn build_harness(
     }
 }
 
-/// The user's own settings for the model, when `~/.pi/agent/models.json`
-/// lists it; the file is optional, so a broken one is only logged.
-fn pi_template(provider: &str, id: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+/// The role models a Pi session may ask for, by the names pinned in
+/// run.json (`provider/id`), each once.
+fn pi_role_models(config: &ModelConfig) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for role in config.role_models.values() {
+        if !names.contains(&role.model) {
+            names.push(role.model.clone());
+        }
+    }
+    names
+}
+
+/// The run's models as Pi's `models.json` describes them, the run's own
+/// first, each role's model once with its own window and inputs (ADR
+/// 0011), all on `provider` at `base_url`.
+fn pi_models(
+    config: &ModelConfig,
+    provider: &str,
+    base_url: &str,
+) -> Vec<tenaz_pi::models::AgentModel> {
+    let reasoning = reasoning_effort(config.thinking.as_deref()).is_some();
+    let model = |id: &str, context_window, input: &[String]| tenaz_pi::models::AgentModel {
+        provider: provider.to_owned(),
+        id: id.to_owned(),
+        base_url: base_url.to_owned(),
+        context_window,
+        input: input.to_vec(),
+        reasoning,
+    };
+    let mut models = vec![model(&config.id, config.context_window, &config.input)];
+    for role in config.role_models.values() {
+        if models.iter().all(|m| m.id != role.id) {
+            models.push(model(&role.id, role.context_window, &role.input));
+        }
+    }
+    models
+}
+
+/// The user's own settings for the run's models, when
+/// `~/.pi/agent/models.json` lists them; the file is optional, so a broken
+/// one is only logged.
+fn pi_template(
+    provider: &str,
+    ids: &[String],
+) -> Option<serde_json::Map<String, serde_json::Value>> {
     let path = tenaz_pi::models::default_models_path()?;
-    tenaz_pi::models::provider_template(&path, provider, id)
+    tenaz_pi::models::provider_template(&path, provider, ids)
         .inspect_err(|error| tracing::warn!(%error, "ignoring Pi's models.json"))
         .ok()
         .flatten()
@@ -722,6 +759,52 @@ mod tests {
         BTreeMap, Duration, MediaOptions, harness_usage, media_adapter, reasoning_effort,
         request_defaults, swapping,
     };
+
+    /// Pi's `models.json` lists the run's model first, then each role's
+    /// model once, with its own window.
+    #[test]
+    fn pi_lists_each_model_of_the_run_once() {
+        use tenaz_core::ledger::{HarnessKind, ModelConfig};
+        use tenaz_core::role::Role;
+        use tenaz_core::role_models::RoleModel;
+        let critic = RoleModel {
+            model: "sushi/critic".into(),
+            id: "critic".into(),
+            context_window: 32768,
+            input: vec!["text".into()],
+        };
+        let config = ModelConfig {
+            harness: HarnessKind::Pi,
+            harness_version: "1.1.0".into(),
+            model: "sushi/m".into(),
+            provider: Some("sushi".into()),
+            id: "m".into(),
+            base_url: None,
+            context_window: 131_072,
+            input: vec!["text".into()],
+            thinking: None,
+            role_models: BTreeMap::from([(Role::Reviewer, critic.clone()), (Role::Split, critic)]),
+        };
+        let models = super::pi_models(&config, "sushi", "http://127.0.0.1:4001/v1");
+        let summary: Vec<(&str, u64)> = models
+            .iter()
+            .map(|m| (m.id.as_str(), m.context_window))
+            .collect();
+        assert_eq!(summary, [("m", 131_072), ("critic", 32768)]);
+        assert!(
+            models
+                .iter()
+                .all(|m| m.base_url == "http://127.0.0.1:4001/v1")
+        );
+        // Every role's session finds its model among those Pi is launched with.
+        let launch = tenaz_pi::PiLaunch::new("pi", config.model.clone())
+            .role_models(super::pi_role_models(&config));
+        assert_eq!(launch.role_models, ["sushi/critic"]);
+        for role in Role::ALL {
+            let name = config.model_for(role).name;
+            assert!(launch.for_model(&name).is_some(), "{role}: {name}");
+        }
+    }
 
     /// A lease over two models on `engine`, swapped when `swap` asks.
     fn lease_on(engine: Arc<dyn EngineAdapter>, swap: bool) -> anyhow::Result<LeaseManager> {

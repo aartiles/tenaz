@@ -46,8 +46,12 @@ impl RoleModel {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RolePick {
     pub id: String,
-    /// `--context-window-for`; without it, the run's window.
+    /// `--context-window-for`, or with Pi the model's window in the user's
+    /// `models.json`; without either, the run's window.
     pub context_window: Option<u64>,
+    /// With Pi, the model's inputs in the user's `models.json`; without
+    /// them, the run's.
+    pub input: Option<Vec<String>>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -117,6 +121,7 @@ impl RoleFlags<'_> {
             let pick = RolePick {
                 id,
                 context_window: None,
+                input: None,
             };
             if picks.insert(role, pick).is_some() {
                 return Err(RoleModelError::Twice { flag: &MODEL, role });
@@ -208,8 +213,8 @@ pub struct RunDefaults<'a> {
 }
 
 /// The models to pin: each pick under the run's provider, with the run's
-/// window where it gave none. A role's model is taken to read images when
-/// the run's does: it gets the run's `input`.
+/// window and inputs where it gave none. A role's model is otherwise taken
+/// to read images when the run's does.
 pub fn pin(picks: &BTreeMap<Role, RolePick>, run: RunDefaults<'_>) -> BTreeMap<Role, RoleModel> {
     picks
         .iter()
@@ -218,7 +223,7 @@ pub fn pin(picks: &BTreeMap<Role, RolePick>, run: RunDefaults<'_>) -> BTreeMap<R
                 model: format!("{}/{}", run.provider, pick.id),
                 id: pick.id.clone(),
                 context_window: pick.context_window.unwrap_or(run.context_window),
-                input: run.input.to_vec(),
+                input: pick.input.clone().unwrap_or_else(|| run.input.to_vec()),
             };
             (*role, model)
         })
@@ -233,6 +238,7 @@ mod tests {
         RolePick {
             id: id.into(),
             context_window,
+            input: None,
         }
     }
 

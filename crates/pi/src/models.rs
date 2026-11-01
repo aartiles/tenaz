@@ -153,13 +153,14 @@ pub struct AgentModel {
     pub reasoning: bool,
 }
 
-/// The provider of `provider/id` in the user's file, as written there (API
-/// key, headers, compat settings, the model's thinking map), with only that
-/// model. `Ok(None)` when the file does not list the model.
+/// The provider of the run's models in the user's file, as written there
+/// (API key, headers, compat settings, each model's thinking map), with
+/// only those of `ids` it lists. `Ok(None)` when the file lists none of
+/// them.
 pub fn provider_template(
     path: &Path,
     provider: &str,
-    id: &str,
+    ids: &[String],
 ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, ModelsError> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -184,31 +185,38 @@ pub fn provider_template(
     else {
         return Ok(None);
     };
-    let Some(model) = config
+    let listed: Vec<serde_json::Value> = config
         .get("models")
         .and_then(serde_json::Value::as_array)
-        .and_then(|models| {
-            models
-                .iter()
-                .find(|m| m.get("id").and_then(serde_json::Value::as_str) == Some(id))
+        .into_iter()
+        .flatten()
+        .filter(|m| {
+            m.get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| ids.iter().any(|wanted| wanted == id))
         })
         .cloned()
-    else {
+        .collect();
+    if listed.is_empty() {
         return Ok(None);
-    };
-    config.insert("models".to_owned(), serde_json::Value::Array(vec![model]));
+    }
+    config.insert("models".to_owned(), serde_json::Value::Array(listed));
     Ok(Some(config))
 }
 
-/// The `models.json` of a run: one provider with the one model. Built from
-/// `template` (see [`provider_template`]) when the user's file lists the
-/// model, otherwise from scratch for an OpenAI-compatible local engine. The
-/// base URL, context window and inputs are always the run's.
+/// The `models.json` of a run: one provider with the run's `models`, its
+/// own first, all on the first one's provider and base URL. Built from
+/// `template` (see [`provider_template`]) for the models the user's file
+/// lists, otherwise from scratch for an OpenAI-compatible local engine. The
+/// base URL, context windows and inputs are always the run's.
 pub fn agent_models_json(
-    model: &AgentModel,
+    models: &[AgentModel],
     template: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> serde_json::Value {
     use serde_json::{Value, json};
+    let Some(run) = models.first() else {
+        return json!({ "providers": {} });
+    };
     let mut provider = template.unwrap_or_else(|| {
         // Local servers do not all know OpenAI's `developer` role, `store`
         // or `max_completion_tokens`; the plain forms work everywhere.
@@ -223,10 +231,36 @@ pub fn agent_models_json(
         );
         fresh
     });
-    let mut entry = provider
+    let listed = provider
         .get("models")
         .and_then(Value::as_array)
-        .and_then(|models| models.first())
+        .cloned()
+        .unwrap_or_default();
+    let entries = models
+        .iter()
+        .map(|model| model_json(model, &listed))
+        .collect();
+    provider.insert("baseUrl".to_owned(), Value::String(run.base_url.clone()));
+    provider
+        .entry("api")
+        .or_insert_with(|| Value::String("openai-completions".to_owned()));
+    // Pi lists a model only when its provider has a key; local engines
+    // ignore it. A key the user saved with `/login` lives in their
+    // `auth.json`, which the run's agent directory does not have.
+    provider
+        .entry("apiKey")
+        .or_insert_with(|| Value::String("local".to_owned()));
+    provider.insert("models".to_owned(), Value::Array(entries));
+    json!({ "providers": { &run.provider: provider } })
+}
+
+/// `model`'s entry: the user's own from `listed`, if any, with the run's
+/// context window and inputs.
+fn model_json(model: &AgentModel, listed: &[serde_json::Value]) -> serde_json::Value {
+    use serde_json::{Value, json};
+    let mut entry = listed
+        .iter()
+        .find(|m| m.get("id").and_then(Value::as_str) == Some(model.id.as_str()))
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
@@ -240,21 +274,7 @@ pub fn agent_models_json(
     entry.insert("input".to_owned(), json!(model.input));
     entry.insert("contextWindow".to_owned(), json!(model.context_window));
     entry.entry("maxTokens").or_insert(json!(16_384));
-    provider.insert("baseUrl".to_owned(), Value::String(model.base_url.clone()));
-    provider
-        .entry("api")
-        .or_insert_with(|| Value::String("openai-completions".to_owned()));
-    // Pi lists a model only when its provider has a key; local engines
-    // ignore it. A key the user saved with `/login` lives in their
-    // `auth.json`, which the run's agent directory does not have.
-    provider
-        .entry("apiKey")
-        .or_insert_with(|| Value::String("local".to_owned()));
-    provider.insert(
-        "models".to_owned(),
-        Value::Array(vec![Value::Object(entry)]),
-    );
-    json!({ "providers": { &model.provider: provider } })
+    Value::Object(entry)
 }
 
 #[cfg(test)]
@@ -347,7 +367,7 @@ mod tests {
     /// knows, in the plain `OpenAI` forms every local server accepts.
     #[test]
     fn a_model_is_described_from_scratch() {
-        let json = agent_models_json(&agent_model(), None);
+        let json = agent_models_json(&[agent_model()], None);
         assert_eq!(
             json,
             serde_json::json!({"providers": {"lmstudio": {
@@ -379,20 +399,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("models.json");
         std::fs::write(&path, SAMPLE).unwrap();
-        assert_eq!(provider_template(&path, "sushi", "Missing").unwrap(), None);
-        assert_eq!(provider_template(&path, "other", "Qwen3.8").unwrap(), None);
+        let ids = |id: &str| vec![id.to_owned()];
         assert_eq!(
-            provider_template(&dir.path().join("absent.json"), "sushi", "Qwen3.8").unwrap(),
+            provider_template(&path, "sushi", &ids("Missing")).unwrap(),
             None
         );
-        let template = provider_template(&path, "sushi", "Qwen3.8").unwrap();
+        assert_eq!(
+            provider_template(&path, "other", &ids("Qwen3.8")).unwrap(),
+            None
+        );
+        let absent = dir.path().join("absent.json");
+        assert_eq!(
+            provider_template(&absent, "sushi", &ids("Qwen3.8")).unwrap(),
+            None
+        );
+        let template = provider_template(&path, "sushi", &ids("Qwen3.8")).unwrap();
         let model = AgentModel {
             provider: "sushi".into(),
             id: "Qwen3.8".into(),
             reasoning: false,
             ..agent_model()
         };
-        let json = agent_models_json(&model, template);
+        let json = agent_models_json(&[model], template);
         let provider = &json["providers"]["sushi"];
         assert_eq!(provider["baseUrl"], "http://127.0.0.1:4001/v1");
         assert_eq!(provider["apiKey"], "local");
@@ -405,5 +433,50 @@ mod tests {
         assert_eq!(models[0]["contextWindow"], 65536);
         assert_eq!(models[0]["input"], serde_json::json!(["text"]));
         assert_eq!(models[0]["maxTokens"], 16384);
+    }
+
+    /// A model per role: every model of the run is listed, the run's first,
+    /// each with its own window; one the user's file lists keeps its
+    /// settings, one it does not is described from scratch.
+    #[test]
+    fn every_model_of_the_run_is_listed_with_its_own_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models.json");
+        std::fs::write(&path, SAMPLE).unwrap();
+        let ids = ["Qwen3.8", "Small", "Unlisted"].map(str::to_owned);
+        let template = provider_template(&path, "sushi", &ids).unwrap();
+        let model = |id: &str, context_window| AgentModel {
+            provider: "sushi".into(),
+            id: id.into(),
+            context_window,
+            ..agent_model()
+        };
+        let models = [
+            model("Qwen3.8", 131_072),
+            model("Small", 32768),
+            model("Unlisted", 65536),
+        ];
+        let json = agent_models_json(&models, template);
+        let listed = json["providers"]["sushi"]["models"].as_array().unwrap();
+        let summary: Vec<(&str, &str, u64)> = listed
+            .iter()
+            .map(|m| {
+                let window = m["contextWindow"].as_u64().unwrap();
+                (
+                    m["id"].as_str().unwrap(),
+                    m["name"].as_str().unwrap(),
+                    window,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("Qwen3.8", "Qwen", 131_072),
+                ("Small", "Small", 32768),
+                ("Unlisted", "Unlisted", 65536)
+            ]
+        );
+        assert_eq!(listed[0]["thinkingLevelMap"]["off"], "off");
     }
 }

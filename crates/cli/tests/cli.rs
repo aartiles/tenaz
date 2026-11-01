@@ -269,28 +269,91 @@ fn swap_models_is_pinned_and_checked_again_by_run() {
     );
 }
 
+/// A `HOME` whose `~/.pi/agent/models.json` lists `sushi/Qwen3.8` and
+/// `sushi/Critic`, a stand-in `pi` that answers `--version` (all init
+/// needs), and a brief, under `work`.
+struct PiHome {
+    home: std::path::PathBuf,
+    pi: std::path::PathBuf,
+    brief: std::path::PathBuf,
+}
+
+impl PiHome {
+    fn new(work: &std::path::Path) -> Self {
+        let home = work.join("home");
+        std::fs::create_dir_all(home.join(".pi/agent")).unwrap();
+        std::fs::write(
+            home.join(".pi/agent/models.json"),
+            r#"{"providers": {"sushi": {"baseUrl": "http://127.0.0.1:4321/v1", "models": [
+                {"id": "Qwen3.8", "contextWindow": 65536, "input": ["text", "image"]},
+                {"id": "Critic", "contextWindow": 32768}]}}}"#,
+        )
+        .unwrap();
+        let pi = work.join("pi");
+        tenaz_adapters::testing::write_executable(
+            &pi,
+            "#!/bin/sh\n[ \"$1\" = --version ] && echo 9.9.9-test && exit 0\nexit 1\n",
+        );
+        let brief = work.join("brief.md");
+        std::fs::write(&brief, "# Brief\n").unwrap();
+        Self { home, pi, brief }
+    }
+}
+
+/// With Pi, a role's model takes the context window and inputs
+/// `~/.pi/agent/models.json` lists for it (ADR 0011): here a text-only
+/// reviewer beside a run's model that reads images.
+#[test]
+fn init_with_pi_gives_a_role_s_model_its_window_from_models_json() {
+    let work = tempfile::tempdir().unwrap();
+    let pi_home = PiHome::new(work.path());
+    let project = work.path().join("project");
+    let init = tenaz()
+        .env("HOME", &pi_home.home)
+        .args(["init", "--project"])
+        .arg(&project)
+        .arg("--brief")
+        .arg(&pi_home.brief)
+        .arg("--pi-bin")
+        .arg(&pi_home.pi)
+        .args([
+            "--harness",
+            "pi",
+            "--provider",
+            "sushi",
+            "--model",
+            "Qwen3.8",
+        ])
+        .args(["--model-for", "reviewer=Critic"])
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let ledger: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(project.join(".tenaz/run.json")).unwrap())
+            .unwrap();
+    let critic = &ledger["config"]["roleModels"]["reviewer"];
+    assert_eq!(
+        (critic["model"].as_str(), critic["contextWindow"].as_u64()),
+        (Some("sushi/Critic"), Some(32768))
+    );
+    assert_eq!(critic["input"], serde_json::json!(["text"]));
+    assert_eq!(
+        ledger["config"]["input"],
+        serde_json::json!(["text", "image"])
+    );
+}
+
 /// `init --harness pi` pins `pi --version` and reads the provider's base URL,
 /// context window and inputs from `~/.pi/agent/models.json` when it lists
 /// the model; a model it does not list takes them from the flags.
 #[test]
 fn init_with_the_pi_harness_reads_models_json() {
     let work = tempfile::tempdir().unwrap();
-    let home = work.path().join("home");
-    std::fs::create_dir_all(home.join(".pi/agent")).unwrap();
-    std::fs::write(
-        home.join(".pi/agent/models.json"),
-        r#"{"providers": {"sushi": {"baseUrl": "http://127.0.0.1:4321/v1", "models": [
-            {"id": "Qwen3.8", "contextWindow": 65536, "input": ["text", "image"]}]}}}"#,
-    )
-    .unwrap();
-    // A stand-in for the pi executable: only `--version` is needed at init.
-    let pi = work.path().join("pi");
-    tenaz_adapters::testing::write_executable(
-        &pi,
-        "#!/bin/sh\n[ \"$1\" = --version ] && echo 9.9.9-test && exit 0\nexit 1\n",
-    );
-    let brief = work.path().join("brief.md");
-    std::fs::write(&brief, "# Brief\n").unwrap();
+    let PiHome { home, pi, brief } = PiHome::new(work.path());
     let project = work.path().join("project");
 
     let unlisted = tenaz()

@@ -66,7 +66,8 @@ differs; roles on the same model need the same window. The engine must
 have every model named loaded at once, unless they do not fit together:
 then add `--swap-models` (only with `--engine load-api`, Sushi or
 mlx-serve), and Tenaz loads one at a time, swapping before each session.
-Not with `--harness pi`.
+With `--harness pi`, a role's window and inputs are read from the user's
+`~/.pi/agent/models.json` when it lists the model.
 
 ## Write the brief
 

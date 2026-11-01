@@ -369,7 +369,9 @@ and, before each session, unloads the others and loads that session's
 model. Each review then costs two loads, to the reviewer's model and
 back. At every `tenaz run` start it loads each model once, alone, so one
 that will not load stops the run at once. `tenaz run --no-swap-models`
-goes back to keeping them all loaded. Not with `--harness pi` yet. See
+goes back to keeping them all loaded. With `--harness pi`, the run's
+`models.json` lists every model named, and a role's window and inputs
+come from your `~/.pi/agent/models.json` when it lists the model. See
 [ADR 0011](docs/adr/0011-a-model-per-role.md) and
 [ADR 0015](docs/adr/0015-swapping-role-models.md).
 
