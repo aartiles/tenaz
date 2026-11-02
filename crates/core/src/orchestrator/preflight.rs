@@ -204,7 +204,7 @@ fn outcome(preflight: &Preflight, harness: HarnessKind, allow_weak_engine: bool)
 /// Decides a measured preflight: what the run keeps, and what it means for
 /// the run (see [`outcome`]). A preflight `--allow-weak-engine` accepts is
 /// kept as passed and accepted weak; one the engine did not let run is
-/// never accepted, so it stays failed and `summary` shows it as not judged.
+/// never accepted, so it stays failed and its line shows it as not judged.
 pub(crate) fn decide(
     measured: Preflight,
     harness: HarnessKind,
@@ -248,9 +248,18 @@ fn unjudged(preflight: &Preflight) -> bool {
             .any(|e| is_engine_unavailable(e))
 }
 
-/// What `p` found, on one line, for the log and `tenaz status`. The checks
-/// of a preflight the engine did not let run are left out.
-pub(crate) fn summary(p: &Preflight) -> String {
+/// The preflight's line, the same in the run's log and in `tenaz status`:
+/// what `preflight` found, or that it has not run.
+pub(crate) fn line(preflight: Option<&Preflight>) -> String {
+    format!(
+        "Preflight: {}",
+        preflight.map_or_else(|| "not run".to_owned(), summary)
+    )
+}
+
+/// What `p` found, on one line. The checks of a preflight the engine did
+/// not let run are left out.
+fn summary(p: &Preflight) -> String {
     let errors = match p.engine_errors.len() {
         0 => String::new(),
         n => format!(" engine_errors={n}"),
@@ -728,7 +737,7 @@ mod tests {
             tools: None,
             ..weak.clone()
         };
-        for (p, line) in [
+        for (p, expected) in [
             (weak, "reasoning=true cache=false tools=true"),
             (
                 accepted,
@@ -756,8 +765,18 @@ mod tests {
             ),
             (old, "reasoning=true cache=false"),
         ] {
-            assert_eq!(summary(&p), line);
+            assert_eq!(summary(&p), expected);
         }
+    }
+
+    #[test]
+    fn the_line_says_whether_the_preflight_ran() {
+        assert_eq!(line(None), "Preflight: not run");
+        let p = second_answer_uncached(Some(true));
+        assert_eq!(
+            line(Some(&p)),
+            "Preflight: reasoning=true cache=false tools=true"
+        );
     }
 
     #[test]

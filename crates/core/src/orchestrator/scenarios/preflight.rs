@@ -82,10 +82,10 @@ async fn an_engine_that_refuses_the_preflight_stops_the_run_with_its_error() {
         log.contains("preflight: the engine answered 503: not enough memory"),
         "{log}"
     );
-    assert!(log.contains("Preflight: not judged"), "{log}");
-    let status = crate::orchestrator::status_text(&project);
-    assert!(status.contains("Preflight: not judged"), "{status}");
-    assert!(status.contains(" engine_errors=3"), "{status}");
+    assert_eq!(
+        preflight_line_in_status_and_log(&project),
+        "Preflight: not judged: the engine could not take some of its requests engine_errors=3"
+    );
 
     run_once(&project, vcs, ScriptedHarness::default(), false)
         .await
