@@ -19,7 +19,7 @@ struct Held {
 /// with watched fields are held back (sent with empty `arguments`) and the
 /// whole arguments, repaired when needed, go out in one delta just before
 /// the chunk that finishes the choice, or before `[DONE]`. Events that need
-/// no change are passed through as received.
+/// no change keep their lines as received; every event ends with `\n\n`.
 #[derive(Debug, Default)]
 pub struct StreamRepair {
     watched: ObjectArgs,
@@ -265,7 +265,7 @@ mod tests {
         let out = String::from_utf8(out).unwrap();
         assert!(
             out.starts_with(SHELL_AS_STRING[0]),
-            "untouched events pass as received"
+            "untouched events keep their lines"
         );
         let (args, finish) = assembled(&out);
         let args: Value = serde_json::from_str(&args).unwrap();
