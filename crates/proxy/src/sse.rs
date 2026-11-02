@@ -1,7 +1,9 @@
-//! Splits an SSE body into events. Bytes are held until a blank line ends
-//! an event and only then decoded, so a character the network splits
-//! across two chunks arrives whole.
+//! Splits an SSE body into events and reads the JSON of their `data:`
+//! lines.
 
+/// Splits an SSE body into events. Bytes are held until a blank line ends
+/// an event and only then decoded, so a character the network splits
+/// across two chunks arrives whole.
 #[derive(Debug, Default)]
 pub(crate) struct SseFramer {
     /// Bytes not yet terminated by a blank line.
@@ -30,6 +32,14 @@ impl SseFramer {
     }
 }
 
+/// The JSON of each `data:` line of an SSE event or body. Other lines, and
+/// data that is not JSON such as `[DONE]`, are skipped.
+pub(crate) fn data_json(text: &str) -> impl Iterator<Item = serde_json::Value> + '_ {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .filter_map(|data| serde_json::from_str(data).ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +63,15 @@ mod tests {
             ["data: 1", "data: 2"]
         );
         assert_eq!(framer.push(b": 3\n\n"), ["data: 3"]);
+    }
+
+    #[test]
+    fn only_the_json_of_data_lines_is_read() {
+        let event = "event: x\r\n: ping\r\ndata:{\"a\":1}\r\ndata: [DONE]\r\ndata: {\"b\":2}\r\n";
+        assert_eq!(
+            data_json(event).collect::<Vec<_>>(),
+            [serde_json::json!({"a": 1}), serde_json::json!({"b": 2})]
+        );
     }
 
     #[test]

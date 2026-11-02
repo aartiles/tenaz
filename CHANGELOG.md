@@ -30,11 +30,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 - With fx, an engine error that came with an error status now starts
   with that status, as Pi's errors do, then the engine's message:
-  `503: <message>`, or `500` alone when there is no message. Pi puts the
-  raw body after the status instead. It shows in the session's
-  `provider-error` watchdog event and `image_refusal`, the journal's
-  `image-continuation` `refusal`, the image continuation note and
-  `tenaz watch`.
+  `503: <message>`, or `500` alone when there is no message. The message
+  of an SSE body is that of its first `error` chunk. Pi puts the raw body
+  after the status instead. It shows in the session's `provider-error`
+  watchdog event and `image_refusal`, the journal's `image-continuation`
+  `refusal`, the image continuation note and `tenaz watch`.
 - The agent skill no longer offers to pipe the install script into `sh`:
   it gives Homebrew, a release archive with its checksum and attestation,
   or `cargo install`, and points to the README for the rest. skills.sh's

@@ -19,6 +19,32 @@ const FIRST_REQUEST: u64 = 1;
 const TOO_BIG: &str =
     "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
 
+/// The SSE error chunk read from Sushi 1.4.0's binary, without `type`,
+/// `param` and `code` (the whole chunk is in "out of memory mid stream").
+fn sse_error_chunk(message: &str) -> String {
+    let chunk = serde_json::json!({
+        "error": {"message": message},
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}]
+    });
+    format!("data: {chunk}\n\n")
+}
+
+/// The fake engine's answers with an error status, by prompt.
+fn error_reply(content: &str) -> Option<axum::response::Response> {
+    use axum::http::StatusCode;
+    let reply = match content {
+        "too big" => (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": {"message": TOO_BIG}}))).into_response(),
+        "busy" => (StatusCode::SERVICE_UNAVAILABLE, "busy").into_response(),
+        // mlx-serve 26.10.3 with no memory left (2026-11-02).
+        "no memory" => (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({"error": {"message": "not enough memory: available=0 MB", "type": "out_of_memory"}}))).into_response(),
+        // No engine has been seen to send this: an error status with an SSE
+        // body that carries an error chunk.
+        "busy, as a stream" => (StatusCode::SERVICE_UNAVAILABLE, [("content-type", "text/event-stream")], sse_error_chunk("busy in a chunk")).into_response(),
+        _ => return None,
+    };
+    Some(reply)
+}
+
 async fn fake_engine() -> SocketAddr {
     let app = axum::Router::new()
         .route("/v1/models", axum::routing::get(|| async { axum::Json(serde_json::json!({"data": [{"id": "m"}]})) }))
@@ -26,18 +52,11 @@ async fn fake_engine() -> SocketAddr {
             "/v1/chat/completions",
             axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
                 let content = body["messages"][0]["content"].as_str().unwrap_or("").to_owned();
-                if content == "too big" {
-                    return (axum::http::StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": {"message": TOO_BIG}}))).into_response();
-                }
-                if content == "busy" {
-                    return (axum::http::StatusCode::SERVICE_UNAVAILABLE, "busy").into_response();
-                }
-                // mlx-serve 26.10.3 with no memory left (2026-11-02).
-                if content == "no memory" {
-                    return (axum::http::StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({"error": {"message": "not enough memory: available=0 MB", "type": "out_of_memory"}}))).into_response();
+                if let Some(reply) = error_reply(&content) {
+                    return reply;
                 }
                 if content == "out of memory, stream kept open" {
-                    let error = "data: {\"error\":{\"message\":\"error.GenerationOutOfMemory\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n";
+                    let error = sse_error_chunk("error.GenerationOutOfMemory");
                     let body = futures::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from(error))])
                         .chain(futures::stream::pending());
                     return ([("content-type", "text/event-stream")], axum::body::Body::from_stream(body)).into_response();
@@ -362,6 +381,45 @@ async fn an_error_inside_a_stream_is_an_engine_error() {
         matches!(&events[1], ProxyEvent::Completed { usage: None, .. }),
         "{events:?}"
     );
+    handle.stop().await;
+}
+
+/// An error status with an SSE body that carries an error chunk is one
+/// engine error: the status, then the chunk's message. The preflight reads
+/// it as an engine that could not take the request, and the chunk is not
+/// reported as a second error.
+#[tokio::test]
+async fn an_error_status_with_an_error_chunk_is_one_engine_error() {
+    let (handle, events) = start(fake_engine().await, Gate::new()).await;
+    let response = reqwest::Client::new()
+        .post(format!("{}/chat/completions", handle.base_url()))
+        .json(&serde_json::json!({
+            "stream": true,
+            "messages": [{"role": "user", "content": "busy, as a stream"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 503);
+    response.text().await.unwrap();
+    let events = settle(&events, 2).await;
+    let [
+        ProxyEvent::EngineError {
+            request: FIRST_REQUEST,
+            message,
+        },
+        ProxyEvent::Completed {
+            status: 503,
+            stream: true,
+            usage: None,
+            ..
+        },
+    ] = events.as_slice()
+    else {
+        panic!("one engine error, then the completion: {events:?}");
+    };
+    assert_eq!(message, "503: busy in a chunk");
+    assert!(is_engine_unavailable(message), "{message}");
     handle.stop().await;
 }
 
