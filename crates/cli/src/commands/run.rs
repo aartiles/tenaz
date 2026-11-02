@@ -21,7 +21,8 @@ pub(crate) struct RunArgs {
     /// Continue a BLOCKED run.
     #[arg(long)]
     resume: bool,
-    /// Record a failed preflight and run anyway.
+    /// Record a failed preflight and run anyway; not when the engine could
+    /// not take its requests (out of memory, busy, not reached).
     #[arg(long)]
     allow_weak_engine: bool,
     /// Copy the binary's templates into a started run.

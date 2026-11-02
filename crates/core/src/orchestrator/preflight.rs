@@ -7,7 +7,9 @@ use std::path::Path;
 use crate::cache_report::CacheReport;
 use crate::ledger::{CacheCheck, HarnessKind, Preflight};
 use crate::metrics::{RequestRecord, engine_summary};
-use crate::session::{AssistantTurn, SessionMetrics, StopReason};
+use crate::session::{
+    AssistantTurn, SessionMetrics, StopReason, is_engine_unavailable, is_out_of_memory,
+};
 
 use super::session::HarnessRun;
 use super::{RunError, Runner};
@@ -16,6 +18,9 @@ use super::{RunError, Runner};
 /// nowhere in the prompt, so an answer with it means the tool call worked.
 pub const TOOL_PROBE_FILE: &str = "probe.txt";
 const TOOL_PROBE_WORD: &str = "marmalade-4817";
+
+/// How much of each engine error the preflight keeps.
+const ENGINE_ERROR_CHARS: usize = 500;
 
 impl Runner {
     pub(crate) async fn preflight(&mut self) -> Result<Preflight, RunError> {
@@ -86,10 +91,19 @@ fn read_preflight(
         duration_ms: m.duration_ms,
         engine_metrics: requests.iter().any(|r| r.engine_matched),
         engine: engine_summary(requests),
+        engine_errors: engine_errors(m),
         accepted_weak: false,
     };
     p.ok = p.settled && p.reasoning && p.cache_check().passes() && tools && p.vision != Some(false);
     p
+}
+
+/// What the engine answered to each request of `m` it failed, cut to
+/// [`ENGINE_ERROR_CHARS`].
+fn engine_errors(m: &SessionMetrics) -> Vec<String> {
+    m.engine_errors()
+        .map(|message| message.chars().take(ENGINE_ERROR_CHARS).collect())
+        .collect()
 }
 
 /// The second prompt's answer: the first message after one that ended
@@ -143,11 +157,88 @@ pub(crate) fn warnings(preflight: &Preflight) -> Option<&'static str> {
     )
 }
 
-/// What failed in `preflight`, in words, for the error that stops the run.
-pub(crate) fn failures(harness: HarnessKind, preflight: Option<&Preflight>) -> String {
-    let Some(p) = preflight else {
-        return "no result".to_owned();
-    };
+/// What a measured preflight means for the run.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    Passed,
+    /// It failed, and `--allow-weak-engine` runs anyway.
+    AcceptedWeak,
+    /// The run stops with this error.
+    Stop(String),
+}
+
+/// What `preflight`, run through `harness`, means for the run, with
+/// `--allow-weak-engine` when `allow_weak_engine`. A failure while the
+/// engine could not take requests stops the run whatever the flag says:
+/// the preflight did not measure the model, and one accepted now would
+/// never be run again.
+pub(crate) fn outcome(
+    preflight: &Preflight,
+    harness: HarnessKind,
+    allow_weak_engine: bool,
+) -> Outcome {
+    if preflight.ok {
+        return Outcome::Passed;
+    }
+    let details = details(harness);
+    let unavailable = unavailable_errors(preflight);
+    if !unavailable.is_empty() {
+        let advice = if unavailable.iter().any(|e| is_out_of_memory(e)) {
+            "it ran out of memory: free some, or unload other models"
+        } else {
+            "see the engine's own log"
+        };
+        return Outcome::Stop(format!(
+            "Engine preflight failed: the engine could not take its requests: {}. That is \
+             the engine's error, not something the model lacks; {advice}, then run again. \
+             Details in {details}.",
+            unavailable.join(" | ")
+        ));
+    }
+    if allow_weak_engine {
+        return Outcome::AcceptedWeak;
+    }
+    Outcome::Stop(format!(
+        "Engine preflight failed: {}. Details in {details}; pass --allow-weak-engine to run anyway.",
+        failures(harness, preflight)
+    ))
+}
+
+/// The errors, each once, of an engine that could not take the
+/// preflight's requests (out of memory, busy, not reached). A refused image
+/// or a bad request is left to the checks.
+fn unavailable_errors(preflight: &Preflight) -> Vec<&str> {
+    let mut errors: Vec<&str> = Vec::new();
+    for error in preflight
+        .engine_errors
+        .iter()
+        .filter(|e| is_engine_unavailable(e))
+    {
+        if !errors.contains(&error.as_str()) {
+            errors.push(error);
+        }
+    }
+    errors
+}
+
+/// The first error the engine answered the preflight with, for the run's
+/// log.
+pub(crate) fn engine_error_note(preflight: &Preflight) -> Option<String> {
+    let error = preflight.engine_errors.first()?;
+    Some(format!("  preflight: the engine answered {error}"))
+}
+
+/// Where a failed preflight's details are for `harness`: `run.json`, and
+/// fx's own log of the session (Pi and the scripted harness keep none).
+fn details(harness: HarnessKind) -> &'static str {
+    match harness {
+        HarnessKind::Fx => ".tenaz/run.json \"preflight\" and .tenaz/private/preflight.fx-acp.log",
+        HarnessKind::Pi | HarnessKind::Fake => ".tenaz/run.json \"preflight\"",
+    }
+}
+
+/// What failed in `p`, in words, for the error that stops the run.
+fn failures(harness: HarnessKind, p: &Preflight) -> String {
     let mut failed = Vec::new();
     if !p.settled {
         failed.push("the session did not finish".to_owned());
@@ -270,13 +361,14 @@ mod tests {
             duration_ms: 0,
             engine_metrics: false,
             engine: None,
+            engine_errors: Vec::new(),
             accepted_weak: false,
         };
-        let text = failures(HarnessKind::Fx, Some(&p));
+        let text = failures(HarnessKind::Fx, &p);
         assert!(text.contains("with fx's shell tool"), "{text}");
         assert!(!text.contains("cache"), "{text}");
         let old = Preflight { tools: None, ..p };
-        assert_eq!(failures(HarnessKind::Fx, Some(&old)), "no check failed");
+        assert_eq!(failures(HarnessKind::Fx, &old), "no check failed");
     }
 
     fn turn(stop_reason: StopReason, cache_read: u64) -> AssistantTurn {
@@ -353,13 +445,22 @@ mod tests {
         assert!(p.ok);
     }
 
-    /// A preflight whose second answer read nothing from the cache, with
-    /// `cache_reported` from the engine proxy.
-    fn second_answer_uncached(cache_reported: Option<bool>) -> Preflight {
+    /// A preflight session whose second answer read nothing from the cache.
+    fn second_answer_uncached_metrics() -> SessionMetrics {
         let mut m = with_image_answer("");
         // The second answer, the one after the first that stopped.
         m.assistant[1] = turn(StopReason::Stop, 0);
-        read_preflight(&m, &[], false, cache_reported)
+        m
+    }
+
+    /// That preflight, with `cache_reported` from the engine proxy.
+    fn second_answer_uncached(cache_reported: Option<bool>) -> Preflight {
+        read_preflight(
+            &second_answer_uncached_metrics(),
+            &[],
+            false,
+            cache_reported,
+        )
     }
 
     #[test]
@@ -367,7 +468,7 @@ mod tests {
         let p = second_answer_uncached(Some(true));
         assert!(!p.ok);
         assert_eq!(p.cache_check(), CacheCheck::NotReused);
-        let text = failures(HarnessKind::Pi, Some(&p));
+        let text = failures(HarnessKind::Pi, &p);
         assert!(
             text.contains("did not reuse the cached prompt prefix"),
             "{text}"
@@ -381,7 +482,7 @@ mod tests {
         assert!(p.ok);
         assert!(!p.cache);
         assert_eq!(p.cache_check().to_string(), "not reported");
-        assert_eq!(failures(HarnessKind::Pi, Some(&p)), "no check failed");
+        assert_eq!(failures(HarnessKind::Pi, &p), "no check failed");
         assert!(warnings(&p).is_some_and(|w| w.contains("does not report cached prompt tokens")));
     }
 
@@ -400,6 +501,144 @@ mod tests {
         let old: Preflight = serde_json::from_value(json).unwrap();
         assert_eq!(old.cache_reported, None);
         assert_eq!(old.cache_check(), CacheCheck::Reused);
+    }
+
+    /// What mlx-serve 26.10.3 answered to each preflight request on
+    /// 2026-11-02, with no memory left for them.
+    const OUT_OF_MEMORY: &str = "503: {\"error\":{\"message\":\"not enough memory: available=0 MB\",\"type\":\"out_of_memory\"}}";
+
+    /// The event the watchdog records for a request the engine failed.
+    fn provider_error(message: &str) -> crate::session::WatchdogEvent {
+        crate::session::WatchdogEvent {
+            kind: crate::session::PROVIDER_ERROR.to_owned(),
+            detail: Some(message.to_owned()),
+            turn: 0,
+            ms: 0,
+        }
+    }
+
+    /// A preflight session in which the engine failed every one of the
+    /// three requests with `message`.
+    fn refused(message: &str) -> SessionMetrics {
+        SessionMetrics {
+            settled: true,
+            events: vec![provider_error(message); 3],
+            assistant: vec![turn(StopReason::Error, 0); 3],
+            ..Default::default()
+        }
+    }
+
+    /// The error that stops the run after preflight `p` without
+    /// `--allow-weak-engine`; a panic when it does not stop.
+    fn stop(p: &Preflight) -> String {
+        match outcome(p, HarnessKind::Pi, false) {
+            Outcome::Stop(error) => error,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_engine_out_of_memory_is_named_not_the_model() {
+        let p = read_preflight(&refused(OUT_OF_MEMORY), &[], false, Some(true));
+        assert_eq!(p.engine_errors, vec![OUT_OF_MEMORY.to_owned(); 3]);
+        let text = stop(&p);
+        assert_eq!(text.matches("available=0 MB").count(), 1, "{text}");
+        assert!(
+            text.contains("could not take its requests: 503: "),
+            "{text}"
+        );
+        assert!(text.contains("ran out of memory"), "{text}");
+        for blame in ["no reasoning", "cached prompt prefix", "shell tool"] {
+            assert!(!text.contains(blame), "{blame} in {text}");
+        }
+        assert!(!text.contains("allow-weak-engine"), "{text}");
+    }
+
+    #[test]
+    fn allow_weak_engine_does_not_accept_an_engine_out_of_memory() {
+        let p = read_preflight(&refused(OUT_OF_MEMORY), &[], false, Some(true));
+        let accepted = outcome(&p, HarnessKind::Pi, true);
+        assert!(matches!(accepted, Outcome::Stop(_)), "{accepted:?}");
+    }
+
+    /// One server error is enough, even beside a check that failed on its
+    /// own; different errors are each named, and only memory is blamed on
+    /// memory.
+    #[test]
+    fn one_server_error_stops_the_run_and_each_error_is_named() {
+        let mut m = second_answer_uncached_metrics();
+        m.events = vec![provider_error("503: busy")];
+        let p = read_preflight(&m, &[], false, Some(true));
+        let one = stop(&p);
+        assert!(one.contains("requests: 503: busy."), "{one}");
+        assert!(one.contains("see the engine's own log"), "{one}");
+        assert!(!one.contains("cached prompt prefix"), "{one}");
+        let accepted = outcome(&p, HarnessKind::Pi, true);
+        assert!(matches!(accepted, Outcome::Stop(_)), "{accepted:?}");
+        m.events.push(provider_error("engine unreachable: refused"));
+        let two = stop(&read_preflight(&m, &[], false, Some(true)));
+        assert!(
+            two.contains("503: busy | engine unreachable: refused"),
+            "{two}"
+        );
+    }
+
+    /// A refused image is the model's or the request's: the image check
+    /// fails, and `--allow-weak-engine` may accept it.
+    #[test]
+    fn a_refused_image_is_left_to_the_checks() {
+        let mut m = with_image_answer("");
+        m.events = vec![provider_error("400: at most 0 images per request")];
+        let p = read_preflight(&m, &[], true, None);
+        assert_eq!(p.vision, Some(false));
+        assert!(stop(&p).contains("did not read the test image"));
+        assert_eq!(outcome(&p, HarnessKind::Pi, true), Outcome::AcceptedWeak);
+    }
+
+    #[test]
+    fn an_engine_error_with_every_check_passing_passes() {
+        let mut m = with_image_answer("");
+        m.events = vec![provider_error("503: busy")];
+        let p = read_preflight(&m, &[], false, None);
+        assert_eq!(p.engine_errors, ["503: busy"]);
+        assert_eq!(outcome(&p, HarnessKind::Pi, false), Outcome::Passed);
+    }
+
+    #[test]
+    fn a_weak_engine_is_accepted_only_when_asked() {
+        let p = second_answer_uncached(Some(true));
+        assert!(stop(&p).ends_with("pass --allow-weak-engine to run anyway."));
+        assert_eq!(outcome(&p, HarnessKind::Pi, true), Outcome::AcceptedWeak);
+    }
+
+    #[test]
+    fn a_long_engine_error_is_cut_by_characters() {
+        let long = "é".repeat(ENGINE_ERROR_CHARS * 2);
+        let p = read_preflight(&refused(&long), &[], false, None);
+        let kept = &p.engine_errors[0];
+        assert_eq!(kept.chars().count(), ENGINE_ERROR_CHARS);
+        assert!(long.starts_with(kept.as_str()));
+    }
+
+    #[test]
+    fn only_fx_is_pointed_to_a_preflight_log() {
+        let p = second_answer_uncached(Some(true));
+        let stop_with = |harness| match outcome(&p, harness, false) {
+            Outcome::Stop(error) => error,
+            other => panic!("{other:?}"),
+        };
+        let fx = stop_with(HarnessKind::Fx);
+        assert!(
+            fx.contains("and .tenaz/private/preflight.fx-acp.log;"),
+            "{fx}"
+        );
+        for harness in [HarnessKind::Pi, HarnessKind::Fake] {
+            let text = stop_with(harness);
+            assert!(
+                text.contains("Details in .tenaz/run.json \"preflight\";"),
+                "{text}"
+            );
+        }
     }
 
     #[test]

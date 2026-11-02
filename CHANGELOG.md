@@ -50,6 +50,21 @@ uses [Semantic Versioning](https://semver.org/).
   the budget stayed there for hours after the pressure was gone, with
   sessions reaching 77257 tokens unharmed. See ADR 0014.
 
+### Fixed
+
+- When the engine cannot take the preflight's requests, `tenaz run` now
+  stops with the engine's error and says it is the engine's. It used to
+  report no reasoning, no cached prefix and a failed tool call, and advise
+  another model. This covers an engine out of memory (mlx-serve answers
+  503), one that answers 502, 503 or 504, and one not reached.
+  `--allow-weak-engine` does not accept such a preflight, so the next run
+  measures it again. Other engine errors, such as a refused image or a 400
+  or 500 not about memory, are still left to the checks and the flag.
+  `run.json`'s `preflight` keeps the engine's errors in `engine_errors`,
+  the log names the first, and `tenaz status` counts them. A failed
+  preflight points to `.tenaz/private/preflight.fx-acp.log` only with fx:
+  Pi keeps no log of it.
+
 ## [0.3.0] - 2026-10-31
 
 ### Added
