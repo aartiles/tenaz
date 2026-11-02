@@ -267,10 +267,13 @@ fn summary(p: &Preflight) -> String {
     if unjudged(p) {
         return format!("not judged: the engine could not take some of its requests{errors}");
     }
-    let mut parts = vec![
-        format!("reasoning={}", p.reasoning),
-        format!("cache={}", p.cache_check()),
-    ];
+    let mut parts = Vec::new();
+    // Shown only when false: a session that finished is the usual case.
+    if !p.settled {
+        parts.push("settled=false".to_owned());
+    }
+    parts.push(format!("reasoning={}", p.reasoning));
+    parts.push(format!("cache={}", p.cache_check()));
     parts.extend(p.tools.map(|t| format!("tools={t}")));
     parts.extend(p.vision.map(|v| format!("vision={v}")));
     if p.accepted_weak {
@@ -493,6 +496,18 @@ mod tests {
         let p = read_preflight(&m, &[], true, None);
         assert_eq!(p.vision, Some(false));
         assert!(!p.ok);
+    }
+
+    /// A session that did not finish fails the preflight on its own, as a
+    /// judged check that `--allow-weak-engine` can accept.
+    #[test]
+    fn an_unfinished_session_fails_the_preflight() {
+        let mut m = with_image_answer("");
+        m.settled = false;
+        let p = read_preflight(&m, &[], false, None);
+        assert!(!p.ok);
+        assert!(stop(&p).contains("the session did not finish"));
+        assert_eq!(outcome(&p, HarnessKind::Pi, true), Outcome::AcceptedWeak);
     }
 
     #[test]
@@ -723,7 +738,8 @@ mod tests {
     /// accepted), engine errors beside passing checks, a refused image, a
     /// vision model's image answer (right, wrong, and wrong but accepted
     /// weak, so a preflight that failed only on the image does not read
-    /// like a pass), and a preflight from before the tool check.
+    /// like a pass), a session that did not finish (for the same reason),
+    /// and a preflight from before the tool check.
     #[test]
     fn judged_checks_are_shown_with_the_engine_errors() {
         let weak = second_answer_uncached(Some(true));
@@ -733,6 +749,8 @@ mod tests {
         let mut image = with_image_answer("");
         image.events = vec![provider_error("400: at most 0 images per request")];
         let image_answer = |answer| read_preflight(&with_image_answer(answer), &[], true, None);
+        let mut unfinished = with_image_answer("");
+        unfinished.settled = false;
         let old = Preflight {
             tools: None,
             ..weak.clone()
@@ -762,6 +780,10 @@ mod tests {
             (
                 decide(image_answer("blue, red"), HarnessKind::Pi, true).0,
                 "reasoning=true cache=true tools=true vision=false (accepted weak)",
+            ),
+            (
+                read_preflight(&unfinished, &[], false, None),
+                "settled=false reasoning=true cache=true tools=true",
             ),
             (old, "reasoning=true cache=false"),
         ] {
