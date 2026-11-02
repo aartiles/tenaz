@@ -11,10 +11,10 @@ below; this page is about the real ones.
 | Platform | macOS arm64 | Tested. |
 | | Linux x86_64 | Builds and passes the test suite in CI. Not run against a real engine yet; no memory sampling (the probe is macOS only). |
 | | Windows | Not supported. |
-| Harness | [fx](https://github.com/vercel-labs/fx) 0.0.14 over ACP | Tested end to end: preflight, bootstrap, build, review, steering, pause and resume. |
-| | [Pi](https://github.com/earendil-works/pi) 1.1.0 in RPC mode | Tested end to end to a COMPLETE run with the user's own `models.json`. The generated configuration, through the proxy, is tested against a mock engine only. No media tools (see below). |
+| Harness | [fx](https://github.com/vercel-labs/fx) 0.0.14 and 0.0.15 over ACP | Tested end to end: preflight, bootstrap, build, review, steering, pause and resume. |
+| | [Pi](https://github.com/earendil-works/pi) 1.1.0 and 1.4.0 in RPC mode | Tested end to end to a COMPLETE run: 1.1.0 with the user's own `models.json`, 1.4.0 with the generated configuration through the proxy and two models (see Known gaps). No media tools (see below). |
 | | Other ACP agents | Should work through the same adapter; fx-specific settings are only applied to fx. Untested. |
-| Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve's load and unload through the API are tested against a mock only. |
+| Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve 26.10.3 loaded and unloaded two models through its API in two runs that swapped them (see Known gaps). |
 | | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run, before the start was skipped for an engine that still serves the model (see Known gaps). The servers named here are untried. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
@@ -95,7 +95,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - fx runs with an isolated `HOME` under `.tenaz/private/fx-home/`, so your
   own fx settings and MCP servers are not touched. Pi runs with its own
   agent directory, `.tenaz/private/pi-agent/` (`PI_CODING_AGENT_DIR`),
-  holding a `models.json` with the run's one model, pointed at the proxy,
+  holding a `models.json` with the run's models, pointed at the proxy,
   and a `settings.json` with a 15-minute HTTP idle timeout and install
   telemetry off. A model your `~/.pi/agent/models.json` lists is copied
   from there with its provider settings; one it does not list is
@@ -145,24 +145,47 @@ above), so a 32k context is the practical floor (`contextFloor`).
   real run has used it yet. With Pi, each session's Pi process is
   launched with its role's model, and the run's `models.json` lists every
   model of the map; a role's window and inputs come from the user's
-  `~/.pi/agent/models.json` when it lists the model. Tested with a
-  stand-in Pi that records its arguments, not with Pi 1.1.0 and two
-  models.
+  `~/.pi/agent/models.json` when it lists the model. Run once with Pi
+  1.4.0 and two models on mlx-serve 26.10.3, swapped (2026-11-02, see
+  below): Pi's own session files name the builder's model for the
+  builder's sessions and the run's model for the others, and mlx-serve's
+  log shows no load Tenaz did not ask for. Not run with a role's model
+  listed in the user's `models.json` under the run's provider.
 
-- **Swapping the role models** (`--swap-models`, ADR 0015). Tested with
-  fake engines and scripted runs only: not yet run against mlx-serve or
-  Sushi, nor with a pair that does not fit together, such as Flint int4
-  and Qwen3.8-27B. How long a swap takes on those engines is not
-  measured; the journal's `lease` records will say. Whether mlx-serve or
-  Sushi load a model by themselves when a request names one that is not
-  loaded is not known: a run would show it as `evicted` records. Only the
+- **Swapping the role models** (`--swap-models`, ADR 0015). Run twice on
+  2026-11-02 with mlx-serve 26.10.3 on a 64 GB Mac, with Flint int4
+  and Qwen3.8-27B 4-bit (21 GB and 17 GB resident, as mlx-serve reports
+  them), on a one-page goal for a small Python package:
+  - fx 0.0.15, Qwen3.8-27B for the run and Flint as the builder: 11
+    sessions, paused by hand during the eleventh, a reviewer. The check
+    at the start loaded each model in turn (Flint 3.5 s, Qwen 6.1 s) and
+    left Qwen resident; four swaps went through, before the first
+    builder, the split, the first builder after it and a reviewer. Flint
+    failed its task three times, and the task was split; the first new
+    task took three builder sessions too.
+  - Pi 1.4.0, Flint for the run and Qwen3.8-27B as the builder: COMPLETE
+    in 28 minutes and 8 sessions, both tasks done at the first try.
+    Four swaps went through, one before each builder and reviewer; the
+    final review needed none.
+
+  An unload took 37 to 84 ms, a load of Flint 2.1 to 3.5 s and of Qwen
+  3.7 to 6.1 s. No builder after a builder swapped, no run journaled
+  `evicted`, memory pressure stayed normal, and mlx-serve refused no
+  prompt for memory. Not run against Sushi, which served neither model
+  here; whether Sushi loads a model by itself when a request names one
+  that is not loaded is not known. Not run with a model that barely
+  fits alone either: Qwen3.8-Flash loaded in mlx-serve only with
+  `--skip-mem-preflight`, and mlx-serve then refused the preflight's
+  three prompts for memory (see the next entry). A swap that fails,
+  and a stop during a swap, are tested with fake engines only. Only the
   load-api engine swaps; a generic engine is refused, since its stop
   ends every model.
 
 - **The preflight and an engine's refusal.** On 2026-11-02 mlx-serve
   26.10.3 refused the three preflight prompts for memory (HTTP 503) under
-  Pi 1.4.0. The run stopped saying there was no reasoning, no reused
-  prefix and no tool call, advised another model, and pointed to
+  Pi 1.4.0, with Qwen3.8-Flash loaded through `--skip-mem-preflight`.
+  The run stopped saying there was no reasoning, no reused prefix and
+  no tool call, advised another model, and pointed to
   `.tenaz/private/preflight.*`, which Pi never writes. The preflight now
   stops with the engine's error when the engine ran out of memory,
   answered 502, 503 or 504, or was not reached, and names only files the
@@ -357,8 +380,11 @@ above), so a 32k context is the practical floor (`contextFloor`).
   model that writes more than its step has the later steps passed by
   their checks. Run once with fx and Qwen3.8 27B on TensorFold
   (image-landing, 2026-10-25): three sessions, 13 minutes, each step
-  passed on its first attempt. Not yet run with Pi or on an existing
-  project.
+  passed on its first attempt. On 2026-11-02, in the two runs that
+  swapped role models (fx 0.0.15 with Qwen3.8-27B, Pi 1.4.0 with Flint
+  int4, on mlx-serve 26.10.3; see Known gaps), it ran on an existing
+  project, a small Python package: three sessions each, every step
+  passed on its first attempt.
 - `maxBootstrapAttempts` applies to each bootstrap step. A pause during a bootstrap session counts as one of its attempts. An
   attempt that leaves fewer problems than the one before does not count,
   up to `maxBootstrapAttempts` such attempts. `--resume` on a run blocked
@@ -376,9 +402,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   delivered commit as Tenaz rather than as you (amend it with
   `git commit --amend --reset-author` if needed), and with
   `--remove-worktree` it removes the run's worktree without asking for
-  confirmation. The existing-project mode (`.tenaz/verify` and
-  the bootstrap section) has only been exercised with the scripted harness,
-  not yet with a real model.
+  confirmation. The existing-project mode (`.tenaz/verify` and the
+  bootstrap section) ran with fx 0.0.15 and Pi 1.4.0 on a small Python
+  package (2026-11-02, see the bootstrap above); not yet on a large
+  repository.
 - Whether fx loads the project's `AGENTS.md` by itself has not been
   checked; Pi does. The Tenaz protocol is in every prompt either way.
 - **Install script and Homebrew formula.** Both installed `tenaz` 0.1.0
