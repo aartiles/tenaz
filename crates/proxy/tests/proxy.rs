@@ -9,6 +9,7 @@ use std::time::Duration;
 use axum::response::IntoResponse;
 use futures::StreamExt;
 use tenaz_core::lease::Gate;
+use tenaz_core::session::is_engine_unavailable;
 use tenaz_proxy::{EngineErrorKind, Proxy, ProxyEvent, ProxyUsage};
 
 async fn fake_engine() -> SocketAddr {
@@ -20,6 +21,13 @@ async fn fake_engine() -> SocketAddr {
                 let content = body["messages"][0]["content"].as_str().unwrap_or("").to_owned();
                 if content == "too big" {
                     return (axum::http::StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": {"message": "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}))).into_response();
+                }
+                if content == "busy" {
+                    return (axum::http::StatusCode::SERVICE_UNAVAILABLE, "busy").into_response();
+                }
+                // mlx-serve 26.10.3 with no memory left (2026-11-02).
+                if content == "no memory" {
+                    return (axum::http::StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({"error": {"message": "not enough memory: available=0 MB", "type": "out_of_memory"}}))).into_response();
                 }
                 if content == "out of memory, stream kept open" {
                     let error = "data: {\"error\":{\"message\":\"error.GenerationOutOfMemory\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n";
@@ -267,34 +275,63 @@ async fn an_unreachable_engine_is_a_502_with_an_event() {
         .unwrap();
     assert_eq!(response.status(), 502);
     let events = settle(&events, 1).await;
-    assert!(matches!(
-        events[0],
-        ProxyEvent::EngineError {
-            kind: EngineErrorKind::Unreachable,
-            ..
-        }
-    ));
+    assert!(
+        matches!(
+            &events[0],
+            ProxyEvent::EngineError {
+                kind: EngineErrorKind::Unreachable,
+                message,
+                ..
+            } if is_engine_unavailable(message)
+        ),
+        "{events:?}"
+    );
     handle.stop().await;
 }
 
-/// An engine's error after an error status starts with that status.
+/// An engine's error after an error status starts with that status. The
+/// preflight reads a busy engine, and mlx-serve's answer when it has no
+/// memory left, as an engine that could not take the request; a prompt too
+/// large for it is not.
 #[tokio::test]
 async fn an_error_status_leads_the_engine_error() {
     let (handle, events) = start(fake_engine().await, Gate::new()).await;
-    reqwest::Client::new()
-        .post(format!("{}/chat/completions", handle.base_url()))
-        .json(&serde_json::json!({"messages": [{"role": "user", "content": "too big"}]}))
-        .send()
-        .await
-        .unwrap();
-    let events = settle(&events, 2).await;
-    let message = events.iter().find_map(|e| match e {
-        ProxyEvent::EngineError { message, .. } => Some(message.as_str()),
-        _ => None,
-    });
-    let expected =
+    let client = reqwest::Client::new();
+    let capacity =
         "400: Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
-    assert_eq!(message, Some(expected), "{events:?}");
+    for (content, expected, kind, unavailable) in [
+        ("busy", "503: busy", EngineErrorKind::Other, true),
+        (
+            "no memory",
+            "503: not enough memory: available=0 MB",
+            EngineErrorKind::OutOfMemory,
+            true,
+        ),
+        (
+            "too big",
+            capacity,
+            EngineErrorKind::Capacity { max_context: 61488 },
+            false,
+        ),
+    ] {
+        events.lock().unwrap().clear();
+        client
+            .post(format!("{}/chat/completions", handle.base_url()))
+            .json(&serde_json::json!({"messages": [{"role": "user", "content": content}]}))
+            .send()
+            .await
+            .unwrap();
+        let seen = settle(&events, 2).await;
+        let (message, seen_kind) = seen
+            .iter()
+            .find_map(|e| match e {
+                ProxyEvent::EngineError { message, kind, .. } => Some((message.as_str(), kind)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{content}: no engine error in {seen:?}"));
+        assert_eq!((message, seen_kind), (expected, &kind), "{content}");
+        assert_eq!(is_engine_unavailable(message), unavailable, "{message}");
+    }
     handle.stop().await;
 }
 

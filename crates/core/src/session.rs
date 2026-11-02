@@ -402,11 +402,13 @@ static OUT_OF_MEMORY: LazyLock<Regex> = LazyLock::new(|| {
     )
     .expect("static regex")
 });
+/// How the engine proxy's error for an engine it could not reach starts.
+const ENGINE_UNREACHABLE: &str = "engine unreachable";
 static UNAVAILABLE: LazyLock<Regex> = LazyLock::new(|| {
-    // A server too busy or not there (502, 503, 504), as the engine proxy
-    // and Pi lead an error with its status, or the proxy's own note for an
-    // engine it could not reach.
-    Regex::new(r"^(?:50[234]\b|engine unreachable)").expect("static regex")
+    // A server too busy or not there (502, 503, 504), as engine_error_text
+    // leads an error with its status, or an engine not reached.
+    let unreachable = regex::escape(ENGINE_UNREACHABLE);
+    Regex::new(&format!(r"^(?:50[234]\b|{unreachable})")).expect("static regex")
 });
 static IMAGE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)at most \d+ images|image tokens|\bimage \d+ |images need|does not decode")
@@ -427,6 +429,22 @@ pub fn capacity_limit(error: &str) -> Option<u64> {
 /// same prompt fits again once the memory is back.
 pub fn is_out_of_memory(error: &str) -> bool {
     OUT_OF_MEMORY.is_match(error)
+}
+
+/// An engine's error after an error `status`, as Tenaz records it: led by
+/// the status (`503: <message>`), or the status alone without a message.
+/// Pi records its errors the same way, with the raw body as the message.
+pub fn engine_error_text(status: u16, message: &str) -> String {
+    if message.is_empty() {
+        status.to_string()
+    } else {
+        format!("{status}: {message}")
+    }
+}
+
+/// The engine proxy's error for an engine it could not reach.
+pub fn engine_unreachable_text(error: impl std::fmt::Display) -> String {
+    format!("{ENGINE_UNREACHABLE}: {error}")
 }
 
 /// The engine could not take the request now, whatever was asked: it ran
@@ -629,6 +647,14 @@ mod tests {
         let msg = "400: {\"message\":\"Prompt (98353 tokens) requires ~4406MB GPU memory but only ~3494MB is available. Maximum context at KV8 and prefill chunk 512: 61488 tokens.\"}";
         assert_eq!(capacity_limit(msg), Some(61488));
         assert_eq!(capacity_limit("400: not enough GPU memory"), None);
+    }
+
+    /// The text the engine proxy records is the text the preflight reads.
+    #[test]
+    fn a_recorded_server_error_says_the_engine_is_unavailable() {
+        assert!(is_engine_unavailable(&engine_error_text(503, "busy")));
+        assert!(is_engine_unavailable(&engine_unreachable_text("refused")));
+        assert!(!is_engine_unavailable(&engine_error_text(500, "template")));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tenaz_core::session::{capacity_limit, is_image_refusal, is_out_of_memory};
+use tenaz_core::session::{capacity_limit, engine_error_text, is_image_refusal, is_out_of_memory};
 
 /// Token usage of one engine response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,12 +168,7 @@ fn read_error_body(body: &[u8]) -> (String, EngineErrorKind) {
 /// and what the message alone means.
 pub(crate) fn classify_error(status: u16, body: &[u8]) -> (String, EngineErrorKind) {
     let (message, kind) = read_error_body(body);
-    let text = if message.is_empty() {
-        status.to_string()
-    } else {
-        format!("{status}: {message}")
-    };
-    (text, kind)
+    (engine_error_text(status, &message), kind)
 }
 
 /// The error an engine sent inside a stream that had started well (status
