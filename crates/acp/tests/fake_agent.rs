@@ -378,7 +378,7 @@ async fn proxy_observations_become_per_request_turns() {
     })
     .unwrap();
     feed.send(EngineObservation::Error {
-        message: "Maximum context at KV8 and prefill chunk 512: 61488 tokens.".into(),
+        message: "400: Maximum context at KV8 and prefill chunk 512: 61488 tokens.".into(),
     })
     .unwrap();
     let events = drain(&mut session, PermissionDecision::Allow).await;

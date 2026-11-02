@@ -39,6 +39,15 @@ The preflight runs before the first session and checks:
   `--no-proxy` Tenaz cannot see that, and such an engine fails.
 - **Vision**, only when the project was initialised with `--vision`.
 
+When the engine cannot take the preflight's requests (it runs out of
+memory, answers 502, 503 or 504, or is not reached), the checks did not
+measure the model: the run stops with the engine's error, whatever
+`--allow-weak-engine` says (ADR 0016), and `run.json`'s `preflight` keeps
+the errors in `engine_errors` (absent when there were none). Free what
+the engine needs (out of memory: free memory or reload the model) and
+run again. Other engine errors (a refused image, a 400 or 500 that is
+not about memory) are left to the checks.
+
 Some engines' tool-call parsers hand an object argument back as JSON
 text when its schema has no `type` (a `oneOf` of objects, as fx declares
 `shell.request`); TensorFold does (ashhart/TensorFold#1121), and fx then
@@ -149,6 +158,21 @@ above), so a 32k context is the practical floor (`contextFloor`).
   loaded is not known: a run would show it as `evicted` records. Only the
   load-api engine swaps; a generic engine is refused, since its stop
   ends every model.
+
+- **The preflight and an engine's refusal.** On 2026-11-02 mlx-serve
+  26.10.3 refused the three preflight prompts for memory (HTTP 503) under
+  Pi 1.4.0. The run stopped saying there was no reasoning, no reused
+  prefix and no tool call, advised another model, and pointed to
+  `.tenaz/private/preflight.*`, which Pi never writes. The preflight now
+  stops with the engine's error when the engine ran out of memory,
+  answered 502, 503 or 504, or was not reached, and names only files the
+  harness writes. Tested with the scripted harness and fakes only: not yet
+  run against a refusing engine with fx or Pi. That Pi leads a 503 with
+  `503: ` is assumed from its 400s; a Pi message without the status is
+  still told by its memory wording, but a busy engine is not. With fx,
+  an engine error that came with an error status now starts with it
+  wherever a session records it; that too is tested against the proxy's
+  fake engine only.
 
 - **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
   job runner; the lease cycle with fake engines, and whole runs with a

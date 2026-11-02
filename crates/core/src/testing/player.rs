@@ -9,6 +9,8 @@ use super::paced::PacedSender;
 use super::{ScriptedConflict, ScriptedHarness, ScriptedJob};
 use crate::session::{SessionEvent, StopReason, Usage};
 
+mod preflight;
+
 /// One tool call of the scripted model: the tool, its arguments, what it
 /// returns, and the prompt tokens of the reply that made it (`None`: a few
 /// more than the call before).
@@ -277,13 +279,7 @@ impl Player {
             return self.finish("Added the check.");
         }
         let Some(role) = field(prompt, "Role").map(str::to_owned) else {
-            if prompt.contains(crate::orchestrator::TOOL_PROBE_FILE) {
-                let printed =
-                    std::fs::read_to_string(self.cwd.join(crate::orchestrator::TOOL_PROBE_FILE))
-                        .unwrap_or_default();
-                return self.finish(printed.trim());
-            }
-            return self.finish("323");
+            return self.preflight(prompt);
         };
         let task = field(prompt, "Task").map(str::to_owned).unwrap_or_default();
         let attempt: u32 = field(prompt, "Attempt")

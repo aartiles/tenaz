@@ -383,14 +383,12 @@ impl Runner {
 
     /// Logs what the preflight found, and what it could not check.
     fn log_preflight(&self, preflight: &Preflight) {
-        self.log(&format!(
-            "Preflight: reasoning={} cache={} tools={}",
-            preflight.reasoning,
-            preflight.cache_check(),
-            preflight.tools.unwrap_or(false)
-        ));
+        self.log(&format!("Preflight: {}", preflight::summary(preflight)));
         if let Some(warning) = preflight::warnings(preflight) {
             self.log(warning);
+        }
+        if let Some(note) = preflight::engine_error_note(preflight) {
+            self.log(&note);
         }
     }
 
@@ -422,23 +420,18 @@ impl Runner {
             return Ok(false);
         }
         self.log_preflight(&preflight);
-        let ok = preflight.ok;
-        self.ledger.preflight = Some(preflight);
+        let outcome = preflight::outcome(&preflight, self.ledger.config.harness, allow_weak_engine);
+        let accepted_weak = outcome == preflight::Outcome::AcceptedWeak;
+        self.ledger.preflight = Some(Preflight {
+            ok: preflight.ok || accepted_weak,
+            accepted_weak,
+            ..preflight
+        });
         self.save()?;
-        if !ok {
-            if !allow_weak_engine {
-                return Err(RunError::Precondition(format!(
-                    "Engine preflight failed: {}. Details in .tenaz/run.json \"preflight\" and .tenaz/private/preflight.*; pass --allow-weak-engine to run anyway.",
-                    preflight::failures(self.ledger.config.harness, self.ledger.preflight.as_ref())
-                )));
-            }
-            if let Some(p) = &mut self.ledger.preflight {
-                p.accepted_weak = true;
-                p.ok = true;
-            }
-            self.save()?;
+        match outcome {
+            preflight::Outcome::Stop(error) => Err(RunError::Precondition(error)),
+            preflight::Outcome::Passed | preflight::Outcome::AcceptedWeak => Ok(true),
         }
-        Ok(true)
     }
 
     /// The whole run: preconditions, preflight, then the phases until the run

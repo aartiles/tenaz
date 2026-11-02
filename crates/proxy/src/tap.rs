@@ -176,7 +176,7 @@ impl Tap {
             self.sse_event(&rest);
         }
         if self.status >= 400 {
-            let (message, kind) = classify_error(&self.body);
+            let (message, kind) = classify_error(self.status, &self.body);
             self.report_error(message, kind);
         }
         if self.status >= 400 || self.stream_failed {

@@ -360,6 +360,14 @@ impl SessionMetrics {
             .is_some_and(|r| r.starts_with("turn budget exceeded"))
     }
 
+    /// What the engine answered to each request it failed, in order.
+    pub fn engine_errors(&self) -> impl Iterator<Item = &str> {
+        self.events
+            .iter()
+            .filter(|e| e.kind == PROVIDER_ERROR)
+            .map(|e| e.detail.as_deref().unwrap_or("no message"))
+    }
+
     /// The smallest context the engine said it could hold, if it said so.
     pub fn capacity_limit(&self) -> Option<u64> {
         self.capacity_limits.iter().copied().min()
@@ -378,6 +386,10 @@ impl SessionMetrics {
     }
 }
 
+/// The kind of the watchdog event recorded for each request the engine
+/// failed.
+pub(crate) const PROVIDER_ERROR: &str = "provider-error";
+
 /// What fx says when a prompt does not fit the model's window.
 const CONTEXT_EXCEEDED: &str = "ContextCapacityExceeded";
 static CAPACITY: LazyLock<Regex> =
@@ -390,6 +402,14 @@ static OUT_OF_MEMORY: LazyLock<Regex> = LazyLock::new(|| {
     )
     .expect("static regex")
 });
+/// How the engine proxy's error for an engine it could not reach starts.
+const ENGINE_UNREACHABLE: &str = "engine unreachable";
+static UNAVAILABLE: LazyLock<Regex> = LazyLock::new(|| {
+    // A server too busy or not there (502, 503, 504), as engine_error_text
+    // leads an error with its status, or an engine not reached.
+    let unreachable = regex::escape(ENGINE_UNREACHABLE);
+    Regex::new(&format!(r"^(?:50[234]\b|{unreachable})")).expect("static regex")
+});
 static IMAGE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)at most \d+ images|image tokens|\bimage \d+ |images need|does not decode")
         .expect("static regex")
@@ -401,6 +421,12 @@ pub fn capacity_limit(error: &str) -> Option<u64> {
     CAPACITY.captures(error).and_then(|c| c[1].parse().ok())
 }
 
+/// What the operator can do when the engine runs out of memory: in the
+/// Digger 3D run waits did not bring back the memory mlx-serve needed, a
+/// reload did (ADR 0012).
+pub(crate) const OUT_OF_MEMORY_ADVICE: &str =
+    "free memory (another program may be using the GPU) or reload the model";
+
 /// The engine ran out of memory while it worked on a request. Sushi sends
 /// `GenerationOutOfMemory` when Metal cannot get the memory, typically
 /// because another program is using the GPU at the same time; mlx-serve
@@ -409,6 +435,30 @@ pub fn capacity_limit(error: &str) -> Option<u64> {
 /// same prompt fits again once the memory is back.
 pub fn is_out_of_memory(error: &str) -> bool {
     OUT_OF_MEMORY.is_match(error)
+}
+
+/// An engine's error after an error `status`, as Tenaz records it: led by
+/// the status (`503: <message>`), or the status alone without a message.
+/// Pi records its errors the same way, with the raw body as the message.
+pub fn engine_error_text(status: u16, message: &str) -> String {
+    if message.is_empty() {
+        status.to_string()
+    } else {
+        format!("{status}: {message}")
+    }
+}
+
+/// The engine proxy's error for an engine it could not reach.
+pub fn engine_unreachable_text(error: impl std::fmt::Display) -> String {
+    format!("{ENGINE_UNREACHABLE}: {error}")
+}
+
+/// The engine could not take the request now, whatever was asked: it ran
+/// out of memory, answered that it is busy or not there (502, 503, 504),
+/// or was not reached. Another error (a refused image, a 400, a 500 from a
+/// template that failed) may be about the request or the model.
+pub fn is_engine_unavailable(error: &str) -> bool {
+    is_out_of_memory(error) || UNAVAILABLE.is_match(error)
 }
 
 /// A vision engine refused an image the session read.
@@ -603,6 +653,39 @@ mod tests {
         let msg = "400: {\"message\":\"Prompt (98353 tokens) requires ~4406MB GPU memory but only ~3494MB is available. Maximum context at KV8 and prefill chunk 512: 61488 tokens.\"}";
         assert_eq!(capacity_limit(msg), Some(61488));
         assert_eq!(capacity_limit("400: not enough GPU memory"), None);
+    }
+
+    /// The text the engine proxy records is the text the preflight reads.
+    #[test]
+    fn a_recorded_server_error_says_the_engine_is_unavailable() {
+        assert!(is_engine_unavailable(&engine_error_text(503, "busy")));
+        assert!(is_engine_unavailable(&engine_unreachable_text("refused")));
+        assert!(!is_engine_unavailable(&engine_error_text(500, "template")));
+    }
+
+    #[test]
+    fn an_unavailable_engine_is_told_from_a_refused_request() {
+        for error in [
+            "503: busy",
+            "502",
+            "504: gateway timeout",
+            "engine unreachable: connection refused",
+            "400: not enough GPU memory",
+            MLX_SERVE_REFUSAL,
+        ] {
+            assert!(is_engine_unavailable(error), "{error}");
+        }
+        for error in [
+            "400: This model accepts at most 4 images per request",
+            "400: bad chat template",
+            "500: template error",
+            "error: 503 tokens over",
+            "5000: odd",
+            "429: too many requests",
+            "no message",
+        ] {
+            assert!(!is_engine_unavailable(error), "{error}");
+        }
     }
 
     #[test]
