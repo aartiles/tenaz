@@ -212,7 +212,8 @@ pub fn swap_refusal(engine: EngineApi, swap: bool, role_models: bool) -> Option<
     }
 }
 
-/// The engine preflight (reasoning, prefix cache, vision).
+/// The engine preflight (a session that finishes, reasoning, prefix cache, a
+/// tool call, vision).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Preflight {
     pub at: String,
