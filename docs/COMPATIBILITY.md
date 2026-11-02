@@ -245,10 +245,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   ending with `\n` or `\r\n`; a bare `\r` does not end a line. A stream
   passes as the engine sent it, unless the request offers a tool whose
   arguments the proxy repairs and the engine answers with a success
-  status: then each event it sends ends with `\n\n`. An event the repair passes on keeps its own lines; one it
-  rewrites becomes a single `data:` line. `\r\n` framing is tested with
-  unit tests, and the error report also with the fake engine; no engine
-  has been seen to send it.
+  status: then each event it sends ends with `\n\n`. An event the
+  repair passes on keeps its own lines; one it rewrites becomes a single
+  `data:` line. `\r\n` framing is tested with unit tests, and the error
+  report also with the fake engine; no engine has been seen to send it.
 - **The pause after a capacity error** (`capacityRetryWaitSec`), and a
   stop during it, are tested with the fake harness only, not against an
   engine that runs out of memory.
