@@ -8,7 +8,8 @@ use crate::cache_report::CacheReport;
 use crate::ledger::{CacheCheck, HarnessKind, Preflight};
 use crate::metrics::{RequestRecord, engine_summary};
 use crate::session::{
-    AssistantTurn, SessionMetrics, StopReason, is_engine_unavailable, is_out_of_memory,
+    AssistantTurn, OUT_OF_MEMORY_ADVICE, SessionMetrics, StopReason, is_engine_unavailable,
+    is_out_of_memory,
 };
 
 use super::session::HarnessRun;
@@ -184,9 +185,9 @@ pub(crate) fn outcome(
     let unavailable = unavailable_errors(preflight);
     if !unavailable.is_empty() {
         let advice = if unavailable.iter().any(|e| is_out_of_memory(e)) {
-            "it ran out of memory: free some, or unload other models"
+            format!("it ran out of memory: {OUT_OF_MEMORY_ADVICE}")
         } else {
-            "see the engine's own log"
+            "see the engine's own log".to_owned()
         };
         return Outcome::Stop(format!(
             "Engine preflight failed: the engine could not take its requests: {}. That is \
@@ -537,21 +538,27 @@ mod tests {
         }
     }
 
+    /// As Pi recorded mlx-serve's answer (the raw body), and as the engine
+    /// proxy records it for fx (the message).
     #[test]
     fn an_engine_out_of_memory_is_named_not_the_model() {
-        let p = read_preflight(&refused(OUT_OF_MEMORY), &[], false, Some(true));
-        assert_eq!(p.engine_errors, vec![OUT_OF_MEMORY.to_owned(); 3]);
-        let text = stop(&p);
-        assert_eq!(text.matches("available=0 MB").count(), 1, "{text}");
-        assert!(
-            text.contains("could not take its requests: 503: "),
-            "{text}"
-        );
-        assert!(text.contains("ran out of memory"), "{text}");
-        for blame in ["no reasoning", "cached prompt prefix", "shell tool"] {
-            assert!(!text.contains(blame), "{blame} in {text}");
+        let from_proxy =
+            crate::session::engine_error_text(503, "not enough memory: available=0 MB");
+        for error in [OUT_OF_MEMORY, from_proxy.as_str()] {
+            let p = read_preflight(&refused(error), &[], false, Some(true));
+            assert_eq!(p.engine_errors, vec![error.to_owned(); 3]);
+            let text = stop(&p);
+            assert_eq!(text.matches("available=0 MB").count(), 1, "{text}");
+            assert!(
+                text.contains("could not take its requests: 503: "),
+                "{text}"
+            );
+            assert!(text.contains(OUT_OF_MEMORY_ADVICE), "{text}");
+            for blame in ["no reasoning", "cached prompt prefix", "shell tool"] {
+                assert!(!text.contains(blame), "{blame} in {text}");
+            }
+            assert!(!text.contains("allow-weak-engine"), "{text}");
         }
-        assert!(!text.contains("allow-weak-engine"), "{text}");
     }
 
     #[test]
@@ -572,6 +579,7 @@ mod tests {
         let one = stop(&p);
         assert!(one.contains("requests: 503: busy."), "{one}");
         assert!(one.contains("see the engine's own log"), "{one}");
+        assert!(!one.contains(OUT_OF_MEMORY_ADVICE), "{one}");
         assert!(!one.contains("cached prompt prefix"), "{one}");
         let accepted = outcome(&p, HarnessKind::Pi, true);
         assert!(matches!(accepted, Outcome::Stop(_)), "{accepted:?}");

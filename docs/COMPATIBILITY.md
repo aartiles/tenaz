@@ -43,7 +43,8 @@ When the engine cannot take the preflight's requests (it runs out of
 memory, answers 502, 503 or 504, or is not reached), the checks did not
 measure the model: the run stops with the engine's error, whatever
 `--allow-weak-engine` says, and `run.json`'s `preflight` keeps the errors
-in `engine_errors`. Free what the engine needs and run again. Other
+in `engine_errors`. Free what the engine needs (out of memory: free
+memory or reload the model) and run again. Other
 engine errors (a refused image, a 400 or 500 that is not about memory)
 are left to the checks.
 

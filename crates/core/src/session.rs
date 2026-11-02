@@ -421,6 +421,12 @@ pub fn capacity_limit(error: &str) -> Option<u64> {
     CAPACITY.captures(error).and_then(|c| c[1].parse().ok())
 }
 
+/// What the operator can do when the engine runs out of memory: in the
+/// Digger 3D run waits did not bring back the memory mlx-serve needed, a
+/// reload did (ADR 0012).
+pub(crate) const OUT_OF_MEMORY_ADVICE: &str =
+    "free memory (another program may be using the GPU) or reload the model";
+
 /// The engine ran out of memory while it worked on a request. Sushi sends
 /// `GenerationOutOfMemory` when Metal cannot get the memory, typically
 /// because another program is using the GPU at the same time; mlx-serve

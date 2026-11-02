@@ -58,8 +58,10 @@ uses [Semantic Versioning](https://semver.org/).
   another model. This covers an engine out of memory (mlx-serve answers
   503), one that answers 502, 503 or 504, and one not reached.
   `--allow-weak-engine` does not accept such a preflight, so the next run
-  measures it again. Other engine errors, such as a refused image or a 400
-  or 500 not about memory, are still left to the checks and the flag.
+  measures it again. For an engine out of memory it says to free memory
+  or reload the model, as the run's retries do. Other engine errors, such
+  as a refused image or a 400 or 500 not about memory, are still left to
+  the checks and the flag.
   `run.json`'s `preflight` keeps the engine's errors in `engine_errors`,
   the log names the first, and `tenaz status` counts them. A failed
   preflight points to `.tenaz/private/preflight.fx-acp.log` only with fx:
