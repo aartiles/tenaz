@@ -538,8 +538,9 @@ mod tests {
         assert_eq!(old.cache_check(), CacheCheck::Reused);
     }
 
-    /// What mlx-serve 26.10.3 answered to each preflight request on
-    /// 2026-11-02, with no memory left for them.
+    /// mlx-serve 26.10.3's answer to each preflight request on 2026-11-02,
+    /// with no memory left for them (HTTP 503 and this body), in the form
+    /// Pi is assumed to record it: the status, then the raw body.
     const OUT_OF_MEMORY: &str = "503: {\"error\":{\"message\":\"not enough memory: available=0 MB\",\"type\":\"out_of_memory\"}}";
 
     /// The event the watchdog records for a request the engine failed.
@@ -572,8 +573,8 @@ mod tests {
         }
     }
 
-    /// As Pi recorded mlx-serve's answer (the raw body), and as the engine
-    /// proxy records it for fx (the message).
+    /// In both forms the error arrives in: Pi's (the raw body) and the
+    /// engine proxy's for fx (the message).
     #[test]
     fn an_engine_out_of_memory_is_named_not_the_model() {
         let from_proxy =

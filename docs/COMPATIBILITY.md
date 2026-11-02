@@ -169,7 +169,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   harness writes. Tested with the scripted harness and fakes only: not yet
   run against a refusing engine with fx or Pi. That Pi leads a 503 with
   `503: ` is assumed from its 400s; a Pi message without the status is
-  still told by its memory wording, but a busy engine is not.
+  still told by its memory wording, but a busy engine is not. With fx,
+  an engine error that came with an error status now starts with it
+  wherever a session records it; that too is tested against the proxy's
+  fake engine only.
 
 - **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
   job runner; the lease cycle with fake engines, and whole runs with a
