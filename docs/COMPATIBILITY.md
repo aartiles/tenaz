@@ -177,13 +177,6 @@ above), so a 32k context is the practical floor (`contextFloor`).
   with fake engines only. Only the load-api engine swaps; a generic
   engine is refused, since its stop ends every model.
 
-- **The preflight blames the model for an engine's refusal.** When
-  mlx-serve refused the three preflight prompts for memory, the run
-  stopped with "no reasoning", "no cached prefix" and "could not run
-  `cat probe.txt`", and the advice to try another model; the engine's
-  error is only in its own log. The message points to
-  `.tenaz/private/preflight.*`, but with Pi no such file was written.
-
 - **The preflight and an engine's refusal.** On 2026-11-02 mlx-serve
   26.10.3 refused the three preflight prompts for memory (HTTP 503) under
   Pi 1.4.0. The run stopped saying there was no reasoning, no reused
