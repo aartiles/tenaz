@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tenaz_core::session::{capacity_limit, engine_error_text, is_image_refusal, is_out_of_memory};
+use tenaz_core::session::engine_error_text;
 
 /// Token usage of one engine response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,23 +14,6 @@ pub struct ProxyUsage {
     pub cached_tokens: Option<u64>,
     pub completion_tokens: u64,
     pub reasoning_tokens: u64,
-}
-
-/// What an engine error means to the runner.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum EngineErrorKind {
-    /// The prompt is larger than the engine can hold now; it named its maximum.
-    Capacity {
-        max_context: u64,
-    },
-    /// A vision engine refused an image in the conversation.
-    ImageRefused,
-    /// The engine ran out of memory on the request; it may fit again later.
-    OutOfMemory,
-    /// No connection to the engine.
-    Unreachable,
-    Other,
 }
 
 /// One proxy event.
@@ -70,13 +53,12 @@ pub enum ProxyEvent {
     },
     /// The engine returned an error status, sent an error inside a stream
     /// that started with status 200, or could not be reached. After an
-    /// error status, `message` starts with it (`503: <message>`).
-    EngineError {
-        request: u64,
-        status: Option<u16>,
-        message: String,
-        kind: EngineErrorKind,
-    },
+    /// error status the message starts with it (`503: <message>`, or `500`
+    /// alone), and an engine not reached is `engine unreachable: <error>`.
+    /// An error inside a stream is the message the engine sent in its chunk
+    /// (its `message`, else its `type` or `code`, else the error as JSON).
+    /// tenaz-core reads what the message means.
+    EngineError { request: u64, message: String },
 }
 
 /// Receives proxy events (the runner feeds them to its watchdog and journal).
@@ -152,35 +134,30 @@ pub fn reported_finish_reason(
     }
 }
 
-/// The error message of an engine error body, and what it means.
-fn read_error_body(body: &[u8]) -> (String, EngineErrorKind) {
+/// The error message of an engine error body.
+fn read_error_body(body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body);
-    let message = serde_json::from_str::<serde_json::Value>(&text)
+    serde_json::from_str::<serde_json::Value>(&text)
         .ok()
         .and_then(|j| error_message(&j))
-        .unwrap_or_else(|| text.trim().to_owned());
-    let kind = classify_message(&message);
-    (message, kind)
+        .unwrap_or_else(|| text.trim().to_owned())
 }
 
-/// The error body an engine answered with an error `status`: its message
-/// led by the status (`503: <message>`, or the status alone without one),
-/// and what the message alone means.
-pub(crate) fn classify_error(status: u16, body: &[u8]) -> (String, EngineErrorKind) {
-    let (message, kind) = read_error_body(body);
-    (engine_error_text(status, &message), kind)
+/// The error an engine answered with an error `status`: the message of its
+/// body led by the status (`503: <message>`, or the status alone without
+/// one).
+pub(crate) fn status_error(status: u16, body: &[u8]) -> String {
+    engine_error_text(status, &read_error_body(body))
 }
 
 /// The error an engine sent inside a stream that had started well (status
 /// 200), as Sushi does when a generation fails part way:
 /// `data: {"error":{"message":…},"choices":[{"finish_reason":"error"}]}`.
-pub fn stream_error(chunk: &serde_json::Value) -> Option<(String, EngineErrorKind)> {
+pub(crate) fn stream_error(chunk: &serde_json::Value) -> Option<String> {
     let error = chunk.get("error").filter(|e| {
         e.as_object().is_some_and(|o| !o.is_empty()) || e.as_str().is_some_and(|s| !s.is_empty())
     })?;
-    let message = error_message(chunk).unwrap_or_else(|| error.to_string());
-    let kind = classify_message(&message);
-    Some((message, kind))
+    Some(error_message(chunk).unwrap_or_else(|| error.to_string()))
 }
 
 /// The message of an error object, in the shapes engines use: an `error`
@@ -201,19 +178,6 @@ fn error_message(json: &serde_json::Value) -> Option<String> {
         })
         .or_else(|| text(json.get("message")))
         .or_else(|| text(json.get("detail")))
-}
-
-/// What an engine error message means to the runner.
-fn classify_message(message: &str) -> EngineErrorKind {
-    if let Some(max_context) = capacity_limit(message) {
-        EngineErrorKind::Capacity { max_context }
-    } else if is_image_refusal(message) {
-        EngineErrorKind::ImageRefused
-    } else if is_out_of_memory(message) {
-        EngineErrorKind::OutOfMemory
-    } else {
-        EngineErrorKind::Other
-    }
 }
 
 #[cfg(test)]
@@ -297,70 +261,47 @@ mod tests {
         assert_eq!(usage_from_json(&serde_json::json!({})), None);
     }
 
+    /// One case for each shape an engine's error body takes.
     #[test]
-    fn errors_are_classified() {
-        let capacity = br#"{"error":{"message":"Prompt (98353 tokens) requires more memory. Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}"#;
-        assert_eq!(
-            read_error_body(capacity).1,
-            EngineErrorKind::Capacity { max_context: 61488 }
-        );
-        let image = br#"{"message":"This request has at most 4 images"}"#;
-        assert_eq!(
-            read_error_body(image),
+    fn error_messages_are_read() {
+        for (body, expected) in [
+            (r#"{"error":{"message":"from message"}}"#, "from message"),
             (
-                "This request has at most 4 images".to_owned(),
-                EngineErrorKind::ImageRefused
-            )
-        );
-        assert_eq!(
-            read_error_body(b"plain failure"),
-            ("plain failure".to_owned(), EngineErrorKind::Other)
-        );
-        assert_eq!(
-            read_error_body(br#"{"error":"short form"}"#).0,
-            "short form"
-        );
-        assert_eq!(
-            read_error_body(br#"{"error":{"message":"GenerationOutOfMemory"}}"#).1,
-            EngineErrorKind::OutOfMemory
-        );
+                r#"{"error":{"message":"","type":"from type"}}"#,
+                "from type",
+            ),
+            (r#"{"error":{"code":"from code"}}"#, "from code"),
+            (r#"{"error":"from string"}"#, "from string"),
+            (r#"{"message":"top-level message"}"#, "top-level message"),
+            (r#"{"detail":"top-level detail"}"#, "top-level detail"),
+            (r#"{"other":1}"#, r#"{"other":1}"#),
+            ("  plain failure\n", "plain failure"),
+        ] {
+            assert_eq!(read_error_body(body.as_bytes()), expected, "{body}");
+        }
     }
 
-    /// mlx-serve 26.10.3 refuses a prompt whose prefill does not fit in GPU
-    /// memory. The message is recorded (Digger 3D run, 2026-10-29); the
-    /// `error.message` body around it is assumed, not captured. The text is
-    /// `MLX_SERVE_REFUSAL` in tenaz-core's `session` tests.
-    #[test]
-    fn an_mlx_serve_memory_refusal_is_out_of_memory() {
-        let body = br#"{"error":{"message":"This prompt (30245 tokens) does not fit in GPU memory even after freeing the prefix cache: it requires ~7720MB GPU memory but only ~6960MB is available. It was refused before any work started. Reduce the prompt length, lower --ctx-size, or free memory on the machine."}}"#;
-        assert_eq!(read_error_body(body).1, EngineErrorKind::OutOfMemory);
-    }
-
-    /// After an error status, the message starts with it; what the message
-    /// means is read without it.
+    /// After an error status, the message starts with it.
     #[test]
     fn an_error_status_leads_the_message() {
-        let capacity = br#"{"error":{"message":"Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}"#;
-        let (message, kind) = classify_error(400, capacity);
-        assert_eq!(
-            message,
-            "400: Maximum context at KV8 and prefill chunk 512: 61488 tokens."
-        );
-        assert_eq!(kind, EngineErrorKind::Capacity { max_context: 61488 });
+        let json = r#"{"error":{"message":"Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}"#;
         for (status, body, expected) in [
+            (
+                400,
+                json,
+                "400: Maximum context at KV8 and prefill chunk 512: 61488 tokens.",
+            ),
             (503, "busy", "503: busy"),
             (500, "", "500"),
             (500, "  ", "500"),
         ] {
-            let classified = classify_error(status, body.as_bytes());
-            let expected = (expected.to_owned(), EngineErrorKind::Other);
-            assert_eq!(classified, expected, "{body:?}");
+            assert_eq!(status_error(status, body.as_bytes()), expected, "{body:?}");
         }
     }
 
     /// Sushi's chat-completions stream error: the message, else the type.
     #[test]
-    fn an_error_inside_a_stream_is_read_and_classified() {
+    fn an_error_inside_a_stream_is_read() {
         let chunk = |error: serde_json::Value| {
             serde_json::json!({
                 "error": error,
@@ -371,27 +312,20 @@ mod tests {
             stream_error(&chunk(serde_json::json!({
                 "message": "error.GenerationOutOfMemory", "type": "server_error",
                 "param": null, "code": null
-            }))),
-            Some((
-                "error.GenerationOutOfMemory".to_owned(),
-                EngineErrorKind::OutOfMemory
-            ))
+            })))
+            .as_deref(),
+            Some("error.GenerationOutOfMemory")
         );
         assert_eq!(
             stream_error(&chunk(
                 serde_json::json!({"message": "", "type": "GenerationOutOfMemory"})
-            )),
-            Some((
-                "GenerationOutOfMemory".to_owned(),
-                EngineErrorKind::OutOfMemory
             ))
+            .as_deref(),
+            Some("GenerationOutOfMemory")
         );
         assert_eq!(
-            stream_error(&serde_json::json!({"error": "GenerationOutOfMemory"})),
-            Some((
-                "GenerationOutOfMemory".to_owned(),
-                EngineErrorKind::OutOfMemory
-            ))
+            stream_error(&serde_json::json!({"error": "GenerationOutOfMemory"})).as_deref(),
+            Some("GenerationOutOfMemory")
         );
         assert_eq!(
             stream_error(&serde_json::json!({"choices": [{"delta": {"content": "hi"}}]})),

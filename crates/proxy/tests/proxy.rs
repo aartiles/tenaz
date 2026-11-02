@@ -1,6 +1,6 @@
-//! The proxy against a fake engine: usage from JSON and SSE answers, error
-//! classification (also of an error sent inside a stream), holding requests
-//! while the gate is closed, and replies cut at the output limit.
+//! The proxy against a fake engine: usage from JSON and SSE answers, engine
+//! errors (also one sent inside a stream), holding requests while the gate
+//! is closed, and replies cut at the output limit.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -9,8 +9,12 @@ use std::time::Duration;
 use axum::response::IntoResponse;
 use futures::StreamExt;
 use tenaz_core::lease::Gate;
-use tenaz_core::session::is_engine_unavailable;
-use tenaz_proxy::{EngineErrorKind, Proxy, ProxyEvent, ProxyUsage};
+use tenaz_core::session::{engine_unreachable_text, is_engine_unavailable};
+use tenaz_proxy::{Proxy, ProxyEvent, ProxyUsage};
+
+/// The fake engine's answer to a prompt too large for it.
+const TOO_BIG: &str =
+    "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
 
 async fn fake_engine() -> SocketAddr {
     let app = axum::Router::new()
@@ -20,7 +24,7 @@ async fn fake_engine() -> SocketAddr {
             axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
                 let content = body["messages"][0]["content"].as_str().unwrap_or("").to_owned();
                 if content == "too big" {
-                    return (axum::http::StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": {"message": "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}))).into_response();
+                    return (axum::http::StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": {"message": TOO_BIG}}))).into_response();
                 }
                 if content == "busy" {
                     return (axum::http::StatusCode::SERVICE_UNAVAILABLE, "busy").into_response();
@@ -218,14 +222,13 @@ async fn forwards_requests_and_records_usage_and_errors() {
         )
     );
     assert_eq!(completed[3].1, 400);
-    assert!(events.iter().any(|e| matches!(
-        e,
-        ProxyEvent::EngineError {
-            status: Some(400),
-            kind: EngineErrorKind::Capacity { max_context: 61488 },
-            ..
-        }
-    )));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            ProxyEvent::EngineError { message, .. } if *message == format!("400: {TOO_BIG}")
+        )),
+        "{events:?}"
+    );
     handle.stop().await;
 }
 
@@ -278,11 +281,8 @@ async fn an_unreachable_engine_is_a_502_with_an_event() {
     assert!(
         matches!(
             &events[0],
-            ProxyEvent::EngineError {
-                kind: EngineErrorKind::Unreachable,
-                message,
-                ..
-            } if is_engine_unavailable(message)
+            ProxyEvent::EngineError { message, .. }
+                if message.starts_with(&engine_unreachable_text("")) && is_engine_unavailable(message)
         ),
         "{events:?}"
     );
@@ -297,22 +297,11 @@ async fn an_unreachable_engine_is_a_502_with_an_event() {
 async fn an_error_status_leads_the_engine_error() {
     let (handle, events) = start(fake_engine().await, Gate::new()).await;
     let client = reqwest::Client::new();
-    let capacity =
-        "400: Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
-    for (content, expected, kind, unavailable) in [
-        ("busy", "503: busy", EngineErrorKind::Other, true),
-        (
-            "no memory",
-            "503: not enough memory: available=0 MB",
-            EngineErrorKind::OutOfMemory,
-            true,
-        ),
-        (
-            "too big",
-            capacity,
-            EngineErrorKind::Capacity { max_context: 61488 },
-            false,
-        ),
+    let capacity = format!("400: {TOO_BIG}");
+    for (content, expected, unavailable) in [
+        ("busy", "503: busy", true),
+        ("no memory", "503: not enough memory: available=0 MB", true),
+        ("too big", capacity.as_str(), false),
     ] {
         events.lock().unwrap().clear();
         client
@@ -322,14 +311,14 @@ async fn an_error_status_leads_the_engine_error() {
             .await
             .unwrap();
         let seen = settle(&events, 2).await;
-        let (message, seen_kind) = seen
+        let message = seen
             .iter()
             .find_map(|e| match e {
-                ProxyEvent::EngineError { message, kind, .. } => Some((message.as_str(), kind)),
+                ProxyEvent::EngineError { message, .. } => Some(message.as_str()),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("{content}: no engine error in {seen:?}"));
-        assert_eq!((message, seen_kind), (expected, &kind), "{content}");
+        assert_eq!(message, expected, "{content}");
         assert_eq!(is_engine_unavailable(message), unavailable, "{message}");
     }
     handle.stop().await;
@@ -359,17 +348,12 @@ async fn an_error_inside_a_stream_is_an_engine_error() {
         .filter(|e| matches!(e, ProxyEvent::EngineError { .. }))
         .count();
     assert_eq!(errors, 1, "only the first error is reported: {events:?}");
-    assert!(
-        matches!(
-            &events[0],
-            ProxyEvent::EngineError {
-                status: Some(200),
-                kind: EngineErrorKind::OutOfMemory,
-                message,
-                ..
-            } if message == "error.GenerationOutOfMemory"
-        ),
-        "{events:?}"
+    assert_eq!(
+        events[0],
+        ProxyEvent::EngineError {
+            request: 1,
+            message: "error.GenerationOutOfMemory".to_owned()
+        }
     );
     assert!(
         matches!(&events[1], ProxyEvent::Completed { usage: None, .. }),
@@ -395,16 +379,12 @@ async fn an_error_inside_a_stream_is_reported_before_the_stream_ends() {
         .unwrap();
     assert!(response.chunk().await.unwrap().is_some());
     let open = settle(&events, 1).await;
-    assert!(
-        matches!(
-            open.as_slice(),
-            [ProxyEvent::EngineError {
-                status: Some(200),
-                kind: EngineErrorKind::OutOfMemory,
-                ..
-            }]
-        ),
-        "{open:?}"
+    assert_eq!(
+        open,
+        [ProxyEvent::EngineError {
+            request: 1,
+            message: "error.GenerationOutOfMemory".to_owned()
+        }]
     );
     drop(response);
     let closed = settle(&events, 2).await;

@@ -470,20 +470,22 @@ pub fn is_image_refusal(error: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// mlx-serve 26.10.3, in the Digger 3D run of 2026-10-29. The proxy's
-    /// `an_mlx_serve_memory_refusal_is_out_of_memory` sends the same text.
+    /// mlx-serve 26.10.3, in the Digger 3D run of 2026-10-29.
     const MLX_SERVE_REFUSAL: &str = "This prompt (30245 tokens) does not fit in GPU memory even after freeing the prefix cache: it requires ~7720MB GPU memory but only ~6960MB is available. It was refused before any work started. Reduce the prompt length, lower --ctx-size, or free memory on the machine.";
 
     #[test]
     fn an_engine_out_of_memory_is_told_from_other_errors() {
         for message in [
             "error.GenerationOutOfMemory",
+            "GenerationOutOfMemory",
             "CUDA out of memory",
             "Insufficient Memory (kIOGPUCommandBufferCallbackErrorOutOfMemory)",
             "kIOGPUCommandBufferCallbackErrorOutOfMemory",
             "out_of_memory",
             "400: not enough GPU memory",
             "not enough memory",
+            // mlx-serve 26.10.3 with no memory left (2026-11-02), as the proxy reports it.
+            "503: not enough memory: available=0 MB",
             MLX_SERVE_REFUSAL,
             "does not fit in memory",
             "does not fit in free GPU memory",
