@@ -30,7 +30,7 @@ fn error_reply(content: &str) -> Option<axum::response::Response> {
         // No engine has been seen to send this: an error status with an SSE
         // body that carries an error chunk.
         "busy, as a stream" => {
-            let sse = "data: {\"error\":{\"message\":\"busy\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n";
+            let sse = "data: {\"error\":{\"message\":\"busy in a chunk\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n";
             (StatusCode::SERVICE_UNAVAILABLE, [("content-type", "text/event-stream")], sse).into_response()
         }
         _ => return None,
@@ -378,10 +378,9 @@ async fn an_error_inside_a_stream_is_an_engine_error() {
 }
 
 /// An error status with an SSE body that carries an error chunk is one
-/// engine error, led by the status, that the preflight reads as an engine
-/// that could not take the request. The proxy does not read the body of an
-/// error status as a stream, so the message is the status and the body as
-/// sent, and the chunk is not reported as a second error.
+/// engine error: the status, then the chunk's message. The preflight reads
+/// it as an engine that could not take the request, and the chunk is not
+/// reported as a second error.
 #[tokio::test]
 async fn an_error_status_with_an_error_chunk_is_one_engine_error() {
     let (handle, events) = start(fake_engine().await, Gate::new()).await;
@@ -412,10 +411,7 @@ async fn an_error_status_with_an_error_chunk_is_one_engine_error() {
     else {
         panic!("one engine error, then the completion: {events:?}");
     };
-    assert_eq!(
-        message,
-        r#"503: data: {"error":{"message":"busy"},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}"#
-    );
+    assert_eq!(message, "503: busy in a chunk");
     assert!(is_engine_unavailable(message), "{message}");
     handle.stop().await;
 }

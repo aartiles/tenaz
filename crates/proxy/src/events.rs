@@ -5,6 +5,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tenaz_core::session::engine_error_text;
 
+use crate::sse::data_chunks;
+
 /// Token usage of one engine response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyUsage {
@@ -133,12 +135,14 @@ pub fn reported_finish_reason(
     }
 }
 
-/// The error message of an engine error body.
+/// The error message of an engine error body: the message of a JSON body,
+/// else of the first `error` chunk of an SSE body, else the text itself.
 fn read_error_body(body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body);
     serde_json::from_str::<serde_json::Value>(&text)
         .ok()
         .and_then(|j| error_message(&j))
+        .or_else(|| data_chunks(&text).find_map(|chunk| stream_error(&chunk)))
         .unwrap_or_else(|| text.trim().to_owned())
 }
 
@@ -149,8 +153,8 @@ pub(crate) fn status_error(status: u16, body: &[u8]) -> String {
     engine_error_text(status, &read_error_body(body))
 }
 
-/// The error an engine sent inside a stream that had started well (status
-/// 200), as Sushi does when a generation fails part way:
+/// The error one streamed chunk carries, as Sushi sends it when a
+/// generation fails part way:
 /// `data: {"error":{"message":…},"choices":[{"finish_reason":"error"}]}`.
 pub(crate) fn stream_error(chunk: &serde_json::Value) -> Option<String> {
     let error = chunk.get("error").filter(|e| {
@@ -275,6 +279,28 @@ mod tests {
             (r#"{"detail":"top-level detail"}"#, "top-level detail"),
             (r#"{"other":1}"#, r#"{"other":1}"#),
             ("  plain failure\n", "plain failure"),
+            (
+                concat!(
+                    r#"data: {"choices":[]}"#,
+                    "\n\n",
+                    r#"data: {"error":{"message":"after a chunk"}}"#,
+                    "\n\n",
+                ),
+                "after a chunk",
+            ),
+            (
+                concat!(
+                    r#"data: {"error":"the first"}"#,
+                    "\n\n",
+                    r#"data: {"error":"a later one"}"#,
+                    "\n\n",
+                ),
+                "the first",
+            ),
+            (
+                concat!(r#"data: {"choices":[]}"#, "\n\n"),
+                r#"data: {"choices":[]}"#,
+            ),
         ] {
             assert_eq!(read_error_body(body.as_bytes()), expected, "{body}");
         }

@@ -197,8 +197,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
   reports the error when the chunk arrives, before fx can exit on it.
   Only that shape, an `error` object or string in a `data:` chunk, is
   read; how llama.cpp, vLLM or Ollama send an error inside a stream has
-  not been checked. With Pi, an out-of-memory error is tested only with
-  the scripted harness's own wording; no real one has been seen.
+  not been checked. The same chunk in the body of an error status gives
+  that error's message after the status; no engine has been seen to send
+  one. Events are split only at `\n\n`: an engine that ends them with
+  `\r\n\r\n` has its error read only when the stream ends. With Pi, an
+  out-of-memory error is tested only with the scripted harness's own
+  wording; no real one has been seen.
 - **A prompt the engine cannot fit.** mlx-serve 26.10.3 refuses a request
   whose prefill does not fit in free GPU memory ("This prompt (30245
   tokens) does not fit in GPU memory even after freeing the prefix cache
