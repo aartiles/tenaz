@@ -5,14 +5,9 @@
 use crate::orchestrator::recovery::{FailureCause, GiveUp};
 use crate::ports::SessionModel;
 use crate::role::Role;
+use crate::session::OUT_OF_MEMORY_ADVICE;
 use crate::task::TaskId;
 use crate::util::approx_code_tokens;
-
-/// What the operator can do when the engine runs out of memory: in the
-/// Digger 3D run waits did not bring back the memory mlx-serve needed, a
-/// reload did (ADR 0012).
-const OUT_OF_MEMORY_ADVICE: &str =
-    "free memory (another program may be using the GPU) or reload the model";
 
 /// Why a session the engine failed is rerun, for the log.
 pub(super) fn retry_reason(cause: FailureCause) -> String {

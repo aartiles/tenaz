@@ -39,6 +39,15 @@ The preflight runs before the first session and checks:
   `--no-proxy` Tenaz cannot see that, and such an engine fails.
 - **Vision**, only when the project was initialised with `--vision`.
 
+When the engine cannot take the preflight's requests (it runs out of
+memory, answers 502, 503 or 504, or is not reached), the checks did not
+measure the model: the run stops with the engine's error, whatever
+`--allow-weak-engine` says (ADR 0016), and `run.json`'s `preflight` keeps
+the errors in `engine_errors` (absent when there were none). Free what
+the engine needs (out of memory: free memory or reload the model) and
+run again. Other engine errors (a refused image, a 400 or 500 that is
+not about memory) are left to the checks.
+
 Some engines' tool-call parsers hand an object argument back as JSON
 text when its schema has no `type` (a `oneOf` of objects, as fx declares
 `shell.request`); TensorFold does (ashhart/TensorFold#1121), and fx then
@@ -175,6 +184,21 @@ above), so a 32k context is the practical floor (`contextFloor`).
   error is only in its own log. The message points to
   `.tenaz/private/preflight.*`, but with Pi no such file was written.
 
+- **The preflight and an engine's refusal.** On 2026-11-02 mlx-serve
+  26.10.3 refused the three preflight prompts for memory (HTTP 503) under
+  Pi 1.4.0. The run stopped saying there was no reasoning, no reused
+  prefix and no tool call, advised another model, and pointed to
+  `.tenaz/private/preflight.*`, which Pi never writes. The preflight now
+  stops with the engine's error when the engine ran out of memory,
+  answered 502, 503 or 504, or was not reached, and names only files the
+  harness writes. Tested with the scripted harness and fakes only: not yet
+  run against a refusing engine with fx or Pi. That Pi leads a 503 with
+  `503: ` is assumed from its 400s; a Pi message without the status is
+  still told by its memory wording, but a busy engine is not. With fx,
+  an engine error that came with an error status now starts with it
+  wherever a session records it; that too is tested against the proxy's
+  fake engine only.
+
 - **Heavy jobs** (ADR 0010). Tested with the scripted harness and a fake
   job runner; the lease cycle with fake engines, and whole runs with a
   lease over a fake LLM whose reload after the job fails or that cannot
@@ -195,11 +219,14 @@ above), so a 32k context is the practical floor (`contextFloor`).
   Sushi 1.4.0's binary, not captured from a real failure, and no real
   out-of-memory failure has gone through the proxy yet. If Sushi sends it
   otherwise, the session is rerun as before, as a harness exit. The proxy
-  reports the error when the chunk arrives, before fx can exit on it.
+  reports the error when the chunk arrives, before fx can exit on it,
+  whether the engine ends its events with `\n\n` or `\r\n\r\n`.
   Only that shape, an `error` object or string in a `data:` chunk, is
   read; how llama.cpp, vLLM or Ollama send an error inside a stream has
-  not been checked. With Pi, an out-of-memory error is tested only with
-  the scripted harness's own wording; no real one has been seen.
+  not been checked. The same chunk in the body of an error status gives
+  that error's message after the status; no engine has been seen to send
+  one. With Pi, an out-of-memory error is tested only with the scripted
+  harness's own wording; no real one has been seen.
 - **A prompt the engine cannot fit.** mlx-serve 26.10.3 refuses a request
   whose prefill does not fit in free GPU memory ("This prompt (30245
   tokens) does not fit in GPU memory even after freeing the prefix cache
@@ -239,9 +266,14 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - **Streamed replies through the proxy.** The proxy decodes a streamed
   reply one whole event at a time, so a character the network splits
   between two chunks arrives intact; that is tested with unit tests, not
-  seen against a real engine. Events are framed on a blank line (`\n\n`):
-  an engine that ends them with `\r\n\r\n` would reach the harness only
-  when the stream ends. No engine has been checked for that.
+  seen against a real engine. An event ends at a blank line, its lines
+  ending with `\n` or `\r\n`; a bare `\r` does not end a line. A stream
+  passes as the engine sent it, unless the request offers a tool whose
+  arguments the proxy repairs and the engine answers with a success
+  status: then each event it sends ends with `\n\n`. An event the
+  repair passes on keeps its own lines; one it rewrites becomes a single
+  `data:` line. `\r\n` framing is tested with unit tests, and the error
+  report also with the fake engine; no engine has been seen to send it.
 - **The pause after a capacity error** (`capacityRetryWaitSec`), and a
   stop during it, are tested with the fake harness only, not against an
   engine that runs out of memory.

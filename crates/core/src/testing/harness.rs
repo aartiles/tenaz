@@ -131,6 +131,10 @@ pub struct ScriptedHarness {
     /// No reply reads anything from the prompt cache, as Pi reports an
     /// engine that leaves cached tokens out of its usage.
     pub uncached: bool,
+    /// The engine fails every request of a session without a role (the
+    /// preflight's) with this message, as mlx-serve refuses work it has no
+    /// memory for.
+    pub refused_preflight: Option<String>,
 }
 
 impl ScriptedHarness {

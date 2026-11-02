@@ -28,6 +28,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- With fx, an engine error that came with an error status now starts
+  with that status, as Pi's errors do, then the engine's message:
+  `503: <message>`, or `500` alone when there is no message. The message
+  of an SSE body is that of its first `error` chunk. Pi puts the raw body
+  after the status instead. It shows in the session's `provider-error`
+  watchdog event and `image_refusal`, the journal's `image-continuation`
+  `refusal`, the image continuation note and `tenaz watch`.
 - The agent skill no longer offers to pipe the install script into `sh`:
   it gives Homebrew, a release archive with its checksum and attestation,
   or `cargo install`, and points to the README for the rest. skills.sh's
@@ -43,6 +50,41 @@ uses [Semantic Versioning](https://semver.org/).
   Mine run of 2026-10-30 it was set at 58419 while memory was short, and
   the budget stayed there for hours after the pressure was gone, with
   sessions reaching 77257 tokens unharmed. See ADR 0014.
+
+### Fixed
+
+- When the engine cannot take the preflight's requests, `tenaz run` now
+  stops with the engine's error and says it is the engine's. It used to
+  report no reasoning, no cached prefix and a failed tool call, and advise
+  another model. This covers an engine out of memory (mlx-serve answers
+  503), one that answers 502, 503 or 504, and one not reached.
+  `--allow-weak-engine` does not accept such a preflight, so the next run
+  measures it again. For an engine out of memory it says to free memory
+  or reload the model, as the run's retries do. Other engine errors, such
+  as a refused image or a 400 or 500 not about memory, are still left to
+  the checks and the flag. `run.json`'s `preflight` keeps the engine's
+  errors in `engine_errors`. The log and `tenaz status` show such a
+  preflight as not judged, with the count of errors, instead of its
+  checks, and the log names the first error. A failed preflight points
+  to `.tenaz/private/preflight.fx-acp.log` only with fx: Pi keeps no log
+  of it. See ADR 0016.
+- The preflight line of the log and of `tenaz status` shows the image
+  check (`vision=true` or `vision=false`) for a vision model. A preflight
+  that failed only on the image used to read like a pass.
+- The log's preflight line shows `(accepted weak)` when
+  `--allow-weak-engine` runs past a failed preflight, as `tenaz status`
+  does. The log used to be written before the run took the flag into
+  account.
+- The preflight line of the log and of `tenaz status` starts with
+  `settled=false` when the preflight's session did not finish. Such a
+  preflight fails, but its line used to read like a pass.
+- The engine proxy ends a streamed event at a blank line written with
+  `\r\n\r\n` or `\n\r\n`, as well as `\n\n`. With an engine that framed
+  its events that way, the proxy used to report an error inside the
+  stream only when the stream ended. When the request offered a tool to
+  repair, the whole reply reached the harness only then, not repaired,
+  and when its first event held arguments of a call to that tool, the
+  rest of the reply was dropped.
 
 ## [0.3.0] - 2026-10-31
 

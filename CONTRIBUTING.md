@@ -43,7 +43,7 @@ macOS memory probe test is ignored on other platforms.
 |---|---|---|
 | `tenaz-core` | `crates/core` | Domain, ports and orchestration. No process, network or git code. |
 | `tenaz-adapters` | `crates/adapters` | git, the verify runner, macOS memory probe, notifier, engine adapters (generic, load API), media adapters (ComfyUI, OpenAI Images), Prometheus metrics. |
-| `tenaz-proxy` | `crates/proxy` | OpenAI-compatible reverse proxy: per-request usage, hold while swapping, error classification, tool-argument repair, lowered effort, replies at the output limit reported as cut. |
+| `tenaz-proxy` | `crates/proxy` | OpenAI-compatible reverse proxy: per-request usage, hold while swapping, engine error messages, tool-argument repair, lowered effort, replies at the output limit reported as cut. |
 | `tenaz-acp` | `crates/acp` | Harness adapter over ACP (fx and any ACP agent). |
 | `tenaz-pi` | `crates/pi` | Harness adapter over Pi's `--mode rpc`. |
 | `tenaz-mcp` | `crates/mcp` | MCP server exposing media tools that take the lease. |

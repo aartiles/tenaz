@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::params::RunParams;
 use crate::session::{
-    SECOND_COMPACTION, SessionEvent, SessionMetrics, StopReason, WatchdogEvent, capacity_limit,
-    is_image_refusal, is_out_of_memory, is_read_tool, is_write_tool,
+    PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics, StopReason, WatchdogEvent,
+    capacity_limit, is_image_refusal, is_out_of_memory, is_read_tool, is_write_tool,
 };
 use crate::util::{approx_tokens, sha256_hex};
 use crate::write_scope::WriteScope;
@@ -569,7 +569,7 @@ impl Watchdog {
     /// `providerErrorAbort` of them.
     fn provider_error(&mut self, message: &str, elapsed_ms: u64, actions: &mut Vec<Action>) {
         self.metrics.provider_errors += 1;
-        self.event("provider-error", Some(message), elapsed_ms);
+        self.event(PROVIDER_ERROR, Some(message), elapsed_ms);
         if let Some(limit) = capacity_limit(message) {
             self.metrics.capacity_limits.push(limit);
         }
@@ -1007,14 +1007,14 @@ mod tests {
     fn provider_errors_record_capacity_and_images_then_abort() {
         let mut w = watched();
         let capacity =
-            "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
+            "400: Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
         assert!(message(&mut w, 0, StopReason::Error, Some(capacity)).is_empty());
         assert!(
             message(
                 &mut w,
                 0,
                 StopReason::Error,
-                Some("This request has at most 2 images allowed")
+                Some("400: This request has at most 2 images allowed")
             )
             .is_empty()
         );

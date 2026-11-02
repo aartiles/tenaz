@@ -212,7 +212,8 @@ pub fn swap_refusal(engine: EngineApi, swap: bool, role_models: bool) -> Option<
     }
 }
 
-/// The engine preflight (reasoning, prefix cache, vision).
+/// The engine preflight (a session that finishes, reasoning, prefix cache, a
+/// tool call, vision).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Preflight {
     pub at: String,
@@ -239,6 +240,11 @@ pub struct Preflight {
     pub duration_ms: u64,
     pub engine_metrics: bool,
     pub engine: Option<EngineSummary>,
+    /// What the engine answered to each preflight request it failed, as
+    /// the harness reported it (fx: the status and message the engine
+    /// proxy saw).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engine_errors: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub accepted_weak: bool,
 }

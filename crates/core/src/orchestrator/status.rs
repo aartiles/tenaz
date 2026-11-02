@@ -27,22 +27,6 @@ pub fn status_text(project: &Project) -> String {
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
-    let preflight = ledger.preflight.as_ref().map_or_else(
-        || "not run".to_owned(),
-        |p| {
-            format!(
-                "reasoning={} cache={}{}{}",
-                p.reasoning,
-                p.cache_check(),
-                p.tools.map(|t| format!(" tools={t}")).unwrap_or_default(),
-                if p.accepted_weak {
-                    " (accepted weak)"
-                } else {
-                    ""
-                }
-            )
-        },
-    );
     let current = ledger.current.as_ref().map_or_else(
         || "none".to_owned(),
         |c| format!("{} ({} failed attempts)", c.task, c.history.len()),
@@ -78,7 +62,7 @@ pub fn status_text(project: &Project) -> String {
     ];
     lines.extend(model_lines(&ledger));
     lines.extend([
-        format!("Preflight: {preflight}"),
+        super::preflight::line(ledger.preflight.as_ref()),
         format!(
             "Tasks: {}",
             if counts.is_empty() {

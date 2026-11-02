@@ -5,6 +5,7 @@ mod conflict;
 mod harness_exit;
 mod job;
 mod paused_continuation;
+mod preflight;
 mod prompt_fit;
 mod role_models;
 mod scripted_run;
@@ -106,15 +107,28 @@ async fn resume(project: &Project, deps: Deps) {
 
 /// Opens the run of `project` and runs it, with `--resume` when `resume`.
 async fn run_with(project: &Project, deps: Deps, stop: CancellationToken, resume: bool) {
+    let options = RunOptions {
+        resume,
+        ..RunOptions::default()
+    };
+    try_run(project, deps, stop, options).await.unwrap();
+}
+
+/// Opens the run of `project` and runs it with `options`, giving what the
+/// run ended with.
+async fn try_run(
+    project: &Project,
+    deps: Deps,
+    stop: CancellationToken,
+    options: RunOptions,
+) -> Result<(), super::RunError> {
     let mut runner = Runner::open(project.clone(), deps, stop).unwrap();
     runner
         .run(RunOptions {
-            resume,
             runner_version: "test".into(),
-            ..Default::default()
+            ..options
         })
         .await
-        .unwrap();
 }
 
 /// The virtual clock, except that a wait as long as [`ENGINE_WAIT`] stops
