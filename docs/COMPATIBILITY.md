@@ -194,9 +194,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   Sushi 1.4.0's binary, not captured from a real failure, and no real
   out-of-memory failure has gone through the proxy yet. If Sushi sends it
   otherwise, the session is rerun as before, as a harness exit. The proxy
-  reports the error when the chunk arrives, before fx can exit on it
-  (with `\r\n\r\n` framing only when the stream ends; see Streamed
-  replies).
+  reports the error when the chunk arrives, before fx can exit on it,
+  whether the engine ends its events with `\n\n` or `\r\n\r\n`.
   Only that shape, an `error` object or string in a `data:` chunk, is
   read; how llama.cpp, vLLM or Ollama send an error inside a stream has
   not been checked. The same chunk in the body of an error status gives
@@ -242,12 +241,14 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - **Streamed replies through the proxy.** The proxy decodes a streamed
   reply one whole event at a time, so a character the network splits
   between two chunks arrives intact; that is tested with unit tests, not
-  seen against a real engine. Events are framed on a blank line (`\n\n`):
-  with an engine that ends them with `\r\n\r\n`, the proxy would read
-  usage and an error inside the stream only when the stream ends, and a
-  reply with tool calls to repair would be held until then and not
-  repaired, since the repair would read only its first event. Read from
-  the code; no engine has been checked for that.
+  seen against a real engine. An event ends at a blank line, its lines
+  ending with `\n` or `\r\n`; a bare `\r` does not end a line. A stream
+  passes as the engine sent it, unless the request offers a tool whose
+  arguments the proxy repairs and the engine answers with a success
+  status: then each event it sends ends with `\n\n`. An event the repair passes on keeps its own lines; one it
+  rewrites becomes a single `data:` line. `\r\n` framing is tested with
+  unit tests, and the error report also with the fake engine; no engine
+  has been seen to send it.
 - **The pause after a capacity error** (`capacityRetryWaitSec`), and a
   stop during it, are tested with the fake harness only, not against an
   engine that runs out of memory.
