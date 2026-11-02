@@ -28,10 +28,11 @@ check and to the session finishing (fixed in #33 and #34).
 
 ### C. One function that lists every check with all it needs
 
-- Each entry holds the check's key on the line, what the line shows of it
-  (nothing for a session that finished, or a check the preflight did not
-  make), whether it passed, and its failure text. `ok`, the line and the
-  stop's error read the list.
+- Each entry holds the check's key on the line, what it found, and its
+  failure text. What it found is either a pass the line leaves out (a
+  session that finished, a check the preflight did not make), or the text
+  on the line and whether it passed. So a failed check left off the line
+  cannot be written. `ok`, the line and the stop's error read the list.
 - Once the preflight measures it, a new check is one entry (and the
   list's length). Leaving out a field of an entry does not compile; a
   check left out of the list does, and only the tests can catch it.
@@ -50,6 +51,8 @@ engine, not checks of the model.
 
 - The line and the stop's error read as before, byte for byte. The table
   test pins the line; a new test pins the stop's error with every check
-  failed. Without its line that reads the new list, it passes on the
-  code from before the change too.
+  failed. A loop over `checks` asserts that every check fails there, so
+  a new check must fail too and its text gets pinned. The loop is the only
+  part of the test that reads `checks`: without it, the test also passes
+  on the three lists from before.
 - The order of the list is the order of the line and of the stop's error.

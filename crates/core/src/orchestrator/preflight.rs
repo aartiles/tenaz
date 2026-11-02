@@ -95,7 +95,7 @@ fn read_preflight(
         engine_errors: engine_errors(m),
         accepted_weak: false,
     };
-    p.ok = checks(&p).iter().all(|c| c.passed);
+    p.ok = checks(&p).iter().all(|c| c.found.passed());
     p
 }
 
@@ -103,44 +103,77 @@ fn read_preflight(
 struct Check {
     /// Its name on the preflight's line.
     key: &'static str,
-    /// What it found, as the line shows it; `None` when the line leaves it
-    /// out (a session that finished, the image without vision, a
-    /// preflight from before the tool check), which only a check that
-    /// passed may be.
-    shown: Option<String>,
-    passed: bool,
-    /// What failed, in words, for the error that stops the run. A plain
-    /// `fn` given back the preflight the list was built from, so the list
-    /// needs no harness for `ok`.
+    /// What it found, and whether it is on the line.
+    found: Found,
+    /// What failed, in words, for the error that stops the run. Called with
+    /// the preflight the list was built from and the run's harness: a plain
+    /// `fn` cannot hold `p`, and `read_preflight`, which sets `ok`, has no
+    /// harness.
     failure: fn(&Preflight, HarnessKind) -> String,
+}
+
+/// What a check found, as the preflight's line shows it. A failed check is
+/// always on the line, unless the preflight is not judged.
+enum Found {
+    /// Passed, and left off the line: a session that finished, the image
+    /// without vision, a preflight from before the tool check.
+    Hidden,
+    /// On the line as `key=text`.
+    Shown { text: String, passed: bool },
+}
+
+impl Found {
+    /// A yes or no, shown as `true` or `false`; `None`, a check the
+    /// preflight did not make, is left off.
+    fn yes_no(found: Option<bool>) -> Self {
+        found.map_or(Self::Hidden, |passed| Self::Shown {
+            text: passed.to_string(),
+            passed,
+        })
+    }
+
+    fn passed(&self) -> bool {
+        match self {
+            Self::Hidden => true,
+            Self::Shown { passed, .. } => *passed,
+        }
+    }
 }
 
 /// The checks of `p`, in the order of its line. The only list of them: `ok`,
 /// the line and the stop's error all read it.
 fn checks(p: &Preflight) -> [Check; 5] {
+    let cache = p.cache_check();
     [
         Check {
             key: "settled",
-            shown: (!p.settled).then(|| "false".to_owned()),
-            passed: p.settled,
+            // Only a session that did not finish is on the line.
+            found: if p.settled {
+                Found::Hidden
+            } else {
+                Found::Shown {
+                    text: "false".to_owned(),
+                    passed: false,
+                }
+            },
             failure: |_, _| "the session did not finish".to_owned(),
         },
         Check {
             key: "reasoning",
-            shown: Some(p.reasoning.to_string()),
-            passed: p.reasoning,
+            found: Found::yes_no(Some(p.reasoning)),
             failure: |_, _| "no reasoning at the configured level".to_owned(),
         },
         Check {
             key: "cache",
-            shown: Some(p.cache_check().to_string()),
-            passed: p.cache_check().passes(),
+            found: Found::Shown {
+                text: cache.to_string(),
+                passed: cache.passes(),
+            },
             failure: |_, _| "the engine did not reuse the cached prompt prefix".to_owned(),
         },
         Check {
             key: "tools",
-            shown: p.tools.map(|t| t.to_string()),
-            passed: p.tools != Some(false),
+            found: Found::yes_no(p.tools),
             failure: |_, harness| {
                 format!(
                     "the model could not run `cat {TOOL_PROBE_FILE}` with {harness}'s shell \
@@ -151,8 +184,7 @@ fn checks(p: &Preflight) -> [Check; 5] {
         },
         Check {
             key: "vision",
-            shown: p.vision.map(|v| v.to_string()),
-            passed: p.vision != Some(false),
+            found: Found::yes_no(p.vision),
             failure: |preflight, _| {
                 format!(
                     "the model did not read the test image correctly (it answered {:?})",
@@ -333,7 +365,10 @@ fn summary(p: &Preflight) -> String {
     }
     let mut parts: Vec<String> = checks(p)
         .into_iter()
-        .filter_map(|c| c.shown.map(|shown| format!("{}={shown}", c.key)))
+        .filter_map(|c| match c.found {
+            Found::Shown { text, .. } => Some(format!("{}={text}", c.key)),
+            Found::Hidden => None,
+        })
         .collect();
     if p.accepted_weak {
         parts.push("(accepted weak)".to_owned());
@@ -361,7 +396,7 @@ fn details(harness: HarnessKind) -> &'static str {
 fn failures(harness: HarnessKind, p: &Preflight) -> String {
     let failed: Vec<String> = checks(p)
         .into_iter()
-        .filter(|c| !c.passed)
+        .filter(|c| !c.found.passed())
         .map(|c| (c.failure)(p, harness))
         .collect();
     if failed.is_empty() {
@@ -476,7 +511,7 @@ mod tests {
 
     /// A session that failed every check: each is named, in the order of
     /// the line, in the stop's error and on the line. A new check must fail
-    /// here too, so its text is pinned and a failure of it is on the line.
+    /// here too, so its text is pinned.
     #[test]
     fn every_failed_check_is_named_in_order() {
         let m = SessionMetrics {
@@ -490,11 +525,7 @@ mod tests {
         };
         let p = read_preflight(&m, &[], true, Some(true));
         for c in checks(&p) {
-            assert!(
-                !c.passed && c.shown.is_some(),
-                "{} passed or is not shown",
-                c.key
-            );
+            assert!(!c.found.passed(), "{} passed", c.key);
         }
         assert!(!p.ok);
         let failed = [
