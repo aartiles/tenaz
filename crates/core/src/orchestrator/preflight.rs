@@ -1,6 +1,6 @@
-//! The engine preflight: reasoning at the configured level, a working
-//! prefix cache, a shell command run through the harness's own tool, and
-//! (for vision models) a correctly read image.
+//! The engine preflight: a session that finishes, reasoning at the
+//! configured level, a working prefix cache, a shell command run through
+//! the harness's own tool, and (for vision models) a correctly read image.
 
 use std::path::Path;
 
@@ -95,8 +95,72 @@ fn read_preflight(
         engine_errors: engine_errors(m),
         accepted_weak: false,
     };
-    p.ok = p.settled && p.reasoning && p.cache_check().passes() && tools && p.vision != Some(false);
+    p.ok = checks(&p).iter().all(|c| c.passed);
     p
+}
+
+/// A check the preflight judges the model on, as one preflight found it.
+struct Check {
+    /// Its name on the preflight's line.
+    key: &'static str,
+    /// What it found, as the line shows it; `None` when the line leaves it
+    /// out (a session that finished, the image without vision, a
+    /// preflight from before the tool check), which only a check that
+    /// passed may be.
+    shown: Option<String>,
+    passed: bool,
+    /// What failed, in words, for the error that stops the run. A plain
+    /// `fn` given back the preflight the list was built from, so the list
+    /// needs no harness for `ok`.
+    failure: fn(&Preflight, HarnessKind) -> String,
+}
+
+/// The checks of `p`, in the order of its line. The only list of them: `ok`,
+/// the line and the stop's error all read it.
+fn checks(p: &Preflight) -> [Check; 5] {
+    [
+        Check {
+            key: "settled",
+            shown: (!p.settled).then(|| "false".to_owned()),
+            passed: p.settled,
+            failure: |_, _| "the session did not finish".to_owned(),
+        },
+        Check {
+            key: "reasoning",
+            shown: Some(p.reasoning.to_string()),
+            passed: p.reasoning,
+            failure: |_, _| "no reasoning at the configured level".to_owned(),
+        },
+        Check {
+            key: "cache",
+            shown: Some(p.cache_check().to_string()),
+            passed: p.cache_check().passes(),
+            failure: |_, _| "the engine did not reuse the cached prompt prefix".to_owned(),
+        },
+        Check {
+            key: "tools",
+            shown: p.tools.map(|t| t.to_string()),
+            passed: p.tools != Some(false),
+            failure: |_, harness| {
+                format!(
+                    "the model could not run `cat {TOOL_PROBE_FILE}` with {harness}'s shell \
+                     tool, so it cannot work in the project; try another model, or the other \
+                     harness"
+                )
+            },
+        },
+        Check {
+            key: "vision",
+            shown: p.vision.map(|v| v.to_string()),
+            passed: p.vision != Some(false),
+            failure: |preflight, _| {
+                format!(
+                    "the model did not read the test image correctly (it answered {:?})",
+                    preflight.vision_answer.as_deref().unwrap_or_default()
+                )
+            },
+        },
+    ]
 }
 
 /// What the engine answered to each request of `m` it failed, cut to
@@ -267,15 +331,10 @@ fn summary(p: &Preflight) -> String {
     if unjudged(p) {
         return format!("not judged: the engine could not take some of its requests{errors}");
     }
-    let mut parts = Vec::new();
-    // Shown only when false: a session that finished is the usual case.
-    if !p.settled {
-        parts.push("settled=false".to_owned());
-    }
-    parts.push(format!("reasoning={}", p.reasoning));
-    parts.push(format!("cache={}", p.cache_check()));
-    parts.extend(p.tools.map(|t| format!("tools={t}")));
-    parts.extend(p.vision.map(|v| format!("vision={v}")));
+    let mut parts: Vec<String> = checks(p)
+        .into_iter()
+        .filter_map(|c| c.shown.map(|shown| format!("{}={shown}", c.key)))
+        .collect();
     if p.accepted_weak {
         parts.push("(accepted weak)".to_owned());
     }
@@ -300,28 +359,11 @@ fn details(harness: HarnessKind) -> &'static str {
 
 /// What failed in `p`, in words, for the error that stops the run.
 fn failures(harness: HarnessKind, p: &Preflight) -> String {
-    let mut failed = Vec::new();
-    if !p.settled {
-        failed.push("the session did not finish".to_owned());
-    }
-    if !p.reasoning {
-        failed.push("no reasoning at the configured level".to_owned());
-    }
-    if p.cache_check() == CacheCheck::NotReused {
-        failed.push("the engine did not reuse the cached prompt prefix".to_owned());
-    }
-    if p.tools == Some(false) {
-        failed.push(format!(
-            "the model could not run `cat {TOOL_PROBE_FILE}` with {harness}'s shell tool, so it \
-             cannot work in the project; try another model, or the other harness"
-        ));
-    }
-    if p.vision == Some(false) {
-        failed.push(format!(
-            "the model did not read the test image correctly (it answered {:?})",
-            p.vision_answer.as_deref().unwrap_or_default()
-        ));
-    }
+    let failed: Vec<String> = checks(p)
+        .into_iter()
+        .filter(|c| !c.passed)
+        .map(|c| (c.failure)(p, harness))
+        .collect();
     if failed.is_empty() {
         "no check failed".to_owned()
     } else {
@@ -430,6 +472,42 @@ mod tests {
         assert!(!text.contains("cache"), "{text}");
         let old = Preflight { tools: None, ..p };
         assert_eq!(failures(HarnessKind::Fx, &old), "no check failed");
+    }
+
+    /// A session that failed every check: each is named, in the order of
+    /// the line, in the stop's error and on the line. A new check must fail
+    /// here too, so its text is pinned and a failure of it is on the line.
+    #[test]
+    fn every_failed_check_is_named_in_order() {
+        let m = SessionMetrics {
+            settled: false,
+            // No reasoning; no probe word and no red, so tools and vision fail.
+            texts: vec!["blue".to_owned()],
+            // The second answer read nothing from the cache, which the
+            // engine reports (`Some(true)` below), so the cache fails.
+            assistant: vec![turn(StopReason::Stop, 0), turn(StopReason::Stop, 0)],
+            ..Default::default()
+        };
+        let p = read_preflight(&m, &[], true, Some(true));
+        for c in checks(&p) {
+            assert!(
+                !c.passed && c.shown.is_some(),
+                "{} passed or is not shown",
+                c.key
+            );
+        }
+        assert!(!p.ok);
+        let failed = [
+            "the session did not finish",
+            "no reasoning at the configured level",
+            "the engine did not reuse the cached prompt prefix",
+            "the model could not run `cat probe.txt` with pi's shell tool, so it cannot work in \
+             the project; try another model, or the other harness",
+            "the model did not read the test image correctly (it answered \"blue\")",
+        ];
+        assert_eq!(failures(HarnessKind::Pi, &p), failed.join("; "));
+        let line = "settled=false reasoning=false cache=false tools=false vision=false";
+        assert_eq!(summary(&p), line);
     }
 
     fn turn(stop_reason: StopReason, cache_read: u64) -> AssistantTurn {
