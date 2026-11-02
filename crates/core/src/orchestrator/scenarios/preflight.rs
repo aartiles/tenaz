@@ -82,10 +82,10 @@ async fn an_engine_that_refuses_the_preflight_stops_the_run_with_its_error() {
         log.contains("preflight: the engine answered 503: not enough memory"),
         "{log}"
     );
-    assert!(log.contains("Preflight: not judged"), "{log}");
-    let status = crate::orchestrator::status_text(&project);
-    assert!(status.contains("Preflight: not judged"), "{status}");
-    assert!(status.contains(" engine_errors=3"), "{status}");
+    assert_eq!(
+        preflight_line_in_status_and_log(&project),
+        "Preflight: not judged: the engine could not take some of its requests engine_errors=3"
+    );
 
     run_once(&project, vcs, ScriptedHarness::default(), false)
         .await
@@ -103,7 +103,8 @@ fn run_json_preflight(project: &Project) -> serde_json::Value {
 }
 
 /// An engine that reads nothing from its prefix cache stops the run, and
-/// `--allow-weak-engine` records the failure and runs anyway.
+/// `--allow-weak-engine` records the failure and runs anyway; the log's
+/// preflight line then says it was accepted, as `tenaz status` does.
 #[tokio::test(start_paused = true)]
 async fn a_weak_engine_stops_the_run_unless_accepted() {
     let work = tempfile::tempdir().unwrap();
@@ -126,9 +127,31 @@ async fn a_weak_engine_stops_the_run_unless_accepted() {
         ),
         "{text}"
     );
+    let line = preflight_line_in_status_and_log(&project);
+    assert!(!line.ends_with(" (accepted weak)"), "{line}");
 
     run_once(&project, vcs, weak(), true).await.unwrap();
     let ledger = project.load_ledger().unwrap();
     assert!(ledger.preflight.is_some_and(|p| p.ok && p.accepted_weak));
     assert_eq!(ledger.phase, crate::ledger::Phase::Complete);
+    let line = preflight_line_in_status_and_log(&project);
+    assert!(line.ends_with(" (accepted weak)"), "{line}");
+}
+
+/// The preflight line of `tenaz status` for `project`, which must also be
+/// the message of a line of the run's log (`[time] message`).
+fn preflight_line_in_status_and_log(project: &Project) -> String {
+    let status = crate::orchestrator::status_text(project);
+    let line = status
+        .lines()
+        .find(|l| l.starts_with("Preflight: "))
+        .unwrap_or_else(|| panic!("{status}"));
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    assert!(
+        log.lines().any(|l| l
+            .split_once("] ")
+            .is_some_and(|(_, message)| message == line)),
+        "{line:?} not in {log}"
+    );
+    line.to_owned()
 }

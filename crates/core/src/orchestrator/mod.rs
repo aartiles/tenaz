@@ -383,7 +383,7 @@ impl Runner {
 
     /// Logs what the preflight found, and what it could not check.
     fn log_preflight(&self, preflight: &Preflight) {
-        self.log(&format!("Preflight: {}", preflight::summary(preflight)));
+        self.log(&preflight::line(Some(preflight)));
         if let Some(warning) = preflight::warnings(preflight) {
             self.log(warning);
         }
@@ -419,14 +419,10 @@ impl Runner {
             self.log("PAUSED during the preflight. Run again (no --resume needed) to continue.");
             return Ok(false);
         }
+        let (preflight, outcome) =
+            preflight::decide(preflight, self.ledger.config.harness, allow_weak_engine);
         self.log_preflight(&preflight);
-        let outcome = preflight::outcome(&preflight, self.ledger.config.harness, allow_weak_engine);
-        let accepted_weak = outcome == preflight::Outcome::AcceptedWeak;
-        self.ledger.preflight = Some(Preflight {
-            ok: preflight.ok || accepted_weak,
-            accepted_weak,
-            ..preflight
-        });
+        self.ledger.preflight = Some(preflight);
         self.save()?;
         match outcome {
             preflight::Outcome::Stop(error) => Err(RunError::Precondition(error)),

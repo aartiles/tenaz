@@ -173,11 +173,7 @@ pub(crate) enum Outcome {
 /// engine could not take requests stops the run whatever the flag says:
 /// the preflight did not measure the model, and one accepted now would
 /// never be run again.
-pub(crate) fn outcome(
-    preflight: &Preflight,
-    harness: HarnessKind,
-    allow_weak_engine: bool,
-) -> Outcome {
+fn outcome(preflight: &Preflight, harness: HarnessKind, allow_weak_engine: bool) -> Outcome {
     if preflight.ok {
         return Outcome::Passed;
     }
@@ -203,6 +199,25 @@ pub(crate) fn outcome(
         "Engine preflight failed: {}. Details in {details}; pass --allow-weak-engine to run anyway.",
         failures(harness, preflight)
     ))
+}
+
+/// Decides a measured preflight: what the run keeps, and what it means for
+/// the run (see [`outcome`]). A preflight `--allow-weak-engine` accepts is
+/// kept as passed and accepted weak; one the engine did not let run is
+/// never accepted, so it stays failed and its line shows it as not judged.
+pub(crate) fn decide(
+    measured: Preflight,
+    harness: HarnessKind,
+    allow_weak_engine: bool,
+) -> (Preflight, Outcome) {
+    let outcome = outcome(&measured, harness, allow_weak_engine);
+    let accepted_weak = outcome == Outcome::AcceptedWeak;
+    let kept = Preflight {
+        ok: measured.ok || accepted_weak,
+        accepted_weak,
+        ..measured
+    };
+    (kept, outcome)
 }
 
 /// The errors, each once, of an engine that could not take the
@@ -233,9 +248,18 @@ fn unjudged(preflight: &Preflight) -> bool {
             .any(|e| is_engine_unavailable(e))
 }
 
-/// What `p` found, on one line, for the log and `tenaz status`. The checks
-/// of a preflight the engine did not let run are left out.
-pub(crate) fn summary(p: &Preflight) -> String {
+/// The preflight's line, the same in the run's log and in `tenaz status`:
+/// what `preflight` found, or that it has not run.
+pub(crate) fn line(preflight: Option<&Preflight>) -> String {
+    format!(
+        "Preflight: {}",
+        preflight.map_or_else(|| "not run".to_owned(), summary)
+    )
+}
+
+/// What `p` found, on one line. The checks of a preflight the engine did
+/// not let run are left out.
+fn summary(p: &Preflight) -> String {
     let errors = match p.engine_errors.len() {
         0 => String::new(),
         n => format!(" engine_errors={n}"),
@@ -243,17 +267,16 @@ pub(crate) fn summary(p: &Preflight) -> String {
     if unjudged(p) {
         return format!("not judged: the engine could not take some of its requests{errors}");
     }
-    format!(
-        "reasoning={} cache={}{}{}{errors}",
-        p.reasoning,
-        p.cache_check(),
-        p.tools.map(|t| format!(" tools={t}")).unwrap_or_default(),
-        if p.accepted_weak {
-            " (accepted weak)"
-        } else {
-            ""
-        },
-    )
+    let mut parts = vec![
+        format!("reasoning={}", p.reasoning),
+        format!("cache={}", p.cache_check()),
+    ];
+    parts.extend(p.tools.map(|t| format!("tools={t}")));
+    parts.extend(p.vision.map(|v| format!("vision={v}")));
+    if p.accepted_weak {
+        parts.push("(accepted weak)".to_owned());
+    }
+    format!("{}{errors}", parts.join(" "))
 }
 
 /// The first error the engine answered the preflight with, for the run's
@@ -639,6 +662,22 @@ mod tests {
     }
 
     #[test]
+    fn only_a_weak_engine_the_flag_accepts_is_kept_as_passed() {
+        let p = second_answer_uncached(Some(true));
+        let (kept, accepted) = decide(p.clone(), HarnessKind::Pi, true);
+        assert_eq!(accepted, Outcome::AcceptedWeak);
+        assert!(kept.ok && kept.accepted_weak);
+        assert!(summary(&kept).ends_with(" (accepted weak)"));
+        let (kept, stopped) = decide(p, HarnessKind::Pi, false);
+        assert!(matches!(stopped, Outcome::Stop(_)));
+        assert!(!kept.ok && !kept.accepted_weak);
+        let unjudged = read_preflight(&refused(OUT_OF_MEMORY), &[], false, Some(true));
+        let (kept, stopped) = decide(unjudged, HarnessKind::Pi, true);
+        assert!(matches!(stopped, Outcome::Stop(_)));
+        assert!(!kept.ok && summary(&kept).starts_with("not judged:"));
+    }
+
+    #[test]
     fn an_engine_error_with_every_check_passing_passes() {
         let mut m = with_image_answer("");
         m.events = vec![provider_error("503: busy")];
@@ -681,24 +720,24 @@ mod tests {
     }
 
     /// The checks are shown when they were judged: a weak engine (also
-    /// accepted), engine errors beside passing checks, a refused image, and
-    /// a preflight from before the tool check.
+    /// accepted), engine errors beside passing checks, a refused image, a
+    /// vision model's image answer (right, wrong, and wrong but accepted
+    /// weak, so a preflight that failed only on the image does not read
+    /// like a pass), and a preflight from before the tool check.
     #[test]
     fn judged_checks_are_shown_with_the_engine_errors() {
         let weak = second_answer_uncached(Some(true));
-        let accepted = Preflight {
-            accepted_weak: true,
-            ..weak.clone()
-        };
+        let accepted = decide(weak.clone(), HarnessKind::Pi, true).0;
         let mut busy = with_image_answer("");
         busy.events = vec![provider_error("503: busy")];
         let mut image = with_image_answer("");
         image.events = vec![provider_error("400: at most 0 images per request")];
+        let image_answer = |answer| read_preflight(&with_image_answer(answer), &[], true, None);
         let old = Preflight {
             tools: None,
             ..weak.clone()
         };
-        for (p, line) in [
+        for (p, expected) in [
             (weak, "reasoning=true cache=false tools=true"),
             (
                 accepted,
@@ -710,12 +749,34 @@ mod tests {
             ),
             (
                 read_preflight(&image, &[], true, None),
-                "reasoning=true cache=true tools=true engine_errors=1",
+                "reasoning=true cache=true tools=true vision=false engine_errors=1",
+            ),
+            (
+                image_answer("red, blue"),
+                "reasoning=true cache=true tools=true vision=true",
+            ),
+            (
+                image_answer("blue, red"),
+                "reasoning=true cache=true tools=true vision=false",
+            ),
+            (
+                decide(image_answer("blue, red"), HarnessKind::Pi, true).0,
+                "reasoning=true cache=true tools=true vision=false (accepted weak)",
             ),
             (old, "reasoning=true cache=false"),
         ] {
-            assert_eq!(summary(&p), line);
+            assert_eq!(summary(&p), expected);
         }
+    }
+
+    #[test]
+    fn the_line_says_whether_the_preflight_ran() {
+        assert_eq!(line(None), "Preflight: not run");
+        let p = second_answer_uncached(Some(true));
+        assert_eq!(
+            line(Some(&p)),
+            "Preflight: reasoning=true cache=false tools=true"
+        );
     }
 
     #[test]
