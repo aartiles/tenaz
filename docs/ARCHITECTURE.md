@@ -10,7 +10,7 @@ crates/
                            (generic commands, a load API as Sushi's), media adapters (ComfyUI, OpenAI Images),
                            Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
-                           engine error classification, tool-argument repair, the lowered
+                           engine error messages, tool-argument repair, the lowered
                            reasoning effort, and replies at the output limit reported as cut.
   acp/       tenaz-acp       HarnessAdapter over ACP (fx and any ACP agent), harness as a subprocess.
   pi/        tenaz-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
