@@ -75,6 +75,9 @@ uses [Semantic Versioning](https://semver.org/).
   `--allow-weak-engine` runs past a failed preflight, as `tenaz status`
   does. The log used to be written before the run took the flag into
   account.
+- The preflight line of the log and of `tenaz status` starts with
+  `settled=false` when the preflight's session did not finish. Such a
+  preflight fails, but its line used to read like a pass.
 
 ## [0.3.0] - 2026-10-31
 
