@@ -65,10 +65,9 @@ uses [Semantic Versioning](https://semver.org/).
   the checks and the flag. `run.json`'s `preflight` keeps the engine's
   errors in `engine_errors`. The log and `tenaz status` show such a
   preflight as not judged, with the count of errors, instead of its
-  checks; the log names the first error, and its preflight line uses
-  the same words as `tenaz status`. A failed preflight points to
-  `.tenaz/private/preflight.fx-acp.log` only with fx: Pi keeps no log of
-  it.
+  checks, and the log names the first error. A failed preflight points
+  to `.tenaz/private/preflight.fx-acp.log` only with fx: Pi keeps no log
+  of it. See ADR 0016.
 
 ## [0.3.0] - 2026-10-31
 

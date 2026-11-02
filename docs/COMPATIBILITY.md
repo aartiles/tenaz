@@ -42,11 +42,11 @@ The preflight runs before the first session and checks:
 When the engine cannot take the preflight's requests (it runs out of
 memory, answers 502, 503 or 504, or is not reached), the checks did not
 measure the model: the run stops with the engine's error, whatever
-`--allow-weak-engine` says, and `run.json`'s `preflight` keeps the errors
-in `engine_errors`. Free what the engine needs (out of memory: free
-memory or reload the model) and run again. Other
-engine errors (a refused image, a 400 or 500 that is not about memory)
-are left to the checks.
+`--allow-weak-engine` says (ADR 0016), and `run.json`'s `preflight` keeps
+the errors in `engine_errors` (absent when there were none). Free what
+the engine needs (out of memory: free memory or reload the model) and
+run again. Other engine errors (a refused image, a 400 or 500 that is
+not about memory) are left to the checks.
 
 Some engines' tool-call parsers hand an object argument back as JSON
 text when its schema has no `type` (a `oneOf` of objects, as fx declares
@@ -161,8 +161,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 - **The preflight and an engine's refusal.** On 2026-11-02 mlx-serve
   26.10.3 refused the three preflight prompts for memory (HTTP 503) under
-  Pi 1.4.0. The run stopped with "no reasoning", "no cached prefix" and
-  "could not run `cat probe.txt`", advised another model, and pointed to
+  Pi 1.4.0. The run stopped saying there was no reasoning, no reused
+  prefix and no tool call, advised another model, and pointed to
   `.tenaz/private/preflight.*`, which Pi never writes. The preflight now
   stops with the engine's error when the engine ran out of memory,
   answered 502, 503 or 504, or was not reached, and names only files the
