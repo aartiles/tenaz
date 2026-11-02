@@ -159,9 +159,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   - fx 0.0.15, Qwen3.8-27B for the run and Flint as the builder: 11
     sessions, then paused by hand. The check at the start loaded each
     model in turn (Flint 3.5 s, Qwen 6.1 s) and left Qwen resident; four
-    swaps went through, before the first builder, the split, the builder
-    after it and a reviewer. Flint failed its task three times, and the
-    task was split.
+    swaps went through, before the first builder, the split, the first
+    builder after it and a reviewer. Flint failed its task three times,
+    and the task was split; the first new task took three builder
+    sessions too.
   - Pi 1.4.0, Flint for the run and Qwen3.8-27B as the builder: COMPLETE
     in 28 minutes and 8 sessions, both tasks done at the first try.
     Four swaps went through, one before each builder and reviewer; the
@@ -173,16 +174,18 @@ above), so a 32k context is the practical floor (`contextFloor`).
   prompt for memory. Not run against Sushi, which served neither model
   here; whether Sushi loads a model by itself when a request names one
   that is not loaded is not known. Not run with a model that barely
-  fits alone either: Qwen3.8-Flash (44 GB) loaded in mlx-serve only with
-  `--skip-mem-preflight`, and mlx-serve then refused every prompt for
-  memory (see the next entry). A swap that fails, and a stop during a
-  swap, are tested with fake engines only. Only the load-api engine swaps; a generic
-  engine is refused, since its stop ends every model.
+  fits alone either: Qwen3.8-Flash loaded in mlx-serve only with
+  `--skip-mem-preflight`, and mlx-serve then refused the preflight's
+  three prompts for memory (see the next entry). A swap that fails,
+  and a stop during a swap, are tested with fake engines only. Only the
+  load-api engine swaps; a generic engine is refused, since its stop
+  ends every model.
 
 - **The preflight and an engine's refusal.** On 2026-11-02 mlx-serve
   26.10.3 refused the three preflight prompts for memory (HTTP 503) under
-  Pi 1.4.0, with Qwen3.8-Flash loaded through `--skip-mem-preflight`. The run stopped saying there was no reasoning, no reused
-  prefix and no tool call, advised another model, and pointed to
+  Pi 1.4.0, with Qwen3.8-Flash loaded through `--skip-mem-preflight`.
+  The run stopped saying there was no reasoning, no reused prefix and
+  no tool call, advised another model, and pointed to
   `.tenaz/private/preflight.*`, which Pi never writes. The preflight now
   stops with the engine's error when the engine ran out of memory,
   answered 502, 503 or 504, or was not reached, and names only files the
