@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-02
+
 ### Added
 
 - `--model-for` works with `--harness pi`: each session's Pi is launched
@@ -21,7 +23,8 @@ uses [Semantic Versioning](https://semver.org/).
   each model once, alone, and stops the run if one will not load. Needs
   `--engine load-api` (Sushi, mlx-serve). `tenaz run --swap-models` and
   `--no-swap-models` change it; it is kept as `launch.swapModels` in
-  `run.json`, and `status --json` has `swap_models`. When swapping, the
+  `run.json`, `status --json` has `swap_models`, and `tenaz status` says
+  the models are loaded one at a time. When swapping, the
   journal's `lease` records name the model of each `load` and `unload`,
   and record a model the engine dropped by itself as `evicted`. See ADR
   0015.
