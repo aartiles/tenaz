@@ -69,7 +69,8 @@ pub enum ProxyEvent {
         fields: Vec<String>,
     },
     /// The engine returned an error status, sent an error inside a stream
-    /// that started with status 200, or could not be reached.
+    /// that started with status 200, or could not be reached. After an
+    /// error status, `message` starts with it (`503: <message>`).
     EngineError {
         request: u64,
         status: Option<u16>,
@@ -152,7 +153,7 @@ pub fn reported_finish_reason(
 }
 
 /// The error message of an engine error body, and what it means.
-pub fn classify_error(body: &[u8]) -> (String, EngineErrorKind) {
+fn read_error_body(body: &[u8]) -> (String, EngineErrorKind) {
     let text = String::from_utf8_lossy(body);
     let message = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
@@ -160,6 +161,19 @@ pub fn classify_error(body: &[u8]) -> (String, EngineErrorKind) {
         .unwrap_or_else(|| text.trim().to_owned());
     let kind = classify_message(&message);
     (message, kind)
+}
+
+/// The error body an engine answered with an error `status`: its message
+/// led by the status (`503: <message>`, or the status alone without one),
+/// and what the message alone means.
+pub(crate) fn classify_error(status: u16, body: &[u8]) -> (String, EngineErrorKind) {
+    let (message, kind) = read_error_body(body);
+    let text = if message.is_empty() {
+        status.to_string()
+    } else {
+        format!("{status}: {message}")
+    };
+    (text, kind)
 }
 
 /// The error an engine sent inside a stream that had started well (status
@@ -292,24 +306,27 @@ mod tests {
     fn errors_are_classified() {
         let capacity = br#"{"error":{"message":"Prompt (98353 tokens) requires more memory. Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}"#;
         assert_eq!(
-            classify_error(capacity).1,
+            read_error_body(capacity).1,
             EngineErrorKind::Capacity { max_context: 61488 }
         );
         let image = br#"{"message":"This request has at most 4 images"}"#;
         assert_eq!(
-            classify_error(image),
+            read_error_body(image),
             (
                 "This request has at most 4 images".to_owned(),
                 EngineErrorKind::ImageRefused
             )
         );
         assert_eq!(
-            classify_error(b"plain failure"),
+            read_error_body(b"plain failure"),
             ("plain failure".to_owned(), EngineErrorKind::Other)
         );
-        assert_eq!(classify_error(br#"{"error":"short form"}"#).0, "short form");
         assert_eq!(
-            classify_error(br#"{"error":{"message":"GenerationOutOfMemory"}}"#).1,
+            read_error_body(br#"{"error":"short form"}"#).0,
+            "short form"
+        );
+        assert_eq!(
+            read_error_body(br#"{"error":{"message":"GenerationOutOfMemory"}}"#).1,
             EngineErrorKind::OutOfMemory
         );
     }
@@ -321,7 +338,29 @@ mod tests {
     #[test]
     fn an_mlx_serve_memory_refusal_is_out_of_memory() {
         let body = br#"{"error":{"message":"This prompt (30245 tokens) does not fit in GPU memory even after freeing the prefix cache: it requires ~7720MB GPU memory but only ~6960MB is available. It was refused before any work started. Reduce the prompt length, lower --ctx-size, or free memory on the machine."}}"#;
-        assert_eq!(classify_error(body).1, EngineErrorKind::OutOfMemory);
+        assert_eq!(read_error_body(body).1, EngineErrorKind::OutOfMemory);
+    }
+
+    /// After an error status, the message starts with it; what the message
+    /// means is read without it.
+    #[test]
+    fn an_error_status_leads_the_message() {
+        let capacity = br#"{"error":{"message":"Maximum context at KV8 and prefill chunk 512: 61488 tokens."}}"#;
+        let (message, kind) = classify_error(400, capacity);
+        assert_eq!(
+            message,
+            "400: Maximum context at KV8 and prefill chunk 512: 61488 tokens."
+        );
+        assert_eq!(kind, EngineErrorKind::Capacity { max_context: 61488 });
+        for (status, body, expected) in [
+            (503, "busy", "503: busy"),
+            (500, "", "500"),
+            (500, "  ", "500"),
+        ] {
+            let classified = classify_error(status, body.as_bytes());
+            let expected = (expected.to_owned(), EngineErrorKind::Other);
+            assert_eq!(classified, expected, "{body:?}");
+        }
     }
 
     /// Sushi's chat-completions stream error: the message, else the type.

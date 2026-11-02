@@ -1007,14 +1007,14 @@ mod tests {
     fn provider_errors_record_capacity_and_images_then_abort() {
         let mut w = watched();
         let capacity =
-            "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
+            "400: Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
         assert!(message(&mut w, 0, StopReason::Error, Some(capacity)).is_empty());
         assert!(
             message(
                 &mut w,
                 0,
                 StopReason::Error,
-                Some("This request has at most 2 images allowed")
+                Some("400: This request has at most 2 images allowed")
             )
             .is_empty()
         );

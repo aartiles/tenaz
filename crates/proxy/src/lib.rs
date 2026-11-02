@@ -23,9 +23,7 @@ use tenaz_core::lease::Gate;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-pub use events::{
-    EngineErrorKind, Observer, ProxyEvent, ProxyUsage, classify_error, usage_from_json,
-};
+pub use events::{EngineErrorKind, Observer, ProxyEvent, ProxyUsage, usage_from_json};
 
 pub use repair::{ObjectArgs, Repair};
 use repair::{StreamRepair, repair_body};

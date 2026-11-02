@@ -277,6 +277,27 @@ async fn an_unreachable_engine_is_a_502_with_an_event() {
     handle.stop().await;
 }
 
+/// An engine's error after an error status starts with that status.
+#[tokio::test]
+async fn an_error_status_leads_the_engine_error() {
+    let (handle, events) = start(fake_engine().await, Gate::new()).await;
+    reqwest::Client::new()
+        .post(format!("{}/chat/completions", handle.base_url()))
+        .json(&serde_json::json!({"messages": [{"role": "user", "content": "too big"}]}))
+        .send()
+        .await
+        .unwrap();
+    let events = settle(&events, 2).await;
+    let message = events.iter().find_map(|e| match e {
+        ProxyEvent::EngineError { message, .. } => Some(message.as_str()),
+        _ => None,
+    });
+    let expected =
+        "400: Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
+    assert_eq!(message, Some(expected), "{events:?}");
+    handle.stop().await;
+}
+
 /// An engine that runs out of memory part way through a stream (status
 /// 200) is reported as an engine error, and the request's partial usage is
 /// not reported as a reply: the runner sees one failed request.
