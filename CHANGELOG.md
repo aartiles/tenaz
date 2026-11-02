@@ -68,6 +68,9 @@ uses [Semantic Versioning](https://semver.org/).
   checks, and the log names the first error. A failed preflight points
   to `.tenaz/private/preflight.fx-acp.log` only with fx: Pi keeps no log
   of it. See ADR 0016.
+- The preflight line of the log and of `tenaz status` shows the image
+  check (`vision=true` or `vision=false`) for a vision model. A preflight
+  that failed only on the image used to read like a pass.
 
 ## [0.3.0] - 2026-10-31
 

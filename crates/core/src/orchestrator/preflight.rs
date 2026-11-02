@@ -243,17 +243,16 @@ pub(crate) fn summary(p: &Preflight) -> String {
     if unjudged(p) {
         return format!("not judged: the engine could not take some of its requests{errors}");
     }
-    format!(
-        "reasoning={} cache={}{}{}{errors}",
-        p.reasoning,
-        p.cache_check(),
-        p.tools.map(|t| format!(" tools={t}")).unwrap_or_default(),
-        if p.accepted_weak {
-            " (accepted weak)"
-        } else {
-            ""
-        },
-    )
+    let mut parts = vec![
+        format!("reasoning={}", p.reasoning),
+        format!("cache={}", p.cache_check()),
+    ];
+    parts.extend(p.tools.map(|t| format!("tools={t}")));
+    parts.extend(p.vision.map(|v| format!("vision={v}")));
+    if p.accepted_weak {
+        parts.push("(accepted weak)".to_owned());
+    }
+    format!("{}{errors}", parts.join(" "))
 }
 
 /// The first error the engine answered the preflight with, for the run's
@@ -681,8 +680,10 @@ mod tests {
     }
 
     /// The checks are shown when they were judged: a weak engine (also
-    /// accepted), engine errors beside passing checks, a refused image, and
-    /// a preflight from before the tool check.
+    /// accepted), engine errors beside passing checks, a refused image, a
+    /// vision model's image answer (right, wrong, and wrong but accepted
+    /// weak, so a preflight that failed only on the image does not read
+    /// like a pass), and a preflight from before the tool check.
     #[test]
     fn judged_checks_are_shown_with_the_engine_errors() {
         let weak = second_answer_uncached(Some(true));
@@ -694,6 +695,7 @@ mod tests {
         busy.events = vec![provider_error("503: busy")];
         let mut image = with_image_answer("");
         image.events = vec![provider_error("400: at most 0 images per request")];
+        let image_answer = |answer| read_preflight(&with_image_answer(answer), &[], true, None);
         let old = Preflight {
             tools: None,
             ..weak.clone()
@@ -710,7 +712,22 @@ mod tests {
             ),
             (
                 read_preflight(&image, &[], true, None),
-                "reasoning=true cache=true tools=true engine_errors=1",
+                "reasoning=true cache=true tools=true vision=false engine_errors=1",
+            ),
+            (
+                image_answer("red, blue"),
+                "reasoning=true cache=true tools=true vision=true",
+            ),
+            (
+                image_answer("blue, red"),
+                "reasoning=true cache=true tools=true vision=false",
+            ),
+            (
+                Preflight {
+                    accepted_weak: true,
+                    ..image_answer("blue, red")
+                },
+                "reasoning=true cache=true tools=true vision=false (accepted weak)",
             ),
             (old, "reasoning=true cache=false"),
         ] {
