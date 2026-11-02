@@ -718,10 +718,7 @@ mod tests {
     #[test]
     fn judged_checks_are_shown_with_the_engine_errors() {
         let weak = second_answer_uncached(Some(true));
-        let accepted = Preflight {
-            accepted_weak: true,
-            ..weak.clone()
-        };
+        let accepted = decide(weak.clone(), HarnessKind::Pi, true).0;
         let mut busy = with_image_answer("");
         busy.events = vec![provider_error("503: busy")];
         let mut image = with_image_answer("");
@@ -754,10 +751,7 @@ mod tests {
                 "reasoning=true cache=true tools=true vision=false",
             ),
             (
-                Preflight {
-                    accepted_weak: true,
-                    ..image_answer("blue, red")
-                },
+                decide(image_answer("blue, red"), HarnessKind::Pi, true).0,
                 "reasoning=true cache=true tools=true vision=false (accepted weak)",
             ),
             (old, "reasoning=true cache=false"),
