@@ -9,8 +9,11 @@ use std::time::Duration;
 use axum::response::IntoResponse;
 use futures::StreamExt;
 use tenaz_core::lease::Gate;
-use tenaz_core::session::{engine_unreachable_text, is_engine_unavailable};
+use tenaz_core::session::{ENGINE_UNREACHABLE, is_engine_unavailable};
 use tenaz_proxy::{Proxy, ProxyEvent, ProxyUsage};
+
+/// The id a fresh proxy gives its first request.
+const FIRST_REQUEST: u64 = 1;
 
 /// The fake engine's answer to a prompt too large for it.
 const TOO_BIG: &str =
@@ -262,7 +265,7 @@ async fn holds_requests_while_the_gate_is_closed() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, ProxyEvent::Held { request: 1, .. })),
+            .any(|e| matches!(e, ProxyEvent::Held { request, .. } if *request == FIRST_REQUEST)),
         "{events:?}"
     );
     handle.stop().await;
@@ -282,7 +285,7 @@ async fn an_unreachable_engine_is_a_502_with_an_event() {
         matches!(
             &events[0],
             ProxyEvent::EngineError { message, .. }
-                if message.starts_with(&engine_unreachable_text("")) && is_engine_unavailable(message)
+                if message.starts_with(&format!("{ENGINE_UNREACHABLE}: "))
         ),
         "{events:?}"
     );
@@ -351,7 +354,7 @@ async fn an_error_inside_a_stream_is_an_engine_error() {
     assert_eq!(
         events[0],
         ProxyEvent::EngineError {
-            request: 1,
+            request: FIRST_REQUEST,
             message: "error.GenerationOutOfMemory".to_owned()
         }
     );
@@ -382,7 +385,7 @@ async fn an_error_inside_a_stream_is_reported_before_the_stream_ends() {
     assert_eq!(
         open,
         [ProxyEvent::EngineError {
-            request: 1,
+            request: FIRST_REQUEST,
             message: "error.GenerationOutOfMemory".to_owned()
         }]
     );

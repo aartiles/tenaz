@@ -53,11 +53,10 @@ pub enum ProxyEvent {
     },
     /// The engine returned an error status, sent an error inside a stream
     /// that started with status 200, or could not be reached. After an
-    /// error status the message starts with it (`503: <message>`, or `500`
-    /// alone), and an engine not reached is `engine unreachable: <error>`.
-    /// An error inside a stream is the message the engine sent in its chunk
-    /// (its `message`, else its `type` or `code`, else the error as JSON).
-    /// tenaz-core reads what the message means.
+    /// error status the message starts with it (`503: <message>`); an error
+    /// inside a stream is the engine's own message; an engine not reached
+    /// is tenaz-core's `engine_unreachable_text`. tenaz-core reads what the
+    /// message means.
     EngineError { request: u64, message: String },
 }
 

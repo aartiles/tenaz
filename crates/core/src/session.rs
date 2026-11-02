@@ -402,8 +402,10 @@ static OUT_OF_MEMORY: LazyLock<Regex> = LazyLock::new(|| {
     )
     .expect("static regex")
 });
-/// How the engine proxy's error for an engine it could not reach starts.
-const ENGINE_UNREACHABLE: &str = "engine unreachable";
+/// How the engine proxy's error for an engine it could not reach starts:
+/// every `engine_unreachable_text` starts with it, and
+/// `is_engine_unavailable` reads it as an engine that was not reached.
+pub const ENGINE_UNREACHABLE: &str = "engine unreachable";
 static UNAVAILABLE: LazyLock<Regex> = LazyLock::new(|| {
     // A server too busy or not there (502, 503, 504), as engine_error_text
     // leads an error with its status, or an engine not reached.
