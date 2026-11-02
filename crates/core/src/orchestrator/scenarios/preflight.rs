@@ -103,7 +103,8 @@ fn run_json_preflight(project: &Project) -> serde_json::Value {
 }
 
 /// An engine that reads nothing from its prefix cache stops the run, and
-/// `--allow-weak-engine` records the failure and runs anyway.
+/// `--allow-weak-engine` records the failure and runs anyway; the log's
+/// preflight line then says it was accepted, as `tenaz status` does.
 #[tokio::test(start_paused = true)]
 async fn a_weak_engine_stops_the_run_unless_accepted() {
     let work = tempfile::tempdir().unwrap();
@@ -126,9 +127,26 @@ async fn a_weak_engine_stops_the_run_unless_accepted() {
         ),
         "{text}"
     );
+    let line = logged_preflight_line(&project);
+    assert!(!line.ends_with(" (accepted weak)"), "{line}");
 
     run_once(&project, vcs, weak(), true).await.unwrap();
     let ledger = project.load_ledger().unwrap();
     assert!(ledger.preflight.is_some_and(|p| p.ok && p.accepted_weak));
     assert_eq!(ledger.phase, crate::ledger::Phase::Complete);
+    let line = logged_preflight_line(&project);
+    assert!(line.ends_with(" (accepted weak)"), "{line}");
+}
+
+/// The preflight line of `tenaz status` for `project`, after checking that
+/// the run's log has the same line.
+fn logged_preflight_line(project: &Project) -> String {
+    let status = crate::orchestrator::status_text(project);
+    let line = status
+        .lines()
+        .find(|l| l.starts_with("Preflight: "))
+        .unwrap_or_else(|| panic!("{status}"));
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    assert!(log.contains(line), "{line:?} not in {log}");
+    line.to_owned()
 }

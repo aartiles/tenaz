@@ -173,11 +173,7 @@ pub(crate) enum Outcome {
 /// engine could not take requests stops the run whatever the flag says:
 /// the preflight did not measure the model, and one accepted now would
 /// never be run again.
-pub(crate) fn outcome(
-    preflight: &Preflight,
-    harness: HarnessKind,
-    allow_weak_engine: bool,
-) -> Outcome {
+fn outcome(preflight: &Preflight, harness: HarnessKind, allow_weak_engine: bool) -> Outcome {
     if preflight.ok {
         return Outcome::Passed;
     }
@@ -203,6 +199,25 @@ pub(crate) fn outcome(
         "Engine preflight failed: {}. Details in {details}; pass --allow-weak-engine to run anyway.",
         failures(harness, preflight)
     ))
+}
+
+/// Decides a measured preflight: what the run keeps, and what it means for
+/// the run (see [`outcome`]). A preflight `--allow-weak-engine` accepts is
+/// kept as passed and accepted weak; one the engine did not let run is
+/// never accepted, so it stays failed and `summary` shows it as not judged.
+pub(crate) fn decide(
+    measured: Preflight,
+    harness: HarnessKind,
+    allow_weak_engine: bool,
+) -> (Preflight, Outcome) {
+    let outcome = outcome(&measured, harness, allow_weak_engine);
+    let accepted_weak = outcome == Outcome::AcceptedWeak;
+    let kept = Preflight {
+        ok: measured.ok || accepted_weak,
+        accepted_weak,
+        ..measured
+    };
+    (kept, outcome)
 }
 
 /// The errors, each once, of an engine that could not take the
@@ -635,6 +650,22 @@ mod tests {
         assert_eq!(p.vision, Some(false));
         assert!(stop(&p).contains("did not read the test image"));
         assert_eq!(outcome(&p, HarnessKind::Pi, true), Outcome::AcceptedWeak);
+    }
+
+    #[test]
+    fn only_a_weak_engine_the_flag_accepts_is_kept_as_passed() {
+        let p = second_answer_uncached(Some(true));
+        let (kept, accepted) = decide(p.clone(), HarnessKind::Pi, true);
+        assert_eq!(accepted, Outcome::AcceptedWeak);
+        assert!(kept.ok && kept.accepted_weak);
+        assert!(summary(&kept).ends_with(" (accepted weak)"));
+        let (kept, stopped) = decide(p, HarnessKind::Pi, false);
+        assert!(matches!(stopped, Outcome::Stop(_)));
+        assert!(!kept.ok && !kept.accepted_weak);
+        let unjudged = read_preflight(&refused(OUT_OF_MEMORY), &[], false, Some(true));
+        let (kept, stopped) = decide(unjudged, HarnessKind::Pi, true);
+        assert!(matches!(stopped, Outcome::Stop(_)));
+        assert!(!kept.ok && summary(&kept).starts_with("not judged:"));
     }
 
     #[test]
