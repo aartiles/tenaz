@@ -151,7 +151,7 @@ fn preflight_prompts(cwd: &Path, vision: bool) -> Vec<String> {
 
 /// What the preflight could not check, in words, for the run's log.
 pub(crate) fn warnings(preflight: &Preflight) -> Option<&'static str> {
-    (preflight.cache_check() == CacheCheck::NotReported).then_some(
+    (!unjudged(preflight) && preflight.cache_check() == CacheCheck::NotReported).then_some(
         "WARNING: the engine does not report cached prompt tokens, so the preflight cannot \
          check its prefix cache; it passes. Without a cache every turn processes the whole \
          prompt again. Check the engine's own log for prefix reuse.",
@@ -182,8 +182,8 @@ pub(crate) fn outcome(
         return Outcome::Passed;
     }
     let details = details(harness);
-    let unavailable = unavailable_errors(preflight);
-    if !unavailable.is_empty() {
+    if unjudged(preflight) {
+        let unavailable = unavailable_errors(preflight);
         let advice = if unavailable.iter().any(|e| is_out_of_memory(e)) {
             format!("it ran out of memory: {OUT_OF_MEMORY_ADVICE}")
         } else {
@@ -220,6 +220,40 @@ fn unavailable_errors(preflight: &Preflight) -> Vec<&str> {
         }
     }
     errors
+}
+
+/// The preflight failed while the engine could not take some of its
+/// requests, so its checks are not held against the model, even one that
+/// failed on a request the engine answered.
+fn unjudged(preflight: &Preflight) -> bool {
+    !preflight.ok
+        && preflight
+            .engine_errors
+            .iter()
+            .any(|e| is_engine_unavailable(e))
+}
+
+/// What `p` found, on one line, for the log and `tenaz status`. The checks
+/// of a preflight the engine did not let run are left out.
+pub(crate) fn summary(p: &Preflight) -> String {
+    let errors = match p.engine_errors.len() {
+        0 => String::new(),
+        n => format!(" engine_errors={n}"),
+    };
+    if unjudged(p) {
+        return format!("not judged: the engine could not take some of its requests{errors}");
+    }
+    format!(
+        "reasoning={} cache={}{}{}{errors}",
+        p.reasoning,
+        p.cache_check(),
+        p.tools.map(|t| format!(" tools={t}")).unwrap_or_default(),
+        if p.accepted_weak {
+            " (accepted weak)"
+        } else {
+            ""
+        },
+    )
 }
 
 /// The first error the engine answered the preflight with, for the run's
@@ -617,6 +651,70 @@ mod tests {
         let p = second_answer_uncached(Some(true));
         assert!(stop(&p).ends_with("pass --allow-weak-engine to run anyway."));
         assert_eq!(outcome(&p, HarnessKind::Pi, true), Outcome::AcceptedWeak);
+    }
+
+    #[test]
+    fn a_preflight_the_engine_did_not_let_run_is_not_judged() {
+        let p = read_preflight(&refused(OUT_OF_MEMORY), &[], false, Some(true));
+        assert_eq!(
+            summary(&p),
+            "not judged: the engine could not take some of its requests engine_errors=3"
+        );
+    }
+
+    #[test]
+    fn a_preflight_not_judged_logs_no_cache_warning() {
+        let unreported = read_preflight(&refused(OUT_OF_MEMORY), &[], false, Some(false));
+        assert_eq!(warnings(&unreported), None);
+    }
+
+    /// One busy answer beside a check that failed on its own: the run
+    /// stops with the engine's error, so the summary does not judge the
+    /// model either.
+    #[test]
+    fn a_failed_check_beside_a_busy_engine_is_not_judged() {
+        let mut m = second_answer_uncached_metrics();
+        m.events = vec![provider_error("503: busy")];
+        let p = read_preflight(&m, &[], false, Some(true));
+        assert!(summary(&p).starts_with("not judged:"), "{}", summary(&p));
+    }
+
+    /// The checks are shown when they were judged: a weak engine (also
+    /// accepted), engine errors beside passing checks, a refused image, and
+    /// a preflight from before the tool check.
+    #[test]
+    fn judged_checks_are_shown_with_the_engine_errors() {
+        let weak = second_answer_uncached(Some(true));
+        let accepted = Preflight {
+            accepted_weak: true,
+            ..weak.clone()
+        };
+        let mut busy = with_image_answer("");
+        busy.events = vec![provider_error("503: busy")];
+        let mut image = with_image_answer("");
+        image.events = vec![provider_error("400: at most 0 images per request")];
+        let old = Preflight {
+            tools: None,
+            ..weak.clone()
+        };
+        for (p, line) in [
+            (weak, "reasoning=true cache=false tools=true"),
+            (
+                accepted,
+                "reasoning=true cache=false tools=true (accepted weak)",
+            ),
+            (
+                read_preflight(&busy, &[], false, None),
+                "reasoning=true cache=true tools=true engine_errors=1",
+            ),
+            (
+                read_preflight(&image, &[], true, None),
+                "reasoning=true cache=true tools=true engine_errors=1",
+            ),
+            (old, "reasoning=true cache=false"),
+        ] {
+            assert_eq!(summary(&p), line);
+        }
     }
 
     #[test]

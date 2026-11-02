@@ -61,11 +61,13 @@ uses [Semantic Versioning](https://semver.org/).
   measures it again. For an engine out of memory it says to free memory
   or reload the model, as the run's retries do. Other engine errors, such
   as a refused image or a 400 or 500 not about memory, are still left to
-  the checks and the flag.
-  `run.json`'s `preflight` keeps the engine's errors in `engine_errors`,
-  the log names the first, and `tenaz status` counts them. A failed
-  preflight points to `.tenaz/private/preflight.fx-acp.log` only with fx:
-  Pi keeps no log of it.
+  the checks and the flag. `run.json`'s `preflight` keeps the engine's
+  errors in `engine_errors`. The log and `tenaz status` show such a
+  preflight as not judged, with the count of errors, instead of its
+  checks; the log names the first error, and its preflight line uses
+  the same words as `tenaz status`. A failed preflight points to
+  `.tenaz/private/preflight.fx-acp.log` only with fx: Pi keeps no log of
+  it.
 
 ## [0.3.0] - 2026-10-31
 

@@ -383,12 +383,7 @@ impl Runner {
 
     /// Logs what the preflight found, and what it could not check.
     fn log_preflight(&self, preflight: &Preflight) {
-        self.log(&format!(
-            "Preflight: reasoning={} cache={} tools={}",
-            preflight.reasoning,
-            preflight.cache_check(),
-            preflight.tools.unwrap_or(false)
-        ));
+        self.log(&format!("Preflight: {}", preflight::summary(preflight)));
         if let Some(warning) = preflight::warnings(preflight) {
             self.log(warning);
         }

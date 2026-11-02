@@ -4,29 +4,10 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::ledger::{CacheCheck, JournalRecord, Ledger, Phase, Preflight, SessionRecord};
+use crate::ledger::{CacheCheck, JournalRecord, Ledger, Phase, SessionRecord};
 use crate::memory::{MemorySample, memory_line};
 use crate::metrics::{RequestRecord, engine_line, prompt_cache_percent};
 use crate::project::Project;
-
-/// What the preflight found, on one line.
-fn preflight_line(p: &Preflight) -> String {
-    format!(
-        "reasoning={} cache={}{}{}{}",
-        p.reasoning,
-        p.cache_check(),
-        p.tools.map(|t| format!(" tools={t}")).unwrap_or_default(),
-        if p.accepted_weak {
-            " (accepted weak)"
-        } else {
-            ""
-        },
-        match p.engine_errors.len() {
-            0 => String::new(),
-            n => format!(" engine_errors={n}"),
-        }
-    )
-}
 
 /// The status text, or a note when the project is not initialized.
 pub fn status_text(project: &Project) -> String {
@@ -49,7 +30,7 @@ pub fn status_text(project: &Project) -> String {
     let preflight = ledger
         .preflight
         .as_ref()
-        .map_or_else(|| "not run".to_owned(), preflight_line);
+        .map_or_else(|| "not run".to_owned(), super::preflight::summary);
     let current = ledger.current.as_ref().map_or_else(
         || "none".to_owned(),
         |c| format!("{} ({} failed attempts)", c.task, c.history.len()),
