@@ -13,7 +13,7 @@ use crate::events::{
     ProxyEvent, finish_reason_from_json, output_limit, reported_finish_reason, status_error,
     stream_error, usage_from_json,
 };
-use crate::sse::{SseFramer, data_chunks};
+use crate::sse::{SseFramer, data_json};
 use crate::{Proxy, elapsed_ms};
 use tenaz_core::session::RequestSettings;
 
@@ -105,7 +105,7 @@ impl Tap {
     }
 
     fn sse_event(&mut self, event: &str) {
-        for json in data_chunks(event) {
+        for json in data_json(event) {
             self.sse_chunk(&json);
         }
     }

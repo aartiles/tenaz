@@ -19,6 +19,16 @@ const FIRST_REQUEST: u64 = 1;
 const TOO_BIG: &str =
     "Prompt too large. Maximum context at KV8 and prefill chunk 512: 61488 tokens.";
 
+/// The SSE error chunk read from Sushi 1.4.0's binary, without `type`,
+/// `param` and `code` (the whole chunk is in "out of memory mid stream").
+fn sse_error_chunk(message: &str) -> String {
+    let chunk = serde_json::json!({
+        "error": {"message": message},
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}]
+    });
+    format!("data: {chunk}\n\n")
+}
+
 /// The fake engine's answers with an error status, by prompt.
 fn error_reply(content: &str) -> Option<axum::response::Response> {
     use axum::http::StatusCode;
@@ -29,10 +39,7 @@ fn error_reply(content: &str) -> Option<axum::response::Response> {
         "no memory" => (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({"error": {"message": "not enough memory: available=0 MB", "type": "out_of_memory"}}))).into_response(),
         // No engine has been seen to send this: an error status with an SSE
         // body that carries an error chunk.
-        "busy, as a stream" => {
-            let sse = "data: {\"error\":{\"message\":\"busy in a chunk\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n";
-            (StatusCode::SERVICE_UNAVAILABLE, [("content-type", "text/event-stream")], sse).into_response()
-        }
+        "busy, as a stream" => (StatusCode::SERVICE_UNAVAILABLE, [("content-type", "text/event-stream")], sse_error_chunk("busy in a chunk")).into_response(),
         _ => return None,
     };
     Some(reply)
@@ -49,7 +56,7 @@ async fn fake_engine() -> SocketAddr {
                     return reply;
                 }
                 if content == "out of memory, stream kept open" {
-                    let error = "data: {\"error\":{\"message\":\"error.GenerationOutOfMemory\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n";
+                    let error = sse_error_chunk("error.GenerationOutOfMemory");
                     let body = futures::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from(error))])
                         .chain(futures::stream::pending());
                     return ([("content-type", "text/event-stream")], axum::body::Body::from_stream(body)).into_response();

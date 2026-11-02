@@ -34,7 +34,7 @@ impl SseFramer {
 
 /// The JSON of each `data:` line of an SSE event or body. Other lines, and
 /// data that is not JSON such as `[DONE]`, are skipped.
-pub(crate) fn data_chunks(text: &str) -> impl Iterator<Item = serde_json::Value> + '_ {
+pub(crate) fn data_json(text: &str) -> impl Iterator<Item = serde_json::Value> + '_ {
     text.lines()
         .filter_map(|line| line.strip_prefix("data:"))
         .filter_map(|data| serde_json::from_str(data).ok())
@@ -69,7 +69,7 @@ mod tests {
     fn only_the_json_of_data_lines_is_read() {
         let event = "event: x\r\n: ping\r\ndata:{\"a\":1}\r\ndata: [DONE]\r\ndata: {\"b\":2}\r\n";
         assert_eq!(
-            data_chunks(event).collect::<Vec<_>>(),
+            data_json(event).collect::<Vec<_>>(),
             [serde_json::json!({"a": 1}), serde_json::json!({"b": 2})]
         );
     }

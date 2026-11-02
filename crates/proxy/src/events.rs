@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tenaz_core::session::engine_error_text;
 
-use crate::sse::data_chunks;
+use crate::sse::data_json;
 
 /// Token usage of one engine response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,7 +142,9 @@ fn read_error_body(body: &[u8]) -> String {
     serde_json::from_str::<serde_json::Value>(&text)
         .ok()
         .and_then(|j| error_message(&j))
-        .or_else(|| data_chunks(&text).find_map(|chunk| stream_error(&chunk)))
+        // Unlike a JSON body, only a chunk with a non-empty `error` counts:
+        // other chunks are part of a reply.
+        .or_else(|| data_json(&text).find_map(|json| stream_error(&json)))
         .unwrap_or_else(|| text.trim().to_owned())
 }
 
@@ -153,9 +155,10 @@ pub(crate) fn status_error(status: u16, body: &[u8]) -> String {
     engine_error_text(status, &read_error_body(body))
 }
 
-/// The error one streamed chunk carries, as Sushi sends it when a
+/// The error an SSE chunk carries, as Sushi sends it in a stream when a
 /// generation fails part way:
 /// `data: {"error":{"message":…},"choices":[{"finish_reason":"error"}]}`.
+/// `read_error_body` reads the same chunk in the body of an error status.
 pub(crate) fn stream_error(chunk: &serde_json::Value) -> Option<String> {
     let error = chunk.get("error").filter(|e| {
         e.as_object().is_some_and(|o| !o.is_empty()) || e.as_str().is_some_and(|s| !s.is_empty())
