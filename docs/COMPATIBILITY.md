@@ -157,12 +157,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
   and Qwen3.8-27B 4-bit (21 GB and 17 GB resident, as mlx-serve reports
   them), on a one-page goal for a small Python package:
   - fx 0.0.15, Qwen3.8-27B for the run and Flint as the builder: 11
-    sessions, then paused by hand. The check at the start loaded each
-    model in turn (Flint 3.5 s, Qwen 6.1 s) and left Qwen resident; four
-    swaps went through, before the first builder, the split, the first
-    builder after it and a reviewer. Flint failed its task three times,
-    and the task was split; the first new task took three builder
-    sessions too.
+    sessions, paused by hand during the eleventh, a reviewer. The check
+    at the start loaded each model in turn (Flint 3.5 s, Qwen 6.1 s) and
+    left Qwen resident; four swaps went through, before the first
+    builder, the split, the first builder after it and a reviewer. Flint
+    failed its task three times, and the task was split; the first new
+    task took three builder sessions too.
   - Pi 1.4.0, Flint for the run and Qwen3.8-27B as the builder: COMPLETE
     in 28 minutes and 8 sessions, both tasks done at the first try.
     Four swaps went through, one before each builder and reviewer; the
