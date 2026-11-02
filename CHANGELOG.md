@@ -78,6 +78,13 @@ uses [Semantic Versioning](https://semver.org/).
 - The preflight line of the log and of `tenaz status` starts with
   `settled=false` when the preflight's session did not finish. Such a
   preflight fails, but its line used to read like a pass.
+- The engine proxy ends a streamed event at a blank line written with
+  `\r\n\r\n` or `\n\r\n`, as well as `\n\n`. With an engine that framed
+  its events that way, the proxy used to report an error inside the
+  stream only when the stream ended. When the request offered a tool to
+  repair, the whole reply reached the harness only then, not repaired,
+  and when its first event held arguments of a call to that tool, the
+  rest of the reply was dropped.
 
 ## [0.3.0] - 2026-10-31
 

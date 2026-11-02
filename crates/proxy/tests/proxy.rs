@@ -45,6 +45,17 @@ fn error_reply(content: &str) -> Option<axum::response::Response> {
     Some(reply)
 }
 
+/// The body of a stream the fake engine keeps open, for the prompts that
+/// ask for one: an out-of-memory error chunk, framed with `\n` or `\r\n`.
+fn kept_open_error(content: &str) -> Option<String> {
+    let chunk = sse_error_chunk("error.GenerationOutOfMemory");
+    match content {
+        "out of memory, stream kept open" => Some(chunk),
+        "out of memory, crlf stream kept open" => Some(chunk.replace('\n', "\r\n")),
+        _ => None,
+    }
+}
+
 async fn fake_engine() -> SocketAddr {
     let app = axum::Router::new()
         .route("/v1/models", axum::routing::get(|| async { axum::Json(serde_json::json!({"data": [{"id": "m"}]})) }))
@@ -55,8 +66,7 @@ async fn fake_engine() -> SocketAddr {
                 if let Some(reply) = error_reply(&content) {
                     return reply;
                 }
-                if content == "out of memory, stream kept open" {
-                    let error = sse_error_chunk("error.GenerationOutOfMemory");
+                if let Some(error) = kept_open_error(&content) {
                     let body = futures::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from(error))])
                         .chain(futures::stream::pending());
                     return ([("content-type", "text/event-stream")], axum::body::Body::from_stream(body)).into_response();
@@ -427,13 +437,25 @@ async fn an_error_status_with_an_error_chunk_is_one_engine_error() {
 /// open: fx may exit on it before the stream ends.
 #[tokio::test]
 async fn an_error_inside_a_stream_is_reported_before_the_stream_ends() {
+    error_is_reported_while_the_stream_is_open("out of memory, stream kept open").await;
+}
+
+/// The same when the engine ends its events with `\r\n\r\n`.
+#[tokio::test]
+async fn an_error_inside_a_crlf_stream_is_reported_before_the_stream_ends() {
+    error_is_reported_while_the_stream_is_open("out of memory, crlf stream kept open").await;
+}
+
+/// Sends `content` to the fake engine, which answers with an error chunk
+/// and keeps the stream open.
+async fn error_is_reported_while_the_stream_is_open(content: &str) {
     let upstream = fake_engine().await;
     let (handle, events) = start(upstream, Gate::new()).await;
     let mut response = reqwest::Client::new()
         .post(format!("{}/chat/completions", handle.base_url()))
         .json(&serde_json::json!({
             "stream": true,
-            "messages": [{"role": "user", "content": "out of memory, stream kept open"}]
+            "messages": [{"role": "user", "content": content}]
         }))
         .send()
         .await

@@ -160,8 +160,7 @@ impl Tap {
             return;
         }
         self.done = true;
-        let rest = self.sse.finish();
-        if !rest.is_empty() {
+        if let Some(rest) = self.sse.finish() {
             self.sse_event(&rest);
         }
         if self.status >= 400 {

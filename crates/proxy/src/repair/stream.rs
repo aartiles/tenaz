@@ -51,9 +51,8 @@ impl StreamRepair {
     /// The bytes still owed at the end of the stream.
     pub fn finish(&mut self) -> Vec<u8> {
         let mut out = String::new();
-        let rest = self.framer.finish();
-        if !rest.trim().is_empty() {
-            self.event(rest.trim_end_matches('\n'), &mut out);
+        if let Some(rest) = self.framer.finish() {
+            self.event(&rest, &mut out);
         }
         self.release(None, &mut out);
         out.into_bytes()
@@ -242,28 +241,30 @@ mod tests {
         (args, finish)
     }
 
+    /// The events of a reply that calls fx's `shell` with its `request`
+    /// sent as a JSON string, which the repair turns into an object.
+    const SHELL_AS_STRING: [&str; 6] = [
+        r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}"#,
+        r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"t","type":"function","function":{"name":"shell","arguments":"{\"request\":\""}}]},"finish_reason":null}]}"#,
+        r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\\"action\\\": \\\"run\\\", \\\"command\\\": \\\"ls\\\"}"}}]},"finish_reason":null}]}"#,
+        r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]},"finish_reason":null}]}"#,
+        r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+        "data: [DONE]",
+    ];
+
     #[test]
     fn streamed_arguments_are_held_repaired_and_sent_before_the_finish() {
-        let watched = ObjectArgs::from_request(&fx_tools());
-        let chunks = [
-            r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}"#,
-            r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"t","type":"function","function":{"name":"shell","arguments":"{\"request\":\""}}]},"finish_reason":null}]}"#,
-            r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\\"action\\\": \\\"run\\\", \\\"command\\\": \\\"ls\\\"}"}}]},"finish_reason":null}]}"#,
-            r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]},"finish_reason":null}]}"#,
-            r#"data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
-            "data: [DONE]",
-        ];
-        let mut repair = StreamRepair::new(watched);
+        let mut repair = StreamRepair::new(ObjectArgs::from_request(&fx_tools()));
         let mut out = Vec::new();
         // Split mid-event to check the buffering.
-        let whole = chunks.join("\n\n") + "\n\n";
+        let whole = SHELL_AS_STRING.join("\n\n") + "\n\n";
         let (a, b) = whole.split_at(150);
         out.extend(repair.push(a.as_bytes()));
         out.extend(repair.push(b.as_bytes()));
         out.extend(repair.finish());
         let out = String::from_utf8(out).unwrap();
         assert!(
-            out.starts_with(chunks[0]),
+            out.starts_with(SHELL_AS_STRING[0]),
             "untouched events pass as received"
         );
         let (args, finish) = assembled(&out);
@@ -276,6 +277,57 @@ mod tests {
         );
         assert_eq!(repair.repairs.len(), 1);
         assert!(out.ends_with("data: [DONE]\n\n"));
+    }
+
+    #[test]
+    fn a_crlf_event_is_sent_when_its_blank_line_ends() {
+        let stream = SHELL_AS_STRING.join("\r\n\r\n");
+        let mut repair = StreamRepair::new(ObjectArgs::from_request(&fx_tools()));
+        // All of the first blank line but its last `\n`.
+        let at = stream.find("\r\n\r\n").unwrap() + 3;
+        assert!(repair.push(&stream.as_bytes()[..at]).is_empty());
+        assert_eq!(
+            repair.push(&stream.as_bytes()[at..=at]),
+            format!("{}\n\n", SHELL_AS_STRING[0]).into_bytes()
+        );
+    }
+
+    /// That `events`, framed with `\r\n`, come out as they do framed with
+    /// `\n`, the last one ended by a blank line or not, with the call
+    /// repaired.
+    fn crlf_comes_out_as_lf(events: &[&str]) {
+        let watched = || ObjectArgs::from_request(&fx_tools());
+        let lf = streamed(watched(), &(events.join("\n\n") + "\n\n"));
+        assert_eq!(lf.1.len(), 1, "the call is repaired");
+        for end in ["\r\n\r\n", "\r\n", ""] {
+            let crlf = events.join("\r\n\r\n") + end;
+            assert_eq!(streamed(watched(), &crlf), lf, "ending with {end:?}");
+        }
+    }
+
+    #[test]
+    fn a_reply_framed_with_crlf_comes_out_as_with_lf() {
+        crlf_comes_out_as_lf(&SHELL_AS_STRING);
+    }
+
+    #[test]
+    fn a_crlf_reply_that_starts_with_a_watched_call_is_not_cut() {
+        crlf_comes_out_as_lf(&SHELL_AS_STRING[1..]);
+    }
+
+    /// The event keeps its `\r\n` lines; only its ending becomes `\n\n`,
+    /// also when the stream ends without a blank line.
+    #[test]
+    fn an_event_passed_on_keeps_its_own_crlf_lines() {
+        let event = concat!(
+            "event: x\r\n",
+            r#"data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}"#
+        );
+        for end in ["\r\n\r\n", "\r\n", ""] {
+            let watched = ObjectArgs::from_request(&fx_tools());
+            let (out, _) = streamed(watched, &format!("{event}{end}"));
+            assert_eq!(out, format!("{event}\n\n"), "ending with {end:?}");
+        }
     }
 
     #[test]
