@@ -10,7 +10,7 @@ use bytes::Bytes;
 use futures::Stream;
 
 use crate::events::{
-    ProxyEvent, classify_error, finish_reason_from_json, output_limit, reported_finish_reason,
+    ProxyEvent, finish_reason_from_json, output_limit, reported_finish_reason, status_error,
     stream_error, usage_from_json,
 };
 use crate::sse::SseFramer;
@@ -125,10 +125,10 @@ impl Tap {
     /// ends, and its exit must not reach the runner first.
     fn sse_chunk(&mut self, json: &serde_json::Value) {
         if !self.stream_failed
-            && let Some((message, kind)) = stream_error(json)
+            && let Some(message) = stream_error(json)
         {
             self.stream_failed = true;
-            self.report_error(message, kind);
+            self.report_error(message);
         }
         if let Some(usage) = usage_from_json(json) {
             self.usage = Some(usage);
@@ -144,12 +144,10 @@ impl Tap {
         }
     }
 
-    fn report_error(&self, message: String, kind: crate::EngineErrorKind) {
+    fn report_error(&self, message: String) {
         self.proxy.observe(ProxyEvent::EngineError {
             request: self.id,
-            status: Some(self.status),
             message,
-            kind,
         });
     }
 
@@ -176,8 +174,7 @@ impl Tap {
             self.sse_event(&rest);
         }
         if self.status >= 400 {
-            let (message, kind) = classify_error(self.status, &self.body);
-            self.report_error(message, kind);
+            self.report_error(status_error(self.status, &self.body));
         }
         if self.status >= 400 || self.stream_failed {
             // The request failed: its partial usage is not a reply's.
