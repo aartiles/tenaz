@@ -72,6 +72,8 @@ uses [Semantic Versioning](https://semver.org/).
   then, so a call the agent sends neither a permission request nor
   `in_progress` for is not timed. A context stop held for a reply's tool
   calls now also waits for a call that starts after another one ended.
+  A permission request names the call as its start does, not by the
+  title the agent shows people.
 - When the engine cannot take the preflight's requests, `tenaz run` now
   stops with the engine's error and says it is the engine's. It used to
   report no reasoning, no cached prefix and a failed tool call, and advise

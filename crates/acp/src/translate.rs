@@ -201,23 +201,37 @@ impl Translator {
     pub fn permission_events(&mut self, request: &RequestPermissionRequest) -> Vec<SessionEvent> {
         let id = request.tool_call.tool_call_id.to_string();
         self.refresh(&id, &request.tool_call.fields);
-        let mut events = Vec::new();
-        events.extend(self.start(&id));
-        events.push(Self::permission(request));
+        let start = self.start(&id);
+        // The request names the call as its start did, not by its title.
+        let (tool, args) = match &start {
+            Some(SessionEvent::ToolCallStart { name, args, .. }) => {
+                (Some(name.clone()), Some(args.clone()))
+            }
+            _ => (self.running.get(&id).cloned(), None),
+        };
+        let mut events: Vec<_> = start.into_iter().collect();
+        events.push(Self::permission(request, tool, args));
         events
     }
 
-    /// A permission request as the runner sees it.
-    fn permission(request: &RequestPermissionRequest) -> SessionEvent {
+    /// A permission request as the runner sees it. `tool` and `args` are
+    /// the call's name and input as the translator knows them; for a call
+    /// already running it keeps only the name.
+    fn permission(
+        request: &RequestPermissionRequest,
+        tool: Option<String>,
+        args: Option<serde_json::Value>,
+    ) -> SessionEvent {
         let fields = &request.tool_call.fields;
         SessionEvent::PermissionRequest {
             id: request.tool_call.tool_call_id.to_string(),
-            tool: fields
-                .name
-                .clone()
+            tool: tool
+                .or_else(|| fields.name.clone())
                 .or_else(|| fields.title.clone())
                 .unwrap_or_default(),
-            args: fields.raw_input.clone().unwrap_or(serde_json::Value::Null),
+            args: args
+                .or_else(|| fields.raw_input.clone())
+                .unwrap_or(serde_json::Value::Null),
             options: request
                 .options
                 .iter()
@@ -534,6 +548,21 @@ mod tests {
             t.permission_events(&request).first(),
             Some(&start("bash", input))
         );
+    }
+
+    #[test]
+    fn a_permission_request_names_the_call_as_its_start_does() {
+        // The request's title describes the call for people; the runner
+        // checks the call by the name and input it started with.
+        let mut t = Translator::new();
+        announce(&mut t, "bash", serde_json::json!({"command": "ls"}));
+        let request = permission_request(ToolCallUpdateFields::new().title("Running ls"));
+        let events = t.permission_events(&request);
+        let [_, SessionEvent::PermissionRequest { tool, args, .. }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(tool, "bash");
+        assert_eq!(*args, serde_json::json!({"command": "ls"}));
     }
 
     #[test]
