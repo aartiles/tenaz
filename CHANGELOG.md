@@ -6,6 +6,17 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A replan that routes a blocked task's work through a card that amends
+  its conflict's checks may set the blocked task back to `todo`, depending
+  on that card, instead of dropping it. Tenaz used to reject that backlog
+  ("amends `T001.runs`, which no file in .tenaz/conflicts/ names") and end
+  the run BLOCKED. The reopened task starts with no attempts and is not
+  built while a card that amends its checks is still to build. A status a
+  planner may not set is now put right before its cards are judged. See
+  ADR 0018.
+
 ## [0.4.0] - 2026-11-02
 
 ### Added

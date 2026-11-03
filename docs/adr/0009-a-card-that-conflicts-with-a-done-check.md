@@ -1,6 +1,7 @@
 # ADR 0009: A card that conflicts with a done check
 
-Status: accepted, 2026-10-29.
+Status: accepted, 2026-10-29. Since ADR 0018 a replan may also reopen
+the blocked task behind the amending card.
 
 ## Context
 

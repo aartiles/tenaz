@@ -20,13 +20,13 @@ impl Runner {
             self.ledger.card_repairs = 0;
             self.save()?;
         }
-        let backlog = loaded.backlog;
         if self.replan_due() {
             return self.periodic_replan().await;
         }
-        if let Some(task) = backlog.ready().first().copied().cloned() {
-            return self.run_task(&backlog, &task).await;
+        if let Some(task) = loaded.ready().first().copied().cloned() {
+            return self.run_task(&loaded.backlog, &task).await;
         }
+        let backlog = loaded.backlog;
         let open: Vec<String> = backlog
             .open()
             .iter()

@@ -116,6 +116,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **A blocked task reopened behind an amend** (ADR 0018). In a run with
+  Qwen Code 0.26.6 and Qwen3.8-27B (2026-11-03) a replan set a blocked
+  task back to `todo` behind the card that amends its conflict's check;
+  Tenaz rejected it twice and the run ended BLOCKED. Tenaz now accepts
+  that backlog. Tested with the scripted harness only, not yet in a run
+  with a real model.
 - **A model per role** (`--model-for`, ADR 0011). fx is launched with each
   session's model: its `settings.json` is rewritten before the session
   starts. Run once with fx 0.0.15 and mlx-serve 26.10.3 holding two

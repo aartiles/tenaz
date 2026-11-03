@@ -301,11 +301,30 @@ impl Session for ScriptedSession {
 
 /// The first builder session of `task` declares a conflict with `check`
 /// and stops. The first replan shown it adds `T005` (for R3, after T001,
-/// as the fake goal's T003 is), which amends the check, and drops `task`.
+/// as the fake goal's T003 is), which amends the check, and routes `task`
+/// as `routing` says.
 #[derive(Clone, Debug)]
 pub struct ScriptedConflict {
     pub task: String,
     pub check: String,
+    pub routing: Routing,
+}
+
+/// What the scripted replan does with the blocked task.
+#[derive(Clone, Copy, Debug)]
+pub enum Routing {
+    /// Drops it (ADR 0009).
+    Drop,
+    /// Sets it back to `todo`, depending on `T005` too (ADR 0018).
+    Reopen,
+    /// Sets it back to `todo` and leaves its `depends` alone.
+    ReopenUnlinked,
+    /// As `Reopen`, but writes `T005` as `done`, which a planner may not.
+    ReopenAmenderMarkedDone,
+    /// Sets it back to `todo` and writes no `T005`.
+    ReopenWithoutAmend,
+    /// Sets it to `done`, which a planner may not.
+    MarkDone,
 }
 
 /// The first builder session of `task`, or every one, writes its job
