@@ -3,15 +3,31 @@
 
 use agent_client_protocol::schema::v1::{
     ContentBlock, PermissionOptionKind, RequestPermissionRequest, SessionUpdate,
-    StopReason as AcpStop, ToolCallContent, ToolCallStatus,
+    StopReason as AcpStop, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use std::collections::HashMap;
 use tenaz_core::session::{PermissionOption, SessionEvent, StopReason, Usage};
 
+/// A tool call the agent announced that has not run yet.
+#[derive(Debug)]
+struct Pending {
+    name: String,
+    /// The latest input the agent sent for it.
+    args: serde_json::Value,
+}
+
 /// Session state the translation depends on.
 #[derive(Debug, Default)]
 pub struct Translator {
-    tool_names: HashMap<String, String>,
+    /// Calls announced as pending, by id. Such a call is reported only when
+    /// it is about to run (its permission request, `in_progress` or its
+    /// end), with the latest input: `OpenCode` and Qwen Code announce a call
+    /// before its input is complete (`bash` with only `cwd`, a read with
+    /// `{}`) and send the input with `in_progress`; fx sends it whole. Loop
+    /// checks then see what the call really does.
+    announced: HashMap<String, Pending>,
+    /// The names of reported calls, by id, until they end.
+    running: HashMap<String, String>,
     text: String,
     thinking_chars: usize,
     first_token_sent: bool,
@@ -28,43 +44,18 @@ impl Translator {
     pub fn update(&mut self, update: &SessionUpdate) -> Vec<SessionEvent> {
         match update {
             SessionUpdate::ToolCall(call) => {
-                let name = call.name.clone().unwrap_or_else(|| call.title.clone());
-                self.tool_names
-                    .insert(call.tool_call_id.to_string(), name.clone());
-                vec![SessionEvent::ToolCallStart {
-                    id: call.tool_call_id.to_string(),
-                    name,
-                    args: call.raw_input.clone().unwrap_or(serde_json::Value::Null),
-                }]
-            }
-            SessionUpdate::ToolCallUpdate(update) => {
-                let id = update.tool_call_id.to_string();
-                match update.fields.status {
-                    Some(ToolCallStatus::Completed | ToolCallStatus::Failed) => {
-                        let name = update
-                            .fields
-                            .name
-                            .clone()
-                            .or_else(|| self.tool_names.remove(&id))
-                            .unwrap_or_default();
-                        let result_text = update
-                            .fields
-                            .content
-                            .as_ref()
-                            .map(|c| content_text(c))
-                            .filter(|t| !t.is_empty())
-                            .or_else(|| update.fields.raw_output.as_ref().map(ToString::to_string))
-                            .unwrap_or_default();
-                        vec![SessionEvent::ToolCallEnd {
-                            id,
-                            name,
-                            result_text,
-                            is_error: update.fields.status == Some(ToolCallStatus::Failed),
-                        }]
-                    }
-                    _ => Vec::new(),
+                let id = call.tool_call_id.to_string();
+                // A call announced again is the same call: what earlier
+                // updates sent is kept, and a running call stays running.
+                if !self.running.contains_key(&id) {
+                    self.announced.entry(id).or_insert_with(|| Pending {
+                        name: call.title.clone(),
+                        args: serde_json::Value::Null,
+                    });
                 }
+                self.tool_call_update(&ToolCallUpdate::from(call.clone()))
             }
+            SessionUpdate::ToolCallUpdate(update) => self.tool_call_update(update),
             SessionUpdate::AgentMessageChunk(chunk) => {
                 if let ContentBlock::Text(text) = &chunk.content {
                     self.text.push_str(&text.text);
@@ -86,6 +77,70 @@ impl Translator {
             }],
             _ => Vec::new(),
         }
+    }
+
+    fn tool_call_update(&mut self, update: &ToolCallUpdate) -> Vec<SessionEvent> {
+        let id = update.tool_call_id.to_string();
+        self.refresh(&id, &update.fields);
+        match update.fields.status {
+            None | Some(ToolCallStatus::Pending) => Vec::new(),
+            Some(status @ (ToolCallStatus::Completed | ToolCallStatus::Failed)) => self
+                .start(&id)
+                .into_iter()
+                .chain(self.end(&id, &update.fields, status == ToolCallStatus::Failed))
+                .collect(),
+            // `in_progress`, and any status a later protocol adds: the call runs.
+            Some(_) => self.start(&id).into_iter().collect(),
+        }
+    }
+
+    /// Takes the name and input an update brings for a pending call. A new
+    /// title is ignored: it describes the call for people (`ReadFile:
+    /// a.txt`), and the loop checks need a name that stays the same.
+    fn refresh(&mut self, id: &str, fields: &ToolCallUpdateFields) {
+        if let Some(call) = self.announced.get_mut(id) {
+            if let Some(name) = &fields.name {
+                call.name.clone_from(name);
+            }
+            if let Some(input) = &fields.raw_input {
+                call.args.clone_from(input);
+            }
+        }
+    }
+
+    /// The start of a pending call, which then runs.
+    fn start(&mut self, id: &str) -> Option<SessionEvent> {
+        let call = self.announced.remove(id)?;
+        self.running.insert(id.to_owned(), call.name.clone());
+        Some(SessionEvent::ToolCallStart {
+            id: id.to_owned(),
+            name: call.name,
+            args: call.args,
+        })
+    }
+
+    /// The end of a running call. Any other call was never reported as
+    /// started (a pending one its prompt's end forgot), so it has no end.
+    fn end(
+        &mut self,
+        id: &str,
+        fields: &ToolCallUpdateFields,
+        is_error: bool,
+    ) -> Option<SessionEvent> {
+        let started = self.running.remove(id)?;
+        let result_text = fields
+            .content
+            .as_ref()
+            .map(|c| content_text(c))
+            .filter(|t| !t.is_empty())
+            .or_else(|| fields.raw_output.as_ref().map(ToString::to_string))
+            .unwrap_or_default();
+        Some(SessionEvent::ToolCallEnd {
+            id: id.to_owned(),
+            name: fields.name.clone().unwrap_or(started),
+            result_text,
+            is_error,
+        })
     }
 
     fn first_token(&mut self) -> Vec<SessionEvent> {
@@ -125,7 +180,9 @@ impl Translator {
 
     /// The events when the agent finishes the prompt. Without a proxy feed,
     /// the whole prompt is one turn and `used` is the agent's figure.
+    /// A call still pending never ran, and is forgotten without a report.
     pub fn prompt_end(&mut self, stop: AcpStop, request_seen: bool) -> Vec<SessionEvent> {
+        self.announced.clear();
         let aborted = stop == AcpStop::Cancelled;
         let mut events = Vec::new();
         if !request_seen {
@@ -139,8 +196,19 @@ impl Translator {
         events
     }
 
+    /// The events of a permission request: the start of its call, if not
+    /// yet reported (with the request's input, the latest), then the request.
+    pub fn permission_events(&mut self, request: &RequestPermissionRequest) -> Vec<SessionEvent> {
+        let id = request.tool_call.tool_call_id.to_string();
+        self.refresh(&id, &request.tool_call.fields);
+        let mut events = Vec::new();
+        events.extend(self.start(&id));
+        events.push(Self::permission(request));
+        events
+    }
+
     /// A permission request as the runner sees it.
-    pub fn permission(request: &RequestPermissionRequest) -> SessionEvent {
+    fn permission(request: &RequestPermissionRequest) -> SessionEvent {
         let fields = &request.tool_call.fields;
         SessionEvent::PermissionRequest {
             id: request.tool_call.tool_call_id.to_string(),
@@ -240,46 +308,278 @@ mod tests {
 
     use super::*;
 
+    /// The id of the one call each test follows.
+    const ID: &str = "c1";
+
+    fn announce(t: &mut Translator, name: &str, args: serde_json::Value) {
+        let call = ToolCall::new(ToolCallId::new(ID), name).raw_input(args);
+        assert!(
+            t.update(&SessionUpdate::ToolCall(call)).is_empty(),
+            "a pending call waits until it runs"
+        );
+    }
+
+    fn update(fields: ToolCallUpdateFields) -> SessionUpdate {
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(ToolCallId::new(ID), fields))
+    }
+
+    fn running() -> ToolCallUpdateFields {
+        ToolCallUpdateFields::new().status(ToolCallStatus::InProgress)
+    }
+
+    fn start(name: &str, args: serde_json::Value) -> SessionEvent {
+        SessionEvent::ToolCallStart {
+            id: ID.into(),
+            name: name.into(),
+            args,
+        }
+    }
+
+    fn end(name: &str, result_text: &str, is_error: bool) -> SessionEvent {
+        SessionEvent::ToolCallEnd {
+            id: ID.into(),
+            name: name.into(),
+            result_text: result_text.into(),
+            is_error,
+        }
+    }
+
+    fn permission_request(fields: ToolCallUpdateFields) -> RequestPermissionRequest {
+        RequestPermissionRequest::new(
+            SessionId::new("s"),
+            ToolCallUpdate::new(ToolCallId::new(ID), fields),
+            Vec::new(),
+        )
+    }
+
     #[test]
     fn tool_calls_become_start_and_end_events_with_their_names() {
         let mut t = Translator::new();
-        let call = ToolCall::new(ToolCallId::new("c1"), "Run shell")
+        let call = ToolCall::new(ToolCallId::new(ID), "Run shell")
             .name("mcp_lease_slow_render")
             .raw_input(serde_json::json!({"seconds": 10}));
-        let start = t.update(&SessionUpdate::ToolCall(call));
-        assert_eq!(
-            start,
-            vec![SessionEvent::ToolCallStart {
-                id: "c1".into(),
-                name: "mcp_lease_slow_render".into(),
-                args: serde_json::json!({"seconds": 10})
-            }]
+        assert!(t.update(&SessionUpdate::ToolCall(call)).is_empty());
+        let started = start("mcp_lease_slow_render", serde_json::json!({"seconds": 10}));
+        assert_eq!(t.update(&update(running())), vec![started]);
+        assert!(
+            t.update(&update(running())).is_empty(),
+            "a call starts once"
         );
-        let progress = ToolCallUpdate::new(
-            ToolCallId::new("c1"),
-            ToolCallUpdateFields::new().status(ToolCallStatus::InProgress),
+        let done = ToolCallUpdateFields::new()
+            .status(ToolCallStatus::Completed)
+            .content(vec![ToolCallContent::from(ContentBlock::Text(
+                TextContent::new("/tmp/out.png"),
+            ))]);
+        assert_eq!(
+            t.update(&update(done)),
+            vec![end("mcp_lease_slow_render", "/tmp/out.png", false)]
+        );
+    }
+
+    #[test]
+    fn a_call_starts_with_the_input_sent_when_it_runs() {
+        // OpenCode 1.19.5 and Qwen Code 0.26.6: `bash` announced with only
+        // `cwd`, its command sent with `in_progress`.
+        let mut t = Translator::new();
+        announce(&mut t, "bash", serde_json::json!({"cwd": "/p"}));
+        let full = serde_json::json!({"cwd": "/p", "command": "cat probe.txt"});
+        assert_eq!(
+            t.update(&update(running().raw_input(full.clone()))),
+            vec![start("bash", full)]
+        );
+    }
+
+    #[test]
+    fn a_name_and_input_sent_before_the_call_runs_are_kept() {
+        let mut t = Translator::new();
+        announce(&mut t, "bash", serde_json::json!({}));
+        let input = serde_json::json!({"command": "ls"});
+        let streamed = ToolCallUpdateFields::new()
+            .name("shell")
+            .raw_input(input.clone());
+        assert!(t.update(&update(streamed)).is_empty());
+        assert_eq!(t.update(&update(running())), vec![start("shell", input)]);
+    }
+
+    #[test]
+    fn calls_in_parallel_start_and_end_on_their_own() {
+        let mut t = Translator::new();
+        let step = |t: &mut Translator, id: &str, fields: ToolCallUpdateFields| {
+            t.update(&SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                ToolCallId::new(id),
+                fields,
+            )))
+        };
+        let status = |s| ToolCallUpdateFields::new().status(s);
+        for id in ["a", "b"] {
+            let call = ToolCall::new(ToolCallId::new(id), "read").raw_input(serde_json::json!({}));
+            assert!(t.update(&SessionUpdate::ToolCall(call)).is_empty());
+            let input = ToolCallUpdateFields::new().raw_input(serde_json::json!({ "path": id }));
+            assert!(step(&mut t, id, input).is_empty());
+        }
+        let starts = |events: &[SessionEvent], want: &str| matches!(events, [SessionEvent::ToolCallStart { id, args, .. }] if id == want && args["path"] == want);
+        let ends = |events: &[SessionEvent], want: &str| matches!(events, [SessionEvent::ToolCallEnd { id, name, .. }] if id == want && name == "read");
+        let a = step(&mut t, "a", status(ToolCallStatus::InProgress));
+        assert!(starts(&a, "a"), "{a:?}");
+        let b = step(&mut t, "b", status(ToolCallStatus::InProgress));
+        assert!(starts(&b, "b"), "{b:?}");
+        let b = step(&mut t, "b", status(ToolCallStatus::Completed));
+        assert!(ends(&b, "b"), "{b:?}");
+        let a = step(&mut t, "a", status(ToolCallStatus::Completed));
+        assert!(ends(&a, "a"), "{a:?}");
+    }
+
+    #[test]
+    fn a_pending_call_announced_again_keeps_what_updates_sent() {
+        let mut t = Translator::new();
+        announce(&mut t, "bash", serde_json::json!({}));
+        let input = serde_json::json!({"command": "ls"});
+        let sent = ToolCallUpdateFields::new()
+            .name("shell")
+            .raw_input(input.clone());
+        t.update(&update(sent));
+        let again = ToolCall::new(ToolCallId::new(ID), "bash");
+        assert!(t.update(&SessionUpdate::ToolCall(again)).is_empty());
+        assert_eq!(t.update(&update(running())), vec![start("shell", input)]);
+    }
+
+    #[test]
+    fn a_running_call_announced_again_does_not_start_again() {
+        let mut t = Translator::new();
+        announce(&mut t, "bash", serde_json::json!({"command": "ls"}));
+        t.update(&update(running()));
+        let again = ToolCall::new(ToolCallId::new(ID), "bash");
+        assert!(t.update(&SessionUpdate::ToolCall(again)).is_empty());
+        let done = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        assert_eq!(t.update(&update(done)), vec![end("bash", "", false)]);
+    }
+
+    #[test]
+    fn a_call_announced_as_done_starts_and_ends_at_once() {
+        let mut t = Translator::new();
+        let call = ToolCall::new(ToolCallId::new(ID), "ls").status(ToolCallStatus::Completed);
+        assert_eq!(
+            t.update(&SessionUpdate::ToolCall(call)),
+            vec![start("ls", serde_json::Value::Null), end("ls", "", false)]
+        );
+    }
+
+    #[test]
+    fn updates_for_a_call_never_announced_are_not_reported() {
+        let mut t = Translator::new();
+        assert!(t.update(&update(running())).is_empty());
+        let done = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        assert!(t.update(&update(done)).is_empty());
+    }
+
+    #[test]
+    fn a_failed_call_that_never_ran_starts_and_ends_at_once() {
+        let mut t = Translator::new();
+        announce(&mut t, "ReadFile", serde_json::json!({}));
+        let failed = ToolCallUpdateFields::new()
+            .status(ToolCallStatus::Failed)
+            .raw_input(serde_json::json!({"file_path": "a"}));
+        assert_eq!(
+            t.update(&update(failed)),
+            vec![
+                start("ReadFile", serde_json::json!({"file_path": "a"})),
+                end("ReadFile", "", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_call_starts_before_its_permission_request() {
+        // fx 0.0.16: the whole input in `tool_call` (titled "Running"),
+        // then the request, then `in_progress`.
+        let mut t = Translator::new();
+        announce(&mut t, "Running", serde_json::json!({"command": "ls"}));
+        let events = t.permission_events(&permission_request(ToolCallUpdateFields::new()));
+        let [started, asked] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(
+            *started,
+            start("Running", serde_json::json!({"command": "ls"}))
+        );
+        assert!(matches!(asked, SessionEvent::PermissionRequest { id, .. } if id == ID));
+    }
+
+    #[test]
+    fn a_call_started_by_its_permission_request_does_not_start_again() {
+        let mut t = Translator::new();
+        announce(&mut t, "Running", serde_json::json!({"command": "ls"}));
+        let request = permission_request(ToolCallUpdateFields::new());
+        t.permission_events(&request);
+        assert!(
+            t.update(&update(running())).is_empty(),
+            "in_progress does not start it again"
         );
         assert!(
-            t.update(&SessionUpdate::ToolCallUpdate(progress))
-                .is_empty()
+            matches!(
+                t.permission_events(&request).as_slice(),
+                [SessionEvent::PermissionRequest { .. }]
+            ),
+            "a second request does not start it again"
         );
-        let done = ToolCallUpdate::new(
-            ToolCallId::new("c1"),
-            ToolCallUpdateFields::new()
-                .status(ToolCallStatus::Completed)
-                .content(vec![ToolCallContent::from(ContentBlock::Text(
-                    TextContent::new("/tmp/out.png"),
-                ))]),
-        );
-        let end = t.update(&SessionUpdate::ToolCallUpdate(done));
+    }
+
+    #[test]
+    fn a_permission_request_brings_the_latest_input() {
+        let mut t = Translator::new();
+        announce(&mut t, "bash", serde_json::json!({"cwd": "/p"}));
+        let input = serde_json::json!({"cwd": "/p", "command": "rm -r build"});
+        let request = permission_request(ToolCallUpdateFields::new().raw_input(input.clone()));
         assert_eq!(
-            end,
-            vec![SessionEvent::ToolCallEnd {
-                id: "c1".into(),
-                name: "mcp_lease_slow_render".into(),
-                result_text: "/tmp/out.png".into(),
-                is_error: false
-            }]
+            t.permission_events(&request).first(),
+            Some(&start("bash", input))
+        );
+    }
+
+    #[test]
+    fn a_permission_request_for_an_unknown_call_is_only_a_request() {
+        let mut t = Translator::new();
+        let request = permission_request(ToolCallUpdateFields::new().name("bash"));
+        assert!(matches!(
+            t.permission_events(&request).as_slice(),
+            [SessionEvent::PermissionRequest { id, .. }] if id == ID
+        ));
+    }
+
+    #[test]
+    fn a_call_still_pending_when_the_prompt_ends_is_never_reported() {
+        let mut t = Translator::new();
+        announce(&mut t, "bash", serde_json::json!({"command": "ls"}));
+        let events = t.prompt_end(AcpStop::Cancelled, true);
+        assert_eq!(events, vec![SessionEvent::Settled { aborted: true }]);
+        assert!(
+            t.update(&update(running())).is_empty(),
+            "a late update does not start a call of an ended prompt"
+        );
+        let done = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        assert!(
+            t.update(&update(done)).is_empty(),
+            "a call never reported as started has no end"
+        );
+    }
+
+    #[test]
+    fn a_running_call_keeps_its_name_after_the_prompt_ends() {
+        let mut t = Translator::new();
+        announce(&mut t, "bash", serde_json::json!({"command": "sleep 1"}));
+        t.update(&update(running()));
+        t.prompt_end(AcpStop::Cancelled, true);
+        let done = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        assert_eq!(t.update(&update(done)), vec![end("bash", "", false)]);
+    }
+
+    #[test]
+    fn a_call_that_is_already_running_starts_at_once() {
+        let mut t = Translator::new();
+        let call = ToolCall::new(ToolCallId::new(ID), "ls").status(ToolCallStatus::InProgress);
+        assert_eq!(
+            t.update(&SessionUpdate::ToolCall(call)),
+            vec![start("ls", serde_json::Value::Null)]
         );
     }
 
@@ -343,15 +643,15 @@ mod tests {
             ),
         ];
         let update = ToolCallUpdate::new(
-            ToolCallId::new("c9"),
+            ToolCallId::new(ID),
             ToolCallUpdateFields::new()
                 .name("shell")
                 .raw_input(serde_json::json!({"cmd": "ls"})),
         );
         let request = RequestPermissionRequest::new(SessionId::new("s"), update, options.clone());
-        let event = Translator::permission(&request);
+        let events = Translator::new().permission_events(&request);
         assert!(
-            matches!(&event, SessionEvent::PermissionRequest { id, tool, options, .. } if id == "c9" && tool == "shell" && options.len() == 3 && options[0].kind == "allow_always")
+            matches!(events.as_slice(), [SessionEvent::PermissionRequest { id, tool, options, .. }] if id == ID && tool == "shell" && options.len() == 3 && options[0].kind == "allow_always")
         );
         assert_eq!(choose_option(&options, true).unwrap().to_string(), "once");
         assert_eq!(choose_option(&options, false).unwrap().to_string(), "no");

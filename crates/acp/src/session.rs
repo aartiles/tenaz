@@ -161,9 +161,8 @@ impl AcpSession {
                                 Ok(SessionMessage::StopReason(stop)) => {
                                     state.prompting = false;
                                     state.thinking.end_request(&format!("prompt ended: {stop:?}"));
-                                    for event in state.translator.prompt_end(stop, state.request_seen) {
-                                        state.emit(event);
-                                    }
+                                    let events = state.translator.prompt_end(stop, state.request_seen);
+                                    state.emit_all(events);
                                 }
                                 Ok(SessionMessage::SessionMessage(dispatch)) => {
                                     let state_ref = &mut state;
@@ -172,16 +171,16 @@ impl AcpSession {
                                             if let Some(text) = thought_text(&notification.update) {
                                                 state_ref.thinking.push(text);
                                             }
-                                            for event in state_ref.translator.update(&notification.update) {
-                                                state_ref.emit(event);
-                                            }
+                                            let events = state_ref.translator.update(&notification.update);
+                                            state_ref.emit_all(events);
                                             Ok(())
                                         })
                                         .await
                                         .if_request(async |request: RequestPermissionRequest, responder: Responder<RequestPermissionResponse>| {
                                             let id = request.tool_call.tool_call_id.to_string();
                                             state_ref.pending.insert(id, (responder, request.options.clone()));
-                                            state_ref.emit(Translator::permission(&request));
+                                            let events = state_ref.translator.permission_events(&request);
+                                            state_ref.emit_all(events);
                                             Ok(())
                                         })
                                         .await
@@ -328,6 +327,12 @@ impl Running {
         let _ = self.events.send(event);
     }
 
+    fn emit_all(&self, events: Vec<SessionEvent>) {
+        for event in events {
+            self.emit(event);
+        }
+    }
+
     /// A model request the proxy saw end: its turn's events, then a new turn.
     fn observe(&mut self, observation: EngineObservation) {
         self.request_seen = true;
@@ -354,9 +359,7 @@ impl Running {
                 )
             }
         };
-        for event in events {
-            self.emit(event);
-        }
+        self.emit_all(events);
         self.emit(SessionEvent::TurnStart);
     }
 

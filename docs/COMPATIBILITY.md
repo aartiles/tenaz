@@ -238,6 +238,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   the same session again (ADR 0004). Tested with the fake harness only:
   that Pi takes a prompt after `abort` with its context, and that fx stays
   usable after `session/cancel`, have not been run against the real tools.
+  An ACP call announced as pending is timed from when it is about to run:
+  its permission request or `in_progress`. An agent that sends neither
+  for a call reports it only when it ends, so `toolMinutes` cannot stop
+  it, and an agent that exits during such a call is taken for an engine
+  failure rather than a crash in the call. Seen by hand with a minimal
+  ACP client, not recorded: fx 0.0.16 in the `ask` mode Tenaz sets asks
+  permission for a shell call, and OpenCode 1.19.5 and Qwen Code 0.26.6
+  send `in_progress` with the call's input. A call announced while the
+  reply streams now usually starts after that reply's turn ends, so its
+  time and its loop check fall in the next turn.
 - **Streamed replies through the proxy.** The proxy decodes a streamed
   reply one whole event at a time, so a character the network splits
   between two chunks arrives intact; that is tested with unit tests, not

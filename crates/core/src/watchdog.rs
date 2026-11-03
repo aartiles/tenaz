@@ -39,9 +39,10 @@ struct HeldStop {
 
 impl HeldStop {
     /// Whether `event` starts the next reply, where the stop applies. Pi
-    /// starts a turn after the tool calls; fx before them, so there the
-    /// stop waits for the reply's first token or its end. A session that
-    /// ends instead ends on the stop.
+    /// starts a turn after the tool calls; an ACP agent may start it
+    /// before them or between them (each call starts when it runs), so
+    /// there the stop waits for the reply's first token or its end. A
+    /// session that ends instead ends on the stop.
     fn applies_at(&self, event: &SessionEvent) -> bool {
         match event {
             SessionEvent::TurnStart => self.calls_ended,
@@ -339,6 +340,14 @@ impl Watchdog {
         actions
     }
 
+    /// A tool call started: a held stop waits for it too.
+    fn call_began(&mut self, id: &str, elapsed_ms: u64) {
+        self.call_started.insert(id.to_owned(), elapsed_ms);
+        if let Some(held) = self.held_stop.as_mut() {
+            held.calls_ended = false;
+        }
+    }
+
     /// A tool call ended: a held stop waits for no more calls.
     fn call_ended(&mut self, id: &str) {
         self.call_started.remove(id);
@@ -390,7 +399,7 @@ impl Watchdog {
         self.metrics.tool_calls += 1;
         self.call_args
             .insert(id.to_owned(), (name.to_owned(), args.clone()));
-        self.call_started.insert(id.to_owned(), elapsed_ms);
+        self.call_began(id, elapsed_ms);
         let key = format!("{name}:{args}");
         self.same_count = if self.last_key.as_deref() == Some(&key) {
             self.same_count + 1
@@ -950,6 +959,37 @@ mod tests {
         assert_eq!(
             w.handle(&SessionEvent::FirstToken, 7, String::new),
             context_stop()
+        );
+    }
+
+    /// An ACP agent starts each call when it runs: a call that starts after
+    /// another ended holds the stop again.
+    #[test]
+    fn the_context_stop_waits_for_a_call_that_starts_after_another_ended() {
+        let mut w = crossed_with_tool_calls();
+        assert!(write_file(&mut w).is_empty(), "the first write runs");
+        let second = SessionEvent::ToolCallStart {
+            id: "call_10".into(),
+            name: "write".into(),
+            args: serde_json::json!({ "path": "src/core/render.ts" }),
+        };
+        assert!(w.handle(&second, 6, String::new).is_empty());
+        assert!(
+            w.handle(&SessionEvent::TurnStart, 7, String::new)
+                .is_empty(),
+            "the second write is still running"
+        );
+        let ended = SessionEvent::ToolCallEnd {
+            id: "call_10".into(),
+            name: "write".into(),
+            result_text: "ok".into(),
+            is_error: false,
+        };
+        assert!(w.handle(&ended, 8, String::new).is_empty());
+        assert_eq!(
+            w.handle(&SessionEvent::TurnStart, 9, String::new),
+            context_stop(),
+            "with every call ended, the next turn applies the stop"
         );
     }
 

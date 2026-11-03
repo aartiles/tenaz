@@ -53,6 +53,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An ACP agent's tool call is reported with the input it runs with.
+  OpenCode and Qwen Code announce a call before its input is complete
+  (`bash` with only its folder, a read with no file) and send the input
+  once it runs; Tenaz took the first version, so different calls looked
+  the same and the loop check stopped sessions that were working. A
+  pending call is now reported when it is about to run: at its permission
+  request, when it starts, or when it ends. `toolMinutes` counts from
+  then, so a call the agent sends neither a permission request nor
+  `in_progress` for is not timed. A context stop held for a reply's tool
+  calls now also waits for a call that starts after another one ended.
 - When the engine cannot take the preflight's requests, `tenaz run` now
   stops with the engine's error and says it is the engine's. It used to
   report no reasoning, no cached prefix and a failed tool call, and advise
