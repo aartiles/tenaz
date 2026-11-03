@@ -480,8 +480,8 @@ fn harness_usage(u: &tenaz_proxy::ProxyUsage) -> Usage {
     }
 }
 
-/// The output limit fx is configured with, and what the proxy takes as the
-/// limit of a request that does not say.
+/// The output limit fx and `OpenCode` are configured with, and what the
+/// proxy takes as the limit of a request that does not say.
 const HARNESS_MAX_OUTPUT_TOKENS: u64 = 16_384;
 
 /// The engine proxy for `project`'s run (`ledger`): per-request usage and

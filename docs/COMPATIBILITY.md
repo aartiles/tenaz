@@ -319,7 +319,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
   ([vercel-labs/fx#1458](https://github.com/vercel-labs/fx/issues/1458)).
 
 - **Pi and the proxy.** Pi's requests go through the proxy, so the engine
-  hold covers them, but the media tools are fx only (Pi runs with
+  hold covers them, but Pi gets no media tools (it runs with
   `--no-mcp`), and Pi's request records take their usage from Pi rather
   than the proxy, so they carry no server timings (draft acceptance).
   `--no-proxy` points Pi straight at the engine.

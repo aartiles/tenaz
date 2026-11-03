@@ -36,8 +36,9 @@ pub struct McpEndpoint {
 }
 
 /// The harness. It runs the model its agent is set up with, or the one its
-/// per-session arguments name (Qwen Code); an agent that reads the model
-/// from its configuration is wrapped in a [`ConfiguredHarness`].
+/// per-session arguments name (Qwen Code). Each agent is wrapped in a
+/// [`ConfiguredHarness`], which writes its configuration for the session's
+/// model.
 #[derive(Clone)]
 pub struct AcpHarness {
     info: HarnessInfo,
