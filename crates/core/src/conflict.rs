@@ -4,7 +4,7 @@
 
 use crate::backlog::Backlog;
 use crate::task::frontmatter::{Value, parse_frontmatter};
-use crate::task::{TaskId, TaskStatus};
+use crate::task::{TaskCard, TaskId, TaskStatus};
 
 /// `.tenaz/conflicts/<TASK>.md`: the checks in the way and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +45,40 @@ impl Conflict {
             .map_or(Ok(()), Err)
     }
 
+    /// Whether the conflict still stands in `backlog`: its task is blocked,
+    /// dropped once a replan routed around it, or `todo` while another card
+    /// still to build amends one of its checks, as when a replan reopened it
+    /// behind that card (ADR 0018); such a task waits for those cards
+    /// (`LoadedBacklog::ready`). A conflict file of a task in any other
+    /// state is left from an earlier attempt, or its amend has been made;
+    /// one whose checks do not belong to done tasks (`validate`) never
+    /// stands.
+    pub fn stands_in(&self, backlog: &Backlog) -> bool {
+        let Some(card) = backlog.get(&self.task) else {
+            return false;
+        };
+        if self.validate(backlog).is_err() {
+            return false;
+        }
+        match card.status {
+            TaskStatus::Blocked | TaskStatus::Dropped => true,
+            // An active task's attempt removed the file it had; one there
+            // now is that attempt's, not yet read.
+            TaskStatus::Done | TaskStatus::Split | TaskStatus::Active => false,
+            TaskStatus::Todo => self.amenders(backlog).next().is_some(),
+        }
+    }
+
+    /// The cards of `backlog` still to build, other than its own task, that
+    /// amend a check this conflict names.
+    fn amenders<'a>(&'a self, backlog: &'a Backlog) -> impl Iterator<Item = &'a TaskCard> {
+        backlog.cards().filter(|card| {
+            card.id != self.task
+                && to_build(card.status)
+                && card.amends.iter().any(|c| self.checks.contains(c))
+        })
+    }
+
     /// Why `check` cannot be in this task's way, if it cannot.
     fn why_not(&self, check: &str, backlog: &Backlog) -> Option<String> {
         let owner = check_task(check)?;
@@ -71,13 +105,22 @@ pub fn check_task(check: &str) -> Option<TaskId> {
     TaskId::parse(task).ok()
 }
 
-/// What is wrong with the `amends` of the cards in `backlog` that are not
-/// done: each check they name must be one a conflict names.
+/// Whether a card of `status` may still be built: one done, split or
+/// dropped never is, so its `amends` licenses nothing more.
+fn to_build(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Todo | TaskStatus::Active | TaskStatus::Blocked
+    )
+}
+
+/// What is wrong with the `amends` of the cards in `backlog` that may
+/// still be built: each check they name must be one a conflict names.
 pub fn amend_errors(backlog: &Backlog, conflicts: &[Conflict]) -> Vec<String> {
     let declared = |check: &String| conflicts.iter().any(|c| c.checks.contains(check));
     backlog
         .cards()
-        .filter(|card| card.status != TaskStatus::Done)
+        .filter(|card| to_build(card.status))
         .flat_map(|card| {
             card.amends
                 .iter()
@@ -153,6 +196,73 @@ mod tests {
         }
     }
 
+    const AMENDS: &str = "amends: [T016a.look-cues]\n";
+
+    /// A replan may reopen the blocked task behind the amending card
+    /// instead of dropping it; its conflict stands while a card still to
+    /// build amends one of its checks, wherever that card is, so the split
+    /// children of the amending card keep it standing.
+    #[test]
+    fn a_conflict_stands_while_its_task_is_blocked_dropped_or_waits_for_an_amend() {
+        let conflict = Conflict::read(&id("T016b"), LOTION).unwrap();
+        for (task, amender, amender_amends, stands) in [
+            ("blocked", "done", AMENDS, true),
+            ("dropped", "done", AMENDS, true),
+            ("todo", "todo", AMENDS, true),
+            ("todo", "active", AMENDS, true),
+            ("todo", "blocked", AMENDS, true),
+            ("todo", "todo", "amends: [T009.lights]\n", false),
+            (
+                "todo",
+                "todo",
+                "amends: [T009.lights, T016a.look-cues]\n",
+                true,
+            ),
+            ("todo", "done", AMENDS, false),
+            ("todo", "dropped", AMENDS, false),
+            ("todo", "split", AMENDS, false),
+            ("active", "todo", AMENDS, false),
+            ("done", "todo", AMENDS, false),
+            ("split", "todo", AMENDS, false),
+        ] {
+            let backlog = Backlog::from_cards([
+                card("T016a", "done", ""),
+                card("T016b", task, ""),
+                card("T016g", amender, amender_amends),
+            ]);
+            let row = format!("{task} with T016g {amender} {}", amender_amends.trim_end());
+            assert_eq!(conflict.stands_in(&backlog), stands, "{row}");
+        }
+        assert!(!conflict.stands_in(&Backlog::default()), "no card");
+        let not_done =
+            Backlog::from_cards([card("T016a", "todo", ""), card("T016b", "blocked", "")]);
+        assert!(!conflict.stands_in(&not_done), "T016a is not done");
+    }
+
+    /// A conflict naming two checks stands while one of them is amended.
+    #[test]
+    fn a_conflict_stands_while_any_of_its_checks_is_amended() {
+        let text = "---\nchecks: [T016a.look-cues, T009.lights]\n---\n";
+        let conflict = Conflict::read(&id("T016b"), text).unwrap();
+        let backlog = Backlog::from_cards([
+            card("T016a", "done", ""),
+            card("T009", "done", ""),
+            card("T016b", "todo", ""),
+            card("T016g", "todo", AMENDS),
+        ]);
+        assert!(conflict.stands_in(&backlog));
+    }
+
+    /// A task does not amend its own conflict: its attempt would remove
+    /// the conflict that licenses the amend.
+    #[test]
+    fn a_conflict_does_not_stand_behind_its_own_task() {
+        let conflict = Conflict::read(&id("T016b"), LOTION).unwrap();
+        let backlog =
+            Backlog::from_cards([card("T016a", "done", ""), card("T016b", "todo", AMENDS)]);
+        assert!(!conflict.stands_in(&backlog));
+    }
+
     #[test]
     fn a_card_may_amend_only_checks_a_conflict_names() {
         let conflict = Conflict::read(&id("T016b"), LOTION).unwrap();
@@ -160,10 +270,21 @@ mod tests {
             card("T016g", "todo", "amends: [T016a.look-cues]\n"),
             card("T016h", "todo", "amends: [T009.lights]\n"),
             card("T001", "done", "amends: [T000.old]\n"),
+            card("T002", "dropped", "amends: [T000.old]\n"),
+            card("T003", "split", "amends: [T000.old]\n"),
+            card("T004", "active", "amends: [T000.old]\n"),
+            card("T005", "blocked", "amends: [T000.old]\n"),
         ]);
+        let not_named = |card: &str, check: &str| {
+            format!("{card}: amends `{check}`, which no file in .tenaz/conflicts/ names")
+        };
         assert_eq!(
             amend_errors(&backlog, &[conflict]),
-            ["T016h: amends `T009.lights`, which no file in .tenaz/conflicts/ names"]
+            [
+                not_named("T004", "T000.old"),
+                not_named("T005", "T000.old"),
+                not_named("T016h", "T009.lights"),
+            ]
         );
     }
 }
