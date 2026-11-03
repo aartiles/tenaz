@@ -45,11 +45,10 @@ pub fn agents() -> Vec<Agent> {
 /// scripted harness has its own.
 pub fn agent_version(harness: HarnessKind, bin: &Path) -> std::io::Result<String> {
     match harness {
-        HarnessKind::Pi => tenaz_pi::pi_version(bin),
-        HarnessKind::Fx | HarnessKind::OpenCode | HarnessKind::Qwen => {
+        HarnessKind::Fake => Ok(tenaz_core::testing::ScriptedHarness::default().version()),
+        HarnessKind::Pi | HarnessKind::Fx | HarnessKind::OpenCode | HarnessKind::Qwen => {
             tenaz_acp::agent_version(bin)
         }
-        HarnessKind::Fake => Ok(tenaz_core::testing::ScriptedHarness::default().version()),
     }
 }
 

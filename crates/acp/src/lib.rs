@@ -207,7 +207,8 @@ impl Harness for ConfiguredHarness {
     }
 }
 
-/// The first line of `<binary> --version`.
+/// The first line of `<binary> --version`, trimmed: how every agent Tenaz
+/// drives, Pi included, reports its version.
 pub fn agent_version(binary: &Path) -> io::Result<String> {
     let output = Command::new(binary).arg("--version").output()?;
     if !output.status.success() {

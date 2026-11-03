@@ -10,7 +10,6 @@ pub mod translate;
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use async_trait::async_trait;
 use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
@@ -219,24 +218,6 @@ fn absolute(path: &Path) -> String {
         .to_string()
 }
 
-/// The first line of `pi --version`.
-pub fn pi_version(binary: &Path) -> io::Result<String> {
-    let output = Command::new(binary).arg("--version").output()?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "{} --version exited with {}",
-            binary.display(),
-            output.status
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_owned())
-}
-
 /// The harness: one Pi process per session.
 #[derive(Clone, Debug)]
 pub struct PiHarness {
@@ -410,24 +391,6 @@ mod tests {
                 ("A".to_owned(), "1".to_owned()),
                 (AGENT_DIR_ENV.to_owned(), agent.display().to_string()),
             ]
-        );
-    }
-
-    #[test]
-    fn version_of_a_missing_binary_is_an_error() {
-        assert!(pi_version(Path::new("/nonexistent/pi")).is_err());
-    }
-
-    /// Against the installed Pi when there is one; skipped otherwise.
-    #[test]
-    fn version_of_the_installed_pi_is_a_version_number() {
-        let Ok(version) = pi_version(Path::new("pi")) else {
-            eprintln!("pi not in PATH; skipping");
-            return;
-        };
-        assert!(
-            version.chars().next().is_some_and(|c| c.is_ascii_digit()),
-            "{version}"
         );
     }
 }
