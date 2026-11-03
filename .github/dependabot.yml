@@ -10,6 +10,11 @@ updates:
     # rust-version in Cargo.toml, not a release to keep current.
     ignore:
       - dependency-name: dtolnay/rust-toolchain
+    # dist generates release.yml and its plan job fails when the file
+    # differs from what dist would write. Its actions change with
+    # cargo-dist-version in dist-workspace.toml and `dist init`.
+    exclude-paths:
+      - .github/workflows/release.yml
     groups:
       actions:
         patterns: ["*"]

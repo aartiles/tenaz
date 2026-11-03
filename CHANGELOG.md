@@ -18,6 +18,26 @@ uses [Semantic Versioning](https://semver.org/).
   it reads from its `HOME` are removed before each session. Neither
   agent takes a steering message.
   `tenaz doctor` and the setup wizard find both on `PATH`. See ADR 0018.
+
+### Fixed
+
+- An ACP agent's tool call is reported with the input it runs with.
+  OpenCode and Qwen Code announce a call before its input is complete
+  (`bash` with only its folder, a read with no file) and send the input
+  once it runs; Tenaz took the first version, so different calls looked
+  the same and the loop check stopped sessions that were working. A
+  pending call is now reported when it is about to run: at its permission
+  request, when it starts, or when it ends. `toolMinutes` counts from
+  then, so a call the agent sends neither a permission request nor
+  `in_progress` for is not timed. A context stop held for a reply's tool
+  calls now also waits for a call that starts after another one ended.
+  A permission request names the call as its start does, not by the
+  title the agent shows people.
+
+## [0.4.0] - 2026-11-02
+
+### Added
+
 - `--model-for` works with `--harness pi`: each session's Pi is launched
   with its role's model, and the run's `models.json` lists every model of
   the map, keeping the settings your `~/.pi/agent/models.json` has for
@@ -31,7 +51,8 @@ uses [Semantic Versioning](https://semver.org/).
   each model once, alone, and stops the run if one will not load. Needs
   `--engine load-api` (Sushi, mlx-serve). `tenaz run --swap-models` and
   `--no-swap-models` change it; it is kept as `launch.swapModels` in
-  `run.json`, and `status --json` has `swap_models`. When swapping, the
+  `run.json`, `status --json` has `swap_models`, and `tenaz status` says
+  the models are loaded one at a time. When swapping, the
   journal's `lease` records name the model of each `load` and `unload`,
   and record a model the engine dropped by itself as `evicted`. See ADR
   0015.
@@ -63,18 +84,6 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- An ACP agent's tool call is reported with the input it runs with.
-  OpenCode and Qwen Code announce a call before its input is complete
-  (`bash` with only its folder, a read with no file) and send the input
-  once it runs; Tenaz took the first version, so different calls looked
-  the same and the loop check stopped sessions that were working. A
-  pending call is now reported when it is about to run: at its permission
-  request, when it starts, or when it ends. `toolMinutes` counts from
-  then, so a call the agent sends neither a permission request nor
-  `in_progress` for is not timed. A context stop held for a reply's tool
-  calls now also waits for a call that starts after another one ended.
-  A permission request names the call as its start does, not by the
-  title the agent shows people.
 - When the engine cannot take the preflight's requests, `tenaz run` now
   stops with the engine's error and says it is the engine's. It used to
   report no reasoning, no cached prefix and a failed tool call, and advise
