@@ -258,26 +258,25 @@ impl Harness for AcpHarness {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
+    use tenaz_adapters::testing::write_executable;
 
     use super::*;
 
-    /// A script in `dir` that runs `body`.
-    fn script(dir: &Path, body: &str) -> std::path::PathBuf {
-        let path = dir.join("agent");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
+    #[test]
+    fn the_version_is_the_first_line_of_the_agent_s_answer_trimmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = dir.path().join("agent");
+        write_executable(&agent, "#!/bin/sh\nprintf '  1.2.3\\nextra\\n'\n");
+        assert_eq!(agent_version(&agent).unwrap(), "1.2.3");
     }
 
-    /// One test, so no other thread forks while the script is still open
-    /// for writing (`exec` would fail with "Text file busy").
     #[test]
-    fn the_version_is_the_first_line_trimmed_unless_the_agent_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let agent = script(dir.path(), "printf '  1.2.3\\nextra\\n'");
-        assert_eq!(agent_version(&agent).unwrap(), "1.2.3");
+    fn an_agent_that_fails_has_no_version() {
         assert!(agent_version(Path::new("false")).is_err());
+    }
+
+    #[test]
+    fn a_missing_agent_has_no_version() {
         assert!(agent_version(Path::new("/nonexistent/agent")).is_err());
     }
 }

@@ -118,7 +118,13 @@ impl QwenLaunch {
         wrap_command(&self.wrapper, &self.binary, self.command_args(&model.id))
     }
 
-    /// The agent: `qwen --acp` with `HOME` at `home`, each session on its
+    /// The environment Qwen Code starts with: `HOME` at `home`, where it
+    /// finds the settings Tenaz writes.
+    pub fn env(&self) -> Vec<(String, String)> {
+        vec![("HOME".to_owned(), self.home.display().to_string())]
+    }
+
+    /// The agent: `qwen --acp` with [`env`](Self::env), each session on its
     /// own model. [`configured`] writes the settings for that model.
     pub fn harness(&self, version: String) -> AcpHarness {
         let info = HarnessInfo {
@@ -131,7 +137,7 @@ impl QwenLaunch {
             info,
             program,
             Arc::new(move |spec| launch.session_command(&spec.model).1),
-            vec![("HOME".to_owned(), self.home.display().to_string())],
+            self.env(),
         )
     }
 }
@@ -264,5 +270,11 @@ mod tests {
         launch.wrapper = vec!["/sbx".into(), "--".into()];
         let wrapped = [vec!["--".to_owned(), "/opt/qwen".to_owned()], args].concat();
         assert_eq!(launch.session_command(&critic), ("/sbx".into(), wrapped));
+    }
+
+    #[test]
+    fn qwen_code_runs_in_its_own_home() {
+        let launch = QwenLaunch::new("/opt/qwen", "/run/home", "http://127.0.0.1:4001/v1");
+        assert_eq!(launch.env(), [("HOME".to_owned(), "/run/home".to_owned())]);
     }
 }

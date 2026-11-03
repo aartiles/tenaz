@@ -62,8 +62,9 @@ in memory; `vcs_contract_tests!` holds it and
 and the crates above it. `tenaz-adapters` has a `testing` feature too:
 `write_executable`, for a test that writes a script and then runs it, and
 `gone_within`, which checks that a process is gone, zombies included.
-Its private `process` module starts and stops the process groups that
-`verify` and heavy jobs run in.
+`tenaz-acp`'s tests use it too. `tenaz-adapters`' private `process`
+module starts and stops the process groups that `verify` and heavy jobs
+run in.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations

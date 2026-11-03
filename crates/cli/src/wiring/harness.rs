@@ -166,8 +166,6 @@ fn opencode_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
         ..
     } = inputs;
     let home = inputs.home("opencode-home");
-    // OpenCode finds skills in `.agents/skills` of its home, as fx does.
-    link_skills(project, &home.join(".agents/skills"), skills)?;
     let opencode = OpenCodeConfig {
         provider: provider(config),
         mcp: inputs.profile_mcp(),
@@ -181,6 +179,8 @@ fn opencode_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
     let mut launch = OpenCodeLaunch::new(&inputs.options.bin, &home);
     // A home that cannot be written stops the run here, not in its first session.
     opencode::write_config(&home, &opencode).context("cannot write the OpenCode configuration")?;
+    // OpenCode finds skills in `.agents/skills` of its home, as fx does.
+    link_skills(project, &home.join(".agents/skills"), skills)?;
     // npm's own cache, which the sandbox lets the agent write by default;
     // a `sandboxAllowWrite` without `~/.npm` leaves OpenCode unable to start.
     launch.npm_cache = std::env::home_dir().map(|h| h.join(".npm"));
@@ -194,7 +194,6 @@ fn opencode_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
 /// Qwen Code with its settings in `.tenaz/private/qwen-home`.
 fn qwen_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     let home = inputs.home("qwen-home");
-    link_skills(inputs.project, &home.join(".qwen/skills"), inputs.skills)?;
     let settings = QwenSettings {
         context_window: inputs.config.context_window,
         mcp: inputs.profile_mcp(),
@@ -202,6 +201,7 @@ fn qwen_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     };
     // A home that cannot be written stops the run here, not in its first session.
     qwen::write_settings(&home, &settings).context("cannot write the Qwen Code settings")?;
+    link_skills(inputs.project, &home.join(".qwen/skills"), inputs.skills)?;
     let mut launch = QwenLaunch::new(&inputs.options.bin, &home, inputs.base_url);
     launch.wrapper = inputs.wrapper.to_vec();
     let acp = launch
@@ -290,7 +290,7 @@ fn link_skills(project: &Project, dir: &Path, skills: &[SkillPin]) -> anyhow::Re
     if skills.is_empty() {
         return Ok(());
     }
-    std::fs::create_dir_all(dir)?;
+    std::fs::create_dir_all(dir).context("cannot create the agent's skill folder")?;
     for skill in skills {
         let target = project.tenaz_dir().join("skills").join(&skill.name);
         let target = std::path::absolute(&target).unwrap_or(target);
@@ -310,6 +310,91 @@ mod tests {
             source: String::new(),
             sha256: String::new(),
             files: 1,
+        }
+    }
+
+    /// Builds the harness `kind` names for a project in `dir`, with the
+    /// skills `skills`.
+    fn build(dir: &Path, kind: HarnessKind, skills: &[SkillPin]) -> anyhow::Result<()> {
+        let config = ModelConfig {
+            harness: kind,
+            harness_version: "1".into(),
+            model: "engine/m".into(),
+            provider: Some("engine".into()),
+            id: "m".into(),
+            base_url: None,
+            context_window: 65_536,
+            input: vec!["text".into()],
+            thinking: None,
+            role_models: std::collections::BTreeMap::new(),
+        };
+        let options = HarnessOptions {
+            bin: "agent".into(),
+            fx_args: Vec::new(),
+        };
+        let (feed, _) = tokio::sync::broadcast::channel(1);
+        build_harness(HarnessInputs {
+            project: &Project::new(dir),
+            config: &config,
+            options: &options,
+            media_timeout: &Duration::from_secs(60),
+            base_url: "http://127.0.0.1:4001/v1".into(),
+            mcp_endpoints: &[],
+            skills,
+            agent_skills: false,
+            verify_path: ".tenaz/verify",
+            feed: &feed,
+            wrapper: &[],
+        })
+        .map(|_| ())
+    }
+
+    fn json(path: &Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn opencode_is_set_up_in_its_home_before_its_first_session() {
+        let dir = tempfile::tempdir().unwrap();
+        build(dir.path(), HarnessKind::OpenCode, &[pin("rust")]).unwrap();
+        let home = Project::new(dir.path()).private_dir().join("opencode-home");
+        assert_eq!(json(&home.join("opencode.json"))["model"], "engine/m");
+        assert!(home.join(".agents/skills/rust").is_symlink());
+    }
+
+    #[test]
+    fn qwen_code_is_set_up_in_its_home_before_its_first_session() {
+        let dir = tempfile::tempdir().unwrap();
+        build(dir.path(), HarnessKind::Qwen, &[pin("rust")]).unwrap();
+        let home = Project::new(dir.path()).private_dir().join("qwen-home");
+        let settings = json(&home.join(".qwen/settings.json"));
+        assert_eq!(
+            settings["model"]["generationConfig"]["contextWindowSize"],
+            65_536
+        );
+        assert!(home.join(".qwen/skills/rust").is_symlink());
+    }
+
+    #[test]
+    fn a_home_that_cannot_be_written_stops_the_run_before_it_starts() {
+        for (kind, home, message) in [
+            (
+                HarnessKind::OpenCode,
+                "opencode-home",
+                "cannot write the OpenCode configuration",
+            ),
+            (
+                HarnessKind::Qwen,
+                "qwen-home",
+                "cannot write the Qwen Code settings",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let private = Project::new(dir.path()).private_dir();
+            std::fs::create_dir_all(&private).unwrap();
+            std::fs::write(private.join(home), "a file, not a folder").unwrap();
+            let error = build(dir.path(), kind, &[pin("rust")]).unwrap_err();
+            assert_eq!(error.to_string(), message);
         }
     }
 

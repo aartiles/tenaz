@@ -429,10 +429,28 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn an_agent_that_is_missing_has_no_version_and_the_fake_has_its_own() {
+    fn every_agent_s_version_is_what_its_binary_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("agent");
+        tenaz_adapters::testing::write_executable(&bin, "#!/bin/sh\necho 9.9.9\n");
+        for harness in HarnessKind::AGENTS {
+            assert_eq!(
+                agent_version(harness, &bin).unwrap(),
+                "9.9.9",
+                "{harness:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_agent_that_is_missing_has_no_version() {
         for harness in HarnessKind::AGENTS {
             assert!(agent_version(harness, Path::new("/nonexistent/agent")).is_err());
         }
+    }
+
+    #[test]
+    fn the_fake_harness_has_its_own_version() {
         assert_eq!(
             agent_version(HarnessKind::Fake, Path::new("/nonexistent/agent")).unwrap(),
             tenaz_core::testing::ScriptedHarness::default().version()

@@ -618,12 +618,15 @@ async fn opencode_starts_each_session_with_its_model_in_the_configuration() {
         ))
     })
     .await;
-    for (config, (id, context_window, _)) in launched.iter().zip(LAUNCHED_MODELS) {
+    for (config, (id, context_window, supports_images)) in launched.iter().zip(LAUNCHED_MODELS) {
+        let model = &config["provider"]["p"]["models"][id];
         assert_eq!(config["model"], format!("p/{id}"));
-        assert_eq!(
-            config["provider"]["p"]["models"][id]["limit"]["context"],
-            context_window
-        );
+        assert_eq!(model["limit"]["context"], context_window);
+        let reads_images = model["modalities"]["input"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("image"));
+        assert_eq!(reads_images, supports_images, "{id}");
     }
 }
 
