@@ -24,7 +24,7 @@ pub(super) struct HarnessInputs<'a> {
     pub(super) project: &'a Project,
     pub(super) config: &'a ModelConfig,
     pub(super) options: &'a HarnessOptions,
-    pub(super) media_timeout: &'a Duration,
+    pub(super) media_timeout: Duration,
     /// The proxy's base URL, or the engine's with `--no-proxy`.
     pub(super) base_url: String,
     pub(super) mcp_endpoints: &'a [McpEndpoint],
@@ -200,7 +200,7 @@ fn qwen_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         discover_skills: inputs.agent_skills,
     };
     // A home that cannot be written stops the run here, not in its first session.
-    qwen::write_settings(&home, &settings).context("cannot write the Qwen Code settings")?;
+    qwen::prepare_home(&home, &settings).context("cannot prepare the Qwen Code home")?;
     link_skills(inputs.project, &home.join(".qwen/skills"), inputs.skills)?;
     let mut launch = QwenLaunch::new(&inputs.options.bin, &home, inputs.base_url);
     launch.wrapper = inputs.wrapper.to_vec();
@@ -337,7 +337,7 @@ mod tests {
             project: &Project::new(dir),
             config: &config,
             options: &options,
-            media_timeout: &Duration::from_secs(60),
+            media_timeout: Duration::from_secs(60),
             base_url: "http://127.0.0.1:4001/v1".into(),
             mcp_endpoints: &[],
             skills,
@@ -386,7 +386,7 @@ mod tests {
             (
                 HarnessKind::Qwen,
                 "qwen-home",
-                "cannot write the Qwen Code settings",
+                "cannot prepare the Qwen Code home",
             ),
         ] {
             let dir = tempfile::tempdir().unwrap();

@@ -125,7 +125,7 @@ impl QwenLaunch {
     }
 
     /// The agent: `qwen --acp` with [`env`](Self::env), each session on its
-    /// own model. [`configured`] writes the settings for that model.
+    /// own model. [`configured`] prepares its home for that model.
     pub fn harness(&self, version: String) -> AcpHarness {
         let info = HarnessInfo {
             name: HarnessKind::Qwen.as_str().to_owned(),
@@ -142,12 +142,12 @@ impl QwenLaunch {
     }
 }
 
-/// `acp` with `settings` written under `home` for each session's model
-/// before Qwen Code starts.
+/// `acp` with its home prepared ([`prepare_home`]) for each session's
+/// model before Qwen Code starts.
 pub fn configured(acp: AcpHarness, home: PathBuf, settings: QwenSettings) -> ConfiguredHarness {
     ConfiguredHarness::new(
         acp,
-        Arc::new(move |model| write_settings(&home, &settings.for_model(model))),
+        Arc::new(move |model| prepare_home(&home, &settings.for_model(model))),
     )
 }
 
@@ -157,7 +157,7 @@ const CONTEXT_FILES: [&str; 2] = ["QWEN.md", "AGENTS.md"];
 
 /// Writes `settings.json` under `<home>/.qwen/` and removes the context
 /// files there, so a session starts from the plan and the repository.
-pub fn write_settings(home: &Path, settings: &QwenSettings) -> io::Result<()> {
+pub fn prepare_home(home: &Path, settings: &QwenSettings) -> io::Result<()> {
     for name in CONTEXT_FILES {
         match fs::remove_file(home.join(".qwen").join(name)) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
@@ -196,12 +196,12 @@ mod tests {
     #[test]
     fn what_an_earlier_session_left_for_the_next_to_read_is_removed() {
         let home = tempfile::tempdir().unwrap();
-        write_settings(home.path(), &settings()).unwrap();
+        prepare_home(home.path(), &settings()).unwrap();
         let qwen = home.path().join(".qwen");
         fs::write(qwen.join("QWEN.md"), "- the user prefers tabs\n").unwrap();
         fs::write(qwen.join("AGENTS.md"), "- tests run with make\n").unwrap();
 
-        write_settings(home.path(), &settings()).unwrap();
+        prepare_home(home.path(), &settings()).unwrap();
 
         assert!(!qwen.join("QWEN.md").exists());
         assert!(!qwen.join("AGENTS.md").exists());

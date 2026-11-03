@@ -315,7 +315,7 @@ pub async fn wire(
         project,
         config,
         options: harness,
-        media_timeout: &media.timeout,
+        media_timeout: media.timeout,
         base_url: harness_base_url,
         mcp_endpoints: &mcp_endpoints,
         skills: &ledger.skills,
