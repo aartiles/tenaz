@@ -91,7 +91,7 @@ pub(crate) struct InitArgs {
     #[arg(long)]
     pub(crate) model: Option<String>,
     /// The provider name used in the harness configuration (with --harness pi,
-    /// the provider in models.json).
+    /// the provider in models.json; Qwen Code does not use it).
     #[arg(long)]
     pub(crate) provider: Option<String>,
     /// The engine's OpenAI-compatible base URL (default: Sushi on 127.0.0.1:12345;

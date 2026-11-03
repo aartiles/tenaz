@@ -12,10 +12,11 @@ uses [Semantic Versioning](https://semver.org/).
   over ACP, as fx is (`--opencode-bin` and `--qwen-bin` name their
   executables). Each runs in a `HOME` of its own under `.tenaz/private/`
   with a configuration Tenaz writes for each session's model: the engine
-  proxy, the model's window, asking before every edit and command, the
-  media MCP server and the pinned skills. Qwen Code's memory and chat
-  recording are off, and the context files it reads from its `HOME` are
-  removed before each session. Neither agent takes a steering message.
+  proxy, the model's window, asking before every edit and command, and
+  the media MCP server; the pinned skills are linked into that `HOME`.
+  Qwen Code's memory and chat recording are off, and the context files
+  it reads from its `HOME` are removed before each session. Neither
+  agent takes a steering message.
   `tenaz doctor` and the setup wizard find both on `PATH`. See ADR 0018.
 - `--model-for` works with `--harness pi`: each session's Pi is launched
   with its role's model, and the run's `models.json` lists every model of
