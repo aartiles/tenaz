@@ -61,7 +61,9 @@ the failed attempts tried. A builder that finds its task cannot pass
 without changing a check of a done task says so in
 `.tenaz/conflicts/<TASK>.md`; the task is blocked at once, and a replan
 may add a card that amends those checks, judged against the spec (ADR
-0009). Work too heavy for a session, such as a long render, is declared
+0009). The replan may also set the blocked task back to `todo`: it waits
+until that card is built, then starts again with no attempts (ADR 0018).
+Work too heavy for a session, such as a long render, is declared
 by the builder in `.tenaz/jobs/<TASK>.json`; Tenaz runs it between
 sessions, with the engine's memory freed where it can, for at most
 `jobMinutes` (60), and the next session of the attempt reads how it went

@@ -114,7 +114,8 @@ review, `params.diffShare` or `params.diffLimitBytes` in
 a larger window, which takes a new run. A task whose builder found it
 cannot pass without changing a check of a done task leaves
 `.tenaz/conflicts/<TASK>.md`; a replan may then add a card whose
-`amends` lets its builder change those checks.
+`amends` lets its builder change those checks, and set the blocked task
+back to `todo` to be built after that card.
 A builder may declare a heavy job (a render, a long build) in
 `.tenaz/jobs/<TASK>.json`; unless `jobMinutes=0`, Tenaz runs it between
 sessions with the engine's memory freed where the engine can, logs it to
