@@ -13,8 +13,8 @@ below; this page is about the real ones.
 | | Windows | Not supported. |
 | Harness | [fx](https://github.com/vercel-labs/fx) 0.0.14 over ACP | Tested end to end: preflight, bootstrap, build, review, steering, pause and resume. |
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 in RPC mode | Tested end to end to a COMPLETE run with the user's own `models.json`. The generated configuration, through the proxy, is tested against a mock engine only. No media tools (see below). |
-| | [OpenCode](https://github.com/sst/opencode) 1.19.5 (`opencode acp`) and [Qwen Code](https://github.com/QwenLM/qwen-code) 0.26.6 (`qwen --acp`) | One COMPLETE run each with Qwen3.8-27B on mlx-serve, through a script given as `--fx-bin` that starts the agent on the fx profile (see Known gaps). Not yet a `--harness` choice. |
-| | Other ACP agents | Should work through the same adapter; fx-specific settings are only applied to fx. Untested. |
+| | [OpenCode](https://github.com/sst/opencode) 1.19.5 (`--harness opencode`) and [Qwen Code](https://github.com/QwenLM/qwen-code) 0.26.6 (`--harness qwen`), both over ACP | One real run each with Qwen3.8-27B on mlx-serve: OpenCode to COMPLETE, Qwen Code to BLOCKED by a replan the run rejected, not by the agent. Less tried than fx and Pi (see Known gaps). |
+| | Other ACP agents | Only through `--fx-bin`, which passes fx's `--log-file` and writes only fx's settings. Untested. |
 | Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve's load and unload through the API are tested against a mock only. |
 | | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run, before the start was skipped for an engine that still serves the model (see Known gaps). The servers named here are untried. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
@@ -392,24 +392,33 @@ above), so a 32k context is the practical floor (`contextFloor`).
   not yet with a real model.
 - Whether fx loads the project's `AGENTS.md` by itself has not been
   checked; Pi does. The Tenaz protocol is in every prompt either way.
-- **OpenCode and Qwen Code** run only through a stand-in for fx: a script
-  passed as `--fx-bin` that answers `--version`, reads the model and the
-  proxy URL from `$HOME/.fx/settings.json`, writes the agent's own
-  configuration (OpenCode: `OPENCODE_CONFIG` with an
-  `@ai-sdk/openai-compatible` provider and `ask` for `edit` and `bash`;
-  Qwen Code: `--auth-type openai --openai-base-url`, `--approval-mode
-  default` and `contextWindowSize` in `.qwen/settings.json`), and ignores
-  fx's `--log-file`. The script is not in the repository. Each agent
-  reached COMPLETE on a six-task word-count goal with Qwen3.8-27B on
-  mlx-serve (OpenCode: 18 sessions, Qwen Code: 21; the sessions that
-  failed were mlx-serve refusing a prompt for memory, and Tenaz ran them
-  again). Not checked: media tools over MCP, pinned skills,
-  `--model-for`, pause and resume. Qwen Code starts with a system prompt
-  of about 21k tokens (OpenCode about 7k), and keeps memories and
-  sessions in its `HOME` from one session to the next unless they are
-  turned off. `--fx-bin opencode` without the stand-in was not tried; it
-  should not work, since Tenaz passes fx's `--log-file` and writes only
-  fx's settings.
+- **OpenCode and Qwen Code: the runs** (`--harness opencode`,
+  `--harness qwen`, ADR 0018). Each ran once on the same word-count brief
+  with Qwen3.8-27B on mlx-serve. OpenCode 1.19.5 reached COMPLETE in 19
+  sessions (six tasks). Qwen Code 0.26.6 finished two of seven tasks in
+  11 sessions, then stopped BLOCKED: its builder declared a conflict with
+  a done check, and both replans wrote the amending card but set the
+  blocked card back to `todo` instead of `dropped`, so Tenaz rejected the
+  `amends` (it only counts the conflicts of blocked or dropped tasks).
+  That rule is the same for every harness. Before these kinds existed,
+  each agent reached COMPLETE through a script given as `--fx-bin`
+  (OpenCode: 18 sessions, Qwen Code: 21). Most sessions that failed in
+  these runs were mlx-serve running out of memory, which Tenaz ran
+  again; Qwen Code's last replan reached the output limit. After the
+  runs, Qwen Code's `HOME` held a process registry and undo copies of
+  edited files, but no conversations or memories.
+- **OpenCode and Qwen Code: not checked.** Media tools over MCP and their
+  time limit (OpenCode's MCP `timeout` may only bound listing the tools),
+  pinned skills, `--model-for`, pause and resume, a run in the OS sandbox,
+  and whether Qwen Code knows the model reads images (its settings do not
+  say). Tenaz removes the context files Qwen Code reads from its `HOME`
+  before each session; no run has written one. Neither agent takes a
+  steering message: Tenaz steers only fx and Pi, so a watchdog stops their
+  sessions without a warning. OpenCode installs its plugin package (about
+  60 MB) into its `HOME` on the first run, from npm's cache in `~/.npm`: a
+  `sandboxAllowWrite` without `~/.npm` should break it. Qwen Code starts
+  with a system prompt of about 21k tokens (OpenCode about 7k), so a small
+  window fills sooner.
 - **Install script and Homebrew formula.** Both installed `tenaz` 0.1.0
   from the published v0.1.0 release on macOS (Apple silicon): the install
   script into a scratch folder, `brew install aartiles/tap/tenaz` into
@@ -418,10 +427,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   pushes the formula needs `HOMEBREW_TAP_TOKEN` to have write access to
   `aartiles/homebrew-tap` (Contents: read and write on that repository).
 - **`tenaz doctor`'s advice** has been checked on macOS with Sushi running
-  and with nothing on `PATH`. The install commands it gives for Pi and fx
-  come from their READMEs and were not run; the context settings it gives
-  for LM Studio, Ollama, llama.cpp and vLLM were not tried against those
-  engines.
+  and with nothing on `PATH`. The install commands it gives for Pi, fx,
+  OpenCode and Qwen Code come from their READMEs and were not run; the
+  context settings it gives for LM Studio, Ollama, llama.cpp and vLLM were
+  not tried against those engines.
 
 ## Model and engine behaviour seen in testing
 

@@ -1,18 +1,23 @@
-//! The ACP harness adapter: runs an ACP agent (fx by default) as a
-//! subprocess and turns its session updates into the runner's session
+//! The ACP harness adapter: runs an ACP agent (fx, `OpenCode` or Qwen Code)
+//! as a subprocess and turns its session updates into the runner's session
 //! events. Token usage per request comes from the engine proxy when one is
 //! wired in, because ACP reports usage only once per turn.
 
 pub mod fx;
+pub mod opencode;
+pub mod qwen;
 mod session;
 mod translate;
 
+use std::io;
+use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{HttpHeader, McpServer, McpServerHttp};
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, DynConnectTo, LineDirection};
 use async_trait::async_trait;
-use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
+use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionModel, SessionSpec};
 
 pub use session::{EngineObservation, ObservationFeed, stop_reason_for_finish};
 pub use translate::Translator;
@@ -30,9 +35,9 @@ pub struct McpEndpoint {
     pub url: String,
 }
 
-/// The harness. It runs the model its agent is set up with and ignores
-/// `SessionSpec.model`: a harness that runs each session's model wraps it,
-/// as [`fx::FxHarness`] does.
+/// The harness. It runs the model its agent is set up with, or the one its
+/// per-session arguments name (Qwen Code); an agent that reads the model
+/// from its configuration is wrapped in a [`ConfiguredHarness`].
 #[derive(Clone)]
 pub struct AcpHarness {
     info: HarnessInfo,
@@ -137,6 +142,85 @@ impl AcpHarness {
     }
 }
 
+/// An MCP server written into an agent's own configuration, which accepts
+/// a time limit as long as a media job's; a server passed in `session/new`
+/// gets the agent's default limit.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProfileMcpServer {
+    pub name: String,
+    pub url: String,
+    pub operation_timeout_ms: u64,
+}
+
+/// Writes an agent's configuration for one session's model.
+pub type WriteConfig = Arc<dyn Fn(&SessionModel) -> io::Result<()> + Send + Sync>;
+
+/// An ACP agent that reads its configuration when it starts, with that
+/// configuration written for each session's model first. Sessions run one
+/// after another, so one configuration holds the model of the session that
+/// is starting.
+pub struct ConfiguredHarness {
+    acp: AcpHarness,
+    write: WriteConfig,
+}
+
+impl std::fmt::Debug for ConfiguredHarness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfiguredHarness")
+            .field("acp", &self.acp)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ConfiguredHarness {
+    pub fn new(acp: AcpHarness, write: WriteConfig) -> Self {
+        Self { acp, write }
+    }
+}
+
+#[async_trait]
+impl Harness for ConfiguredHarness {
+    fn info(&self) -> HarnessInfo {
+        self.acp.info()
+    }
+
+    async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
+        (self.write)(&spec.model).map_err(|e| {
+            HarnessError::Spawn(format!(
+                "cannot write the {} configuration: {e}",
+                self.acp.info.name
+            ))
+        })?;
+        self.acp.open(spec).await
+    }
+}
+
+/// The first line of `<binary> --version`.
+pub fn agent_version(binary: &Path) -> io::Result<String> {
+    let output = Command::new(binary).arg("--version").output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "{} --version exited with {}",
+            binary.display(),
+            output.status
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_owned())
+}
+
+/// Writes `value` as pretty JSON to `path`, creating its folder.
+pub(crate) fn write_json(path: &Path, value: &serde_json::Value) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(value)?)
+}
+
 /// Appends one line to a log file, creating it; errors are ignored (a lost
 /// diagnostic line must never stop a session).
 pub(crate) fn append_line(path: &std::path::Path, line: &str) {
@@ -169,5 +253,31 @@ impl Harness for AcpHarness {
         )
         .await?;
         Ok(Box::new(session))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::*;
+
+    /// A script in `dir` that runs `body`.
+    fn script(dir: &Path, body: &str) -> std::path::PathBuf {
+        let path = dir.join("agent");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// One test, so no other thread forks while the script is still open
+    /// for writing (`exec` would fail with "Text file busy").
+    #[test]
+    fn the_version_is_the_first_line_trimmed_unless_the_agent_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = script(dir.path(), "printf '  1.2.3\\nextra\\n'");
+        assert_eq!(agent_version(&agent).unwrap(), "1.2.3");
+        assert!(agent_version(Path::new("false")).is_err());
+        assert!(agent_version(Path::new("/nonexistent/agent")).is_err());
     }
 }

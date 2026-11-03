@@ -37,6 +37,13 @@ pub(crate) struct RunArgs {
     /// The pi executable (default: the one pinned at init, else pi on PATH).
     #[arg(long)]
     pi_bin: Option<PathBuf>,
+    /// The opencode executable (default: the one pinned at init, else
+    /// opencode on PATH).
+    #[arg(long)]
+    opencode_bin: Option<PathBuf>,
+    /// The qwen executable (default: the one pinned at init, else qwen on PATH).
+    #[arg(long)]
+    qwen_bin: Option<PathBuf>,
     /// The engine API (default: the one pinned at init).
     #[arg(long, value_enum)]
     engine: Option<EngineKind>,
@@ -111,11 +118,14 @@ impl RunArgs {
         Ok(launch)
     }
 
-    /// The `--fx-bin` or `--pi-bin` given for `harness`.
+    /// The `--fx-bin`, `--pi-bin`, `--opencode-bin` or `--qwen-bin` given
+    /// for `harness`.
     fn harness_bin(&self, harness: HarnessKind) -> Option<&std::path::Path> {
         match harness {
             HarnessKind::Fx => self.fx_bin.as_deref(),
             HarnessKind::Pi => self.pi_bin.as_deref(),
+            HarnessKind::OpenCode => self.opencode_bin.as_deref(),
+            HarnessKind::Qwen => self.qwen_bin.as_deref(),
             HarnessKind::Fake => None,
         }
     }
@@ -166,22 +176,17 @@ pub(crate) async fn execute(args: RunArgs) -> anyhow::Result<ExitCode> {
         proxy: !launch.no_proxy,
         swap: launch.swap_models,
     };
-    let bin = |kind: HarnessKind| {
-        PathBuf::from(
+    let harness = wiring::HarnessOptions {
+        bin: PathBuf::from(
             launch
                 .harness_bin
                 .clone()
-                .filter(|_| ledger.config.harness == kind)
-                .unwrap_or_else(|| kind.as_str().to_owned()),
-        )
-    };
-    let harness = wiring::HarnessOptions {
-        fx_bin: bin(HarnessKind::Fx),
+                .unwrap_or_else(|| ledger.config.harness.as_str().to_owned()),
+        ),
         fx_args: launch
             .fx_args
             .clone()
             .unwrap_or_else(|| vec!["acp".to_owned()]),
-        pi_bin: bin(HarnessKind::Pi),
     };
     let wired = wiring::wire(&project, &engine, &harness, &media).await?;
     let mut runner = Runner::open(project.clone(), wired.deps, stop)?;
@@ -243,7 +248,7 @@ mod tests {
         let crate::Command::Run(args) = crate::Cli::parse_from(line).command else {
             panic!("not a run line: {line:?}");
         };
-        args
+        *args
     }
 
     /// `run` turns swapping on and off; without either flag the pinned

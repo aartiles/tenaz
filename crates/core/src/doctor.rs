@@ -192,12 +192,14 @@ pub fn git_fix(os: Os) -> Vec<String> {
 }
 
 /// How to install a coding agent. Pi's installer also installs Node.js
-/// when it is missing.
+/// when it is missing; Qwen Code needs Node.js already.
 pub fn agent_fix() -> Vec<String> {
     vec![
         "Install one of the coding agents Tenaz drives:".to_owned(),
-        "  Pi:  curl -fsSL https://pi.dev/install.sh | sh".to_owned(),
-        "  fx:  curl -fsSL https://fx.sh/setup.sh | bash".to_owned(),
+        "  Pi:        curl -fsSL https://pi.dev/install.sh | sh".to_owned(),
+        "  fx:        curl -fsSL https://fx.sh/setup.sh | bash".to_owned(),
+        "  OpenCode:  curl -fsSL https://opencode.ai/install | bash".to_owned(),
+        "  Qwen Code: npm install -g @qwen-code/qwen-code".to_owned(),
         "Then open a new terminal so it is on PATH.".to_owned(),
     ]
 }
@@ -253,7 +255,7 @@ fn agent_check(machine: &Machine) -> Check {
         return Check {
             what: "agent",
             level: Level::Missing,
-            found: "neither Pi nor fx is on PATH".to_owned(),
+            found: "no coding agent (Pi, fx, OpenCode or Qwen Code) is on PATH".to_owned(),
             fix: agent_fix(),
         };
     }
@@ -494,6 +496,8 @@ mod tests {
         let text = render(&checks);
         assert!(text.contains("xcode-select --install"));
         assert!(text.contains("https://pi.dev/install.sh"));
+        assert!(text.contains("https://opencode.ai/install"));
+        assert!(text.contains("@qwen-code/qwen-code"));
         assert!(text.contains("Not ready yet"));
         assert!(text.contains("tenaz demo"));
         m.os = Os::Linux;

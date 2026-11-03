@@ -51,7 +51,7 @@ pub(crate) async fn execute(project: PathBuf) -> anyhow::Result<ExitCode> {
     else {
         anyhow::bail!("the demo's run line did not parse as run");
     };
-    let code = run::execute(args).await?;
+    let code = run::execute(*args).await?;
     let look = [
         (format!("tenaz status --project {dir}"), "how it ended"),
         (format!("git -C {dir} log --oneline"), "one commit per step"),

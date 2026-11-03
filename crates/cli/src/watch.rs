@@ -1,7 +1,7 @@
 //! `tenaz watch`: follows a run from its files, as `tail -f` would, at a
 //! chosen level of detail. It reads `.tenaz/private/orchestrator.log`, the
 //! current session's event stream (`<label>.rpc.jsonl`: session events
-//! for fx, Pi's own RPC records for Pi, translated here as the Pi adapter
+//! for an ACP agent, Pi's own RPC records for Pi, translated here as the Pi adapter
 //! does) and, at `debug`, the harness's own logs (`<label>.*.log`). It only
 //! reads, so it is safe while a run works.
 

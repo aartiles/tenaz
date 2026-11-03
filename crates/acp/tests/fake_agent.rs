@@ -16,7 +16,9 @@ use agent_client_protocol::schema::v1::{
     ToolCallUpdateFields, UsageUpdate,
 };
 use agent_client_protocol::{Agent, DynConnectTo};
-use tenaz_acp::fx::{FxHarness, FxSettings};
+use tenaz_acp::fx::{self, FxSettings};
+use tenaz_acp::opencode::{self, OpenCodeConfig};
+use tenaz_acp::qwen::{self, QwenSettings};
 use tenaz_acp::{AcpHarness, EngineObservation, McpEndpoint};
 use tenaz_core::ports::{
     Harness, HarnessError, HarnessInfo, PermissionDecision, SessionModel, SessionSpec,
@@ -518,32 +520,51 @@ fn fx_settings() -> FxSettings {
     }
 }
 
-/// fx reads its settings when it starts: each session's are written for
-/// that session's model before the agent is launched.
-#[tokio::test]
-async fn fx_starts_each_session_with_its_model_in_the_settings() {
+fn opencode_config() -> OpenCodeConfig {
+    OpenCodeConfig {
+        provider: "p".into(),
+        base_url: "http://127.0.0.1:1/v1".into(),
+        model: "run".into(),
+        context_window: 131_072,
+        max_output_tokens: 16384,
+        supports_images: false,
+        mcp: Vec::new(),
+        skills: None,
+    }
+}
+
+/// The sessions [`configs_at_launch`] opens: a model id, its window and
+/// whether it reads images.
+const LAUNCHED_MODELS: [(&str, u64, bool); 2] = [("critic", 32768, false), ("m", 65536, true)];
+
+/// The configuration at `file` (under the agent's `HOME`) as the agent
+/// found it at each launch, for one session on each of [`LAUNCHED_MODELS`]
+/// with `configured` wrapping the fake agent.
+async fn configs_at_launch(
+    file: &str,
+    configured: impl FnOnce(AcpHarness, &Path) -> Box<dyn Harness>,
+) -> Vec<serde_json::Value> {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let launched: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
     let seen = Arc::new(Mutex::new(Seen::default()));
-    let (read_home, log) = (home.clone(), launched.clone());
+    let (path, log) = (home.join(file), launched.clone());
     let info = HarnessInfo {
-        name: "fx".into(),
+        name: "agent".into(),
         version: "1".into(),
     };
     let acp = AcpHarness::new(
         info,
         Arc::new(move |_| {
-            let text = std::fs::read_to_string(read_home.join(".fx/settings.json")).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
             log.lock()
                 .unwrap()
                 .push(serde_json::from_str(&text).unwrap());
             fake_agent(seen.clone(), false)
         }),
     );
-    let fx = FxHarness::new(acp, &home, fx_settings());
-    let models = [("critic", 32768, false), ("m", 65536, true)];
-    for (id, context_window, supports_images) in models {
+    let harness = configured(acp, &home);
+    for (id, context_window, supports_images) in LAUNCHED_MODELS {
         let spec = SessionSpec {
             model: SessionModel {
                 name: format!("p/{id}"),
@@ -553,12 +574,23 @@ async fn fx_starts_each_session_with_its_model_in_the_settings() {
             },
             ..spec(dir.path())
         };
-        let mut session = fx.open(spec).await.unwrap();
+        let mut session = harness.open(spec).await.unwrap();
         session.close(Duration::ZERO).await;
     }
-    let launched = launched.lock().unwrap();
-    assert_eq!(launched.len(), models.len());
-    for (settings, (id, context_window, supports_images)) in launched.iter().zip(models) {
+    let launched = launched.lock().unwrap().clone();
+    assert_eq!(launched.len(), LAUNCHED_MODELS.len());
+    launched
+}
+
+/// fx reads its settings when it starts: each session's are written for
+/// that session's model before the agent is launched.
+#[tokio::test]
+async fn fx_starts_each_session_with_its_model_in_the_settings() {
+    let launched = configs_at_launch(".fx/settings.json", |acp, home| {
+        Box::new(fx::configured(acp, home, fx_settings()))
+    })
+    .await;
+    for (settings, (id, context_window, supports_images)) in launched.iter().zip(LAUNCHED_MODELS) {
         assert_eq!(settings["models"]["p"], id);
         let provider = &settings["providers"]["p"];
         assert_eq!(provider["base_url"], "http://127.0.0.1:1/v1");
@@ -574,17 +606,65 @@ async fn fx_starts_each_session_with_its_model_in_the_settings() {
     }
 }
 
-/// A session whose settings cannot be written is not started on old ones.
+/// `OpenCode` reads `OPENCODE_CONFIG` when it starts: each session's is
+/// written for that session's model.
 #[tokio::test]
-async fn fx_refuses_a_session_whose_settings_cannot_be_written() {
+async fn opencode_starts_each_session_with_its_model_in_the_configuration() {
+    let launched = configs_at_launch("opencode.json", |acp, home| {
+        Box::new(opencode::configured(
+            acp,
+            home.to_path_buf(),
+            opencode_config(),
+        ))
+    })
+    .await;
+    for (config, (id, context_window, _)) in launched.iter().zip(LAUNCHED_MODELS) {
+        assert_eq!(config["model"], format!("p/{id}"));
+        assert_eq!(
+            config["provider"]["p"]["models"][id]["limit"]["context"],
+            context_window
+        );
+    }
+}
+
+/// Qwen Code reads `~/.qwen/settings.json` when it starts: each session's
+/// holds that session's window.
+#[tokio::test]
+async fn qwen_starts_each_session_with_its_window_in_the_settings() {
+    let launched = configs_at_launch(".qwen/settings.json", |acp, home| {
+        let settings = QwenSettings {
+            context_window: 131_072,
+            mcp: Vec::new(),
+            discover_skills: false,
+        };
+        Box::new(qwen::configured(acp, home.to_path_buf(), settings))
+    })
+    .await;
+    for (settings, (_, context_window, _)) in launched.iter().zip(LAUNCHED_MODELS) {
+        assert_eq!(
+            settings["model"]["generationConfig"]["contextWindowSize"],
+            context_window
+        );
+    }
+}
+
+/// A session whose configuration cannot be written is not started on an
+/// old one, and the error names the harness.
+#[tokio::test]
+async fn a_session_whose_configuration_cannot_be_written_is_not_started() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::write(&home, "a file, not a folder").unwrap();
-    let acp = harness_with(Arc::new(Mutex::new(Seen::default())), false);
-    let fx = FxHarness::new(acp, &home, fx_settings());
+    let info = HarnessInfo {
+        name: "fx".into(),
+        version: "1".into(),
+    };
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let acp = AcpHarness::new(info, Arc::new(move |_| fake_agent(seen.clone(), false)));
+    let fx = fx::configured(acp, &home, fx_settings());
     let error = fx.open(spec(dir.path())).await.err().unwrap();
     assert!(
-        matches!(&error, HarnessError::Spawn(m) if m.starts_with("cannot write the fx settings")),
+        matches!(&error, HarnessError::Spawn(m) if m.starts_with("cannot write the fx configuration")),
         "{error}"
     );
 }

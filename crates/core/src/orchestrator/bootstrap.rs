@@ -104,7 +104,7 @@ pub(crate) fn exhausted(
     let hint = if attempts.tool_failures >= attempts.counted {
         format!(
             " (in every attempt all of the model's tool calls failed: the model does not \
-             work with {harness}'s tools; try another model or the other harness)"
+             work with {harness}'s tools; try another model or another harness)"
         )
     } else {
         String::new()
@@ -365,7 +365,7 @@ mod tests {
             format!(
                 "bootstrap failed 3 times at step {} (in every attempt all of the model's tool \
                  calls failed: the model does not work with pi's tools; try another model or \
-                 the other harness): {ERROR}",
+                 another harness): {ERROR}",
                 BootstrapStep::Tasks
             )
         );

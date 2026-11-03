@@ -27,6 +27,11 @@ pub(crate) enum HarnessArg {
     Fx,
     /// Pi in RPC mode, with a models.json Tenaz writes for the run.
     Pi,
+    /// `OpenCode` over ACP.
+    #[value(name = "opencode")]
+    OpenCode,
+    /// Qwen Code over ACP.
+    Qwen,
     /// The scripted fake harness: exercises the runner without a model.
     Fake,
 }
@@ -36,6 +41,8 @@ impl HarnessArg {
         match self {
             Self::Fx => HarnessKind::Fx,
             Self::Pi => HarnessKind::Pi,
+            Self::OpenCode => HarnessKind::OpenCode,
+            Self::Qwen => HarnessKind::Qwen,
             Self::Fake => HarnessKind::Fake,
         }
     }
@@ -48,6 +55,8 @@ impl From<HarnessKind> for HarnessArg {
         match kind {
             HarnessKind::Fx => Self::Fx,
             HarnessKind::Pi => Self::Pi,
+            HarnessKind::OpenCode => Self::OpenCode,
+            HarnessKind::Qwen => Self::Qwen,
             HarnessKind::Fake => Self::Fake,
         }
     }
@@ -81,6 +90,12 @@ pub(crate) struct InitArgs {
     /// The pi executable.
     #[arg(long)]
     pub(crate) pi_bin: Option<PathBuf>,
+    /// The opencode executable.
+    #[arg(long)]
+    pub(crate) opencode_bin: Option<PathBuf>,
+    /// The qwen executable.
+    #[arg(long)]
+    pub(crate) qwen_bin: Option<PathBuf>,
     /// The model id as the engine lists it; without it, the setup wizard runs.
     #[arg(long)]
     pub(crate) model: Option<String>,
@@ -165,11 +180,14 @@ pub(crate) struct InitArgs {
 }
 
 impl InitArgs {
-    /// The `--fx-bin` or `--pi-bin` given for `harness`.
+    /// The `--fx-bin`, `--pi-bin`, `--opencode-bin` or `--qwen-bin` given
+    /// for `harness`.
     pub(crate) fn harness_bin(&self, harness: HarnessKind) -> Option<PathBuf> {
         match harness {
             HarnessKind::Fx => self.fx_bin.clone(),
             HarnessKind::Pi => self.pi_bin.clone(),
+            HarnessKind::OpenCode => self.opencode_bin.clone(),
+            HarnessKind::Qwen => self.qwen_bin.clone(),
             HarnessKind::Fake => None,
         }
     }
@@ -183,6 +201,8 @@ impl InitArgs {
             ("harness", self.harness.map(|h| h.kind().to_string())),
             ("fx-bin", path(&self.fx_bin)),
             ("pi-bin", path(&self.pi_bin)),
+            ("opencode-bin", path(&self.opencode_bin)),
+            ("qwen-bin", path(&self.qwen_bin)),
             ("model", self.model.clone()),
             ("provider", self.provider.clone()),
             ("base-url", self.base_url.clone()),
@@ -546,26 +566,17 @@ fn pin_harness(
     provider: &str,
 ) -> anyhow::Result<(String, Listed)> {
     let bin = bin.unwrap_or_else(|| Path::new(harness.as_str()));
-    Ok(match harness {
-        HarnessKind::Fx => (
-            tenaz_acp::fx::fx_version(bin)
-                .with_context(|| format!("cannot run {} --version", bin.display()))?,
-            Listed::default(),
-        ),
+    let version = detect::agent_version(harness, bin)
+        .with_context(|| format!("cannot run {} --version", bin.display()))?;
+    let listed = match harness {
         HarnessKind::Pi => {
-            let path = tenaz_pi::models::default_models_path();
-            let listed = Listed::read(path.as_deref(), provider)?;
-            (
-                tenaz_pi::pi_version(bin)
-                    .with_context(|| format!("cannot run {} --version", bin.display()))?,
-                listed,
-            )
+            Listed::read(tenaz_pi::models::default_models_path().as_deref(), provider)?
         }
-        HarnessKind::Fake => (
-            tenaz_core::testing::ScriptedHarness::default().version(),
-            Listed::default(),
-        ),
-    })
+        HarnessKind::Fx | HarnessKind::OpenCode | HarnessKind::Qwen | HarnessKind::Fake => {
+            Listed::default()
+        }
+    };
+    Ok((version, listed))
 }
 
 /// The models the user's Pi `models` file lists under the run's provider:
@@ -782,25 +793,33 @@ mod tests {
 
     #[test]
     fn the_harness_is_fx_unless_given_and_keeps_only_its_own_binary() {
-        let line = with(&["--fx-bin", "/opt/fx", "--pi-bin", "/opt/pi"]);
-        let fx = plan(&line, None);
-        assert_eq!(
-            (fx.harness, fx.harness_bin),
-            (HarnessKind::Fx, Some(PathBuf::from("/opt/fx")))
-        );
-        let line = with(&[
-            "--harness",
-            "pi",
+        const BINS: [&str; 8] = [
             "--fx-bin",
             "/opt/fx",
             "--pi-bin",
             "/opt/pi",
-        ]);
-        let pi = plan(&line, None);
+            "--opencode-bin",
+            "/opt/opencode",
+            "--qwen-bin",
+            "/opt/qwen",
+        ];
+        let fx = plan(&with(&BINS), None);
         assert_eq!(
-            (pi.harness, pi.harness_bin),
-            (HarnessKind::Pi, Some(PathBuf::from("/opt/pi")))
+            (fx.harness, fx.harness_bin),
+            (HarnessKind::Fx, Some(PathBuf::from("/opt/fx")))
         );
+        for (name, kind) in [
+            ("pi", HarnessKind::Pi),
+            ("opencode", HarnessKind::OpenCode),
+            ("qwen", HarnessKind::Qwen),
+        ] {
+            let line = with(&[&["--harness", name][..], &BINS].concat());
+            let got = plan(&line, None);
+            assert_eq!(
+                (got.harness, got.harness_bin),
+                (kind, Some(PathBuf::from(format!("/opt/{name}"))))
+            );
+        }
     }
 
     #[test]
