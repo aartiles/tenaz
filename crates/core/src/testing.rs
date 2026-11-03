@@ -17,7 +17,7 @@ pub mod vcs_contract;
 mod verify;
 
 pub use clock::VirtualClock;
-pub use harness::{ScriptedConflict, ScriptedHarness, ScriptedJob};
+pub use harness::{Routing, ScriptedConflict, ScriptedHarness, ScriptedJob};
 pub use jobs::ScriptedJobs;
 pub use notifier::SilentNotifier;
 pub use player::{OUTSIDE, VERIFY, fx_context_exceeded_exit};

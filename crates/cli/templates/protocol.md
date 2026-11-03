@@ -118,10 +118,11 @@ check it names belongs to a done task other than yours; then the
 orchestrator blocks the task at once and starts a replan. One that does not
 stand is removed, and the attempt fails as any other. A replan may add a
 card with `amends: [T016a.look-cues]`, naming only checks of a conflict
-that stood. The builder of that card may change those checks, and no
-others, as long as each still tests its requirement as the spec states it:
-the spec decides, not the old number. Its reviewer judges each change
-against the spec.
+that stood, and either drop the blocked task or set it back to `todo`
+with the amending card in its `depends`. The builder of that card may
+change those checks, and no others, as long as each still tests its
+requirement as the spec states it: the spec decides, not the old number.
+Its reviewer judges each change against the spec.
 
 ## Heavy jobs
 

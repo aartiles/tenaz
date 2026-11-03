@@ -9,18 +9,24 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, run};
-use crate::ledger::{JournalRecord, Phase};
+use crate::ledger::{JournalRecord, Phase, TaskOutcome};
 use crate::project::Project;
-use crate::testing::{ScriptedConflict, ScriptedHarness, VirtualClock};
+use crate::testing::{Routing, ScriptedConflict, ScriptedHarness, VirtualClock};
 
 /// Plays the fake goal with T003's first builder declaring a conflict with
 /// `check`; the project, its log and the work directory.
 async fn declaring(check: &str) -> (tempfile::TempDir, Project, String) {
+    declaring_routed(check, Routing::Drop).await
+}
+
+/// As `declaring`, with the replan routing T003 as `routing` says.
+async fn declaring_routed(check: &str, routing: Routing) -> (tempfile::TempDir, Project, String) {
     play(
         ScriptedHarness {
             conflict: Some(ScriptedConflict {
                 task: "T003".into(),
                 check: check.into(),
+                routing,
             }),
             ..Default::default()
         },
@@ -90,6 +96,108 @@ async fn a_declared_conflict_blocks_the_task_and_a_replan_routes_it_to_an_amendi
     assert_eq!(builders, 1, "T003 was retried after its conflict:\n{log}");
     assert_eq!(status(&project, "T003"), "dropped");
     assert_eq!(status(&project, "T005"), "done");
+}
+
+/// A replan may route the blocked task's work through the amending card
+/// by reopening the task behind it, as Qwen Code did on 2026-11-03,
+/// instead of dropping it. The amend is accepted, and the reopened task is
+/// built once the check is amended.
+#[tokio::test(start_paused = true)]
+async fn a_replan_may_reopen_the_blocked_task_behind_the_amending_card() {
+    reopened_behind_its_amend(Routing::Reopen).await;
+}
+
+/// A reopened task waits for its amend even when its `depends` do not
+/// say so (`LoadedBacklog::ready`).
+#[tokio::test(start_paused = true)]
+async fn a_reopened_task_waits_for_its_amend_without_depending_on_it() {
+    reopened_behind_its_amend(Routing::ReopenUnlinked).await;
+}
+
+/// A reopen is judged after the other statuses are put right: the
+/// amending card the replan wrote as `done` is `todo` by then.
+#[tokio::test(start_paused = true)]
+async fn a_reopen_is_judged_once_the_other_statuses_are_put_right() {
+    reopened_behind_its_amend(Routing::ReopenAmenderMarkedDone).await;
+}
+
+/// Plays T003's conflict with the replan reopening T003 as `routing`
+/// says, and checks the run built T005, then T003.
+async fn reopened_behind_its_amend(routing: Routing) {
+    let (_work, project, log) = declaring_routed("T001.exists", routing).await;
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    assert!(accepted_t005(&project), "{log}");
+    assert!(!rejected(&project), "{log}");
+    // T003 sorts before T005: without the wait it would be built first.
+    let done = done_in_order(&project);
+    assert!(
+        done.ends_with(&["T005".into(), "T003".into()]),
+        "{done:?}\n{log}"
+    );
+    assert!(log.contains("T003 done (1 attempt)"), "{log}");
+    assert!(project.conflict_text("T003").is_none(), "{log}");
+    let builders = prompts(&project, "builder-T005");
+    assert!(
+        builders.contains("## Checks this card may amend\n\n- `T001.exists`"),
+        "{builders}"
+    );
+}
+
+/// A status the planner may not set is put right before its cards are
+/// judged: the blocked task it marked done is blocked again, its conflict
+/// stands, and the amending card is accepted.
+#[tokio::test(start_paused = true)]
+async fn a_blocked_task_a_replan_marked_done_is_blocked_again() {
+    let (_work, project, log) = declaring_routed("T001.exists", Routing::MarkDone).await;
+    assert!(accepted_t005(&project), "{log}");
+    assert!(!rejected(&project), "{log}");
+    assert_eq!(status(&project, "T003"), "blocked", "{log}");
+    assert_eq!(status(&project, "T005"), "done", "{log}");
+}
+
+/// A reopen with no card that amends the task's checks is undone: the
+/// task is blocked again, and the replan is not rejected for it.
+#[tokio::test(start_paused = true)]
+async fn a_reopen_without_an_amend_is_blocked_again() {
+    let (_work, project, log) = declaring_routed("T001.exists", Routing::ReopenWithoutAmend).await;
+    assert!(!rejected(&project), "{log}");
+    assert_eq!(status(&project, "T003"), "blocked", "{log}");
+    let done = done_in_order(&project);
+    assert!(!done.iter().any(|t| t == "T003"), "{done:?}\n{log}");
+}
+
+/// The tasks done, in the order the journal records them.
+fn done_in_order(project: &Project) -> Vec<String> {
+    project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Task {
+                task,
+                outcome: TaskOutcome::Done,
+                ..
+            } => Some(task.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn accepted_t005(project: &Project) -> bool {
+    project.journal().iter().any(|e| {
+        matches!(&e.record, JournalRecord::ReplanAccepted { added, .. }
+            if added.iter().any(|id| id.as_str() == "T005"))
+    })
+}
+
+fn rejected(project: &Project) -> bool {
+    project
+        .journal()
+        .iter()
+        .any(|e| matches!(e.record, JournalRecord::ReplanRejected { .. }))
 }
 
 /// A builder that declared a conflict stopped as told: it is not asked

@@ -18,8 +18,24 @@ pub struct Backlog {
 pub struct LoadedBacklog {
     pub backlog: Backlog,
     pub errors: Vec<String>,
-    /// The conflicts that stood (ADR 0009); the project fills them in.
+    /// The conflicts that stand (`Conflict::stands_in`, ADR 0009 and 0018);
+    /// the project fills them in.
     pub conflicts: Vec<Conflict>,
+}
+
+impl LoadedBacklog {
+    /// The tasks that can be built now (`Backlog::ready_by_depends`), but
+    /// for a task whose conflict still stands: it waits until no card still
+    /// to build amends the checks it named, whatever its `depends` say (ADR
+    /// 0018).
+    pub fn ready(&self) -> Vec<&TaskCard> {
+        let waits = |card: &TaskCard| self.conflicts.iter().any(|c| c.task == card.id);
+        self.backlog
+            .ready_by_depends()
+            .into_iter()
+            .filter(|card| !waits(card))
+            .collect()
+    }
 }
 
 impl Backlog {
@@ -170,9 +186,10 @@ impl Backlog {
         }
     }
 
-    /// Tasks that can be built now: `todo` or `active` with every dependency
-    /// resolved. The active task comes first, then the lowest ID.
-    pub fn ready(&self) -> Vec<&TaskCard> {
+    /// Tasks whose `depends` let them be built now: `todo` or `active` with
+    /// every dependency resolved. The active task comes first, then the
+    /// lowest ID. `LoadedBacklog::ready` also waits for amends.
+    fn ready_by_depends(&self) -> Vec<&TaskCard> {
         let mut ready: Vec<&TaskCard> = self
             .tasks
             .values()
@@ -245,6 +262,40 @@ mod tests {
         )
     }
 
+    /// A task reopened behind its amend is not ready while its conflict
+    /// stands, whatever its `depends` say; the others are as
+    /// `Backlog::ready_by_depends` says (ADR 0018).
+    #[test]
+    fn a_task_whose_conflict_stands_waits_for_its_amend() {
+        let card = |id: &str, text: &str| TaskCard::parse(&format!("{id}.md"), text).unwrap();
+        let amending = text("T008", "todo", &["T001"], None).replacen(
+            "---\n",
+            "---\namends: [T001.runs]\n",
+            1,
+        );
+        let id = TaskId::parse("T002").unwrap();
+        let conflict = Conflict::read(&id, "---\nchecks: [T001.runs]\n---\n").unwrap();
+        // As the project loads it: with the conflicts that stand.
+        let ready = |amender: &str| -> Vec<String> {
+            let backlog = Backlog::from_cards([
+                card("T001", &text("T001", "done", &[], None)),
+                card("T002", &text("T002", "todo", &["T001"], None)),
+                card("T008", &amending.replace("status: todo", amender)),
+            ]);
+            let loaded = LoadedBacklog {
+                conflicts: [conflict.clone()]
+                    .into_iter()
+                    .filter(|c| c.stands_in(&backlog))
+                    .collect(),
+                backlog,
+                ..LoadedBacklog::default()
+            };
+            loaded.ready().iter().map(|t| t.id.to_string()).collect()
+        };
+        assert_eq!(ready("status: todo"), ["T008"]);
+        assert_eq!(ready("status: done"), ["T002"], "once its amend is done");
+    }
+
     #[test]
     fn loads_and_reports_reference_errors() {
         let a = text("T001", "todo", &["T009"], None);
@@ -301,7 +352,7 @@ mod tests {
         assert_eq!(loaded.errors, Vec::<String>::new());
         let ready: Vec<&str> = loaded
             .backlog
-            .ready()
+            .ready_by_depends()
             .iter()
             .map(|t| t.id.as_str())
             .collect();
@@ -332,7 +383,10 @@ mod tests {
         let id = |s: &str| TaskId::parse(s).unwrap();
         assert!(!b.resolved(&id("T001")));
         assert_eq!(
-            b.ready().iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            b.ready_by_depends()
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["T001b"]
         );
         let done = Backlog::from_cards(b.cards().cloned().map(|mut c| {
@@ -343,7 +397,7 @@ mod tests {
         }));
         assert!(done.resolved(&id("T001")));
         assert_eq!(
-            done.ready()
+            done.ready_by_depends()
                 .iter()
                 .map(|t| t.id.as_str())
                 .collect::<Vec<_>>(),
