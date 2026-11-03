@@ -685,7 +685,7 @@ async fn a_session_whose_configuration_cannot_be_written_is_not_started() {
     std::fs::write(&home, "a file, not a folder").unwrap();
     let error = fx.open(spec(dir.path())).await.err().unwrap();
     assert!(
-        matches!(&error, HarnessError::Spawn(m) if m.starts_with("cannot write the fx configuration")),
+        matches!(&error, HarnessError::Spawn(m) if m.starts_with("cannot write the fx profile")),
         "{error}"
     );
 }

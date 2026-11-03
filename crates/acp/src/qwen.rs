@@ -153,6 +153,7 @@ impl QwenLaunch {
         let home = self.home.clone();
         ConfiguredHarness::new(
             acp,
+            "the Qwen Code settings",
             Arc::new(move |model| prepare_home(&home, &settings.for_model(model))),
             first,
         )

@@ -192,6 +192,7 @@ impl OpenCodeLaunch {
         let home = self.home.clone();
         ConfiguredHarness::new(
             acp,
+            "the OpenCode configuration",
             Arc::new(move |model| write_config(&home, &config.for_model(model))),
             first,
         )

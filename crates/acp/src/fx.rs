@@ -165,6 +165,7 @@ impl FxLaunch {
         let home = self.home.clone();
         ConfiguredHarness::new(
             acp,
+            "the fx profile",
             Arc::new(move |model| write_settings(&home, &settings.for_model(model))),
             first,
         )

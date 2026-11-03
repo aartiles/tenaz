@@ -59,12 +59,12 @@ impl HarnessInputs<'_> {
     /// The steps every ACP agent ends with: feeds the engine's observations
     /// to `acp`, writes its configuration for the run's model with
     /// `configured` (a home that cannot be written stops the run here, not
-    /// in its first session; the closure says which file in its error),
+    /// in its first session),
     /// then links the pinned skills into `skills_dir`.
     fn acp_agent(
         &self,
         acp: AcpHarness,
-        configured: impl FnOnce(AcpHarness, &SessionModel) -> anyhow::Result<ConfiguredHarness>,
+        configured: impl FnOnce(AcpHarness, &SessionModel) -> std::io::Result<ConfiguredHarness>,
         skills_dir: &Path,
     ) -> anyhow::Result<Arc<dyn Harness>> {
         let acp = acp.with_observations(self.feed.clone());
@@ -143,7 +143,7 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
         skill_catalog: agent_skills || !skills.is_empty(),
     };
-    fx::write_mcp(&home, &inputs.profile_mcp()).context("cannot write the fx profile")?;
+    fx::write_mcp(&home, &inputs.profile_mcp()).context("cannot write the fx MCP servers")?;
     if !skills.is_empty() && !agent_skills {
         tracing::warn!(
             "fx lists the pinned skills, and with them any skills it finds in the folders \
@@ -169,11 +169,7 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     }
     inputs.acp_agent(
         acp,
-        |acp, first| {
-            launch
-                .configured(acp, settings, first)
-                .context("cannot write the fx profile")
-        },
+        |acp, first| launch.configured(acp, settings, first),
         &home.join(".agents/skills"),
     )
 }
@@ -199,11 +195,7 @@ fn opencode_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harnes
     launch.wrapper = inputs.wrapper.to_vec();
     inputs.acp_agent(
         launch.harness(config.harness_version.clone()),
-        |acp, first| {
-            launch
-                .configured(acp, opencode, first)
-                .context("cannot write the OpenCode configuration")
-        },
+        |acp, first| launch.configured(acp, opencode, first),
         // OpenCode finds skills in `.agents/skills` of its home, as fx does.
         &home.join(".agents/skills"),
     )
@@ -221,11 +213,7 @@ fn qwen_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> 
     launch.wrapper = inputs.wrapper.to_vec();
     inputs.acp_agent(
         launch.harness(inputs.config.harness_version.clone()),
-        |acp, first| {
-            launch
-                .configured(acp, settings, first)
-                .context("cannot prepare the Qwen Code home")
-        },
+        |acp, first| launch.configured(acp, settings, first),
         &home.join(".qwen/skills"),
     )
 }
@@ -409,26 +397,36 @@ mod tests {
     }
 
     #[test]
-    fn a_home_that_cannot_be_written_stops_the_run_before_it_starts() {
-        for (kind, home, message) in [
-            (HarnessKind::Fx, "fx-home", "cannot write the fx profile"),
+    fn a_configuration_that_cannot_be_written_stops_the_run_before_it_starts() {
+        // A folder where the agent's configuration file goes: only that
+        // write fails, and the skills are not linked after it.
+        for (kind, file, skills, what) in [
+            (
+                HarnessKind::Fx,
+                "fx-home/.fx/settings.json",
+                "fx-home/.agents/skills",
+                "the fx profile",
+            ),
             (
                 HarnessKind::OpenCode,
-                "opencode-home",
-                "cannot write the OpenCode configuration",
+                "opencode-home/opencode.json",
+                "opencode-home/.agents/skills",
+                "the OpenCode configuration",
             ),
             (
                 HarnessKind::Qwen,
-                "qwen-home",
-                "cannot prepare the Qwen Code home",
+                "qwen-home/.qwen/settings.json",
+                "qwen-home/.qwen/skills",
+                "the Qwen Code settings",
             ),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let private = Project::new(dir.path()).private_dir();
-            std::fs::create_dir_all(&private).unwrap();
-            std::fs::write(private.join(home), "a file, not a folder").unwrap();
+            std::fs::create_dir_all(private.join(file)).unwrap();
             let error = build(dir.path(), kind, &[pin("rust")]).unwrap_err();
-            assert_eq!(error.to_string(), message);
+            let prefix = format!("cannot write {what}: ");
+            assert!(error.to_string().starts_with(&prefix), "{error}");
+            assert!(!private.join(skills).exists(), "{kind:?} linked its skills");
         }
     }
 

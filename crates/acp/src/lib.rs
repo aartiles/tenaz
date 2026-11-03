@@ -161,6 +161,8 @@ pub type WriteConfig = Arc<dyn Fn(&SessionModel) -> io::Result<()> + Send + Sync
 /// is starting.
 pub struct ConfiguredHarness {
     acp: AcpHarness,
+    /// What `write` writes, for its errors: `the OpenCode configuration`.
+    what: &'static str,
     write: WriteConfig,
 }
 
@@ -168,6 +170,7 @@ impl std::fmt::Debug for ConfiguredHarness {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConfiguredHarness")
             .field("acp", &self.acp)
+            .field("what", &self.what)
             .finish_non_exhaustive()
     }
 }
@@ -175,11 +178,21 @@ impl std::fmt::Debug for ConfiguredHarness {
 impl ConfiguredHarness {
     /// `acp` with `write` run before each session, and once now for the
     /// run's model `first`, so a configuration that cannot be written
-    /// stops the run before its first session.
-    pub fn new(acp: AcpHarness, write: WriteConfig, first: &SessionModel) -> io::Result<Self> {
-        write(first)?;
-        Ok(Self { acp, write })
+    /// stops the run before its first session. `what` names it in errors.
+    pub fn new(
+        acp: AcpHarness,
+        what: &'static str,
+        write: WriteConfig,
+        first: &SessionModel,
+    ) -> io::Result<Self> {
+        write(first).map_err(|e| io::Error::new(e.kind(), cannot_write(what, &e)))?;
+        Ok(Self { acp, what, write })
     }
+}
+
+/// The error of a configuration that could not be written.
+fn cannot_write(what: &str, error: &io::Error) -> String {
+    format!("cannot write {what}: {error}")
 }
 
 #[async_trait]
@@ -189,12 +202,7 @@ impl Harness for ConfiguredHarness {
     }
 
     async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
-        (self.write)(&spec.model).map_err(|e| {
-            HarnessError::Spawn(format!(
-                "cannot write the {} configuration: {e}",
-                self.acp.info.name
-            ))
-        })?;
+        (self.write)(&spec.model).map_err(|e| HarnessError::Spawn(cannot_write(self.what, &e)))?;
         self.acp.open(spec).await
     }
 }
