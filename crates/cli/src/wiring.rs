@@ -311,7 +311,7 @@ pub async fn wire(
         .as_ref()
         .map(|s| s.wrapper.clone())
         .unwrap_or_default();
-    let mut harness = build_harness(HarnessInputs {
+    let mut harness = build_harness(&HarnessInputs {
         project,
         config,
         options: harness,
