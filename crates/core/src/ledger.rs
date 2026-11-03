@@ -193,6 +193,13 @@ pub struct Launch {
     /// The image model to ask that API for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_model: Option<String>,
+    /// Base URL of an image-to-3D API (`.../v1`, `POST /3d/generations`);
+    /// enables the 3D tool (ADR 0020).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meshes_url: Option<String>,
+    /// The 3D model to ask that API for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_model: Option<String>,
     /// Media job time limit, in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_timeout_sec: Option<u64>,

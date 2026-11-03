@@ -103,6 +103,7 @@ pub fn examine(machine: &Machine, context_floor: u64) -> Vec<Check> {
         engine_check(machine),
         model_check(machine, context_floor),
         images_check(machine),
+        meshes_check(machine),
     ]
 }
 
@@ -169,6 +170,38 @@ fn images_check(machine: &Machine) -> Check {
         level: Level::Ok,
         found,
         fix: vec![fix],
+    }
+}
+
+/// 3D is optional too: the first engine that lists a 3D model is offered.
+fn meshes_check(machine: &Machine) -> Check {
+    let found = machine.engines.iter().find_map(|engine| {
+        engine
+            .models
+            .iter()
+            .find(|m| crate::mesh::is_mesh_model(&m.id))
+            .map(|model| (engine, &model.id))
+    });
+    let Some((engine, model)) = found else {
+        return Check {
+            what: "3d",
+            level: Level::Ok,
+            found: "no 3D model (optional)".to_owned(),
+            fix: vec![
+                "For a 3D tool, serve an image-to-3D model with mlx-serve \
+                 (/v1/3d/generations), such as Idol or TRELLIS.2."
+                    .to_owned(),
+            ],
+        };
+    };
+    Check {
+        what: "3d",
+        level: Level::Ok,
+        found: format!("{model} on {} at {}", engine.label, engine.base_url),
+        fix: vec![format!(
+            "Give it to a run: --meshes {} --mesh-model {model}",
+            engine.base_url
+        )],
     }
 }
 
@@ -456,6 +489,34 @@ mod tests {
         );
         m.images.remove(0);
         assert!(images_check(&m).fix[0].contains("--comfyui http://127.0.0.1:8188"));
+        assert!(ready(&examine(&m, FLOOR)));
+    }
+
+    #[test]
+    fn the_3d_check_offers_the_first_3d_model_and_never_blocks() {
+        let mut m = machine();
+        let none = meshes_check(&m);
+        assert_eq!(none.level, Level::Ok);
+        assert!(none.found.contains("optional"));
+        // The first engine (LM Studio) lists no 3D model; the second does.
+        let mut mlx_serve = engine(
+            "mlx-serve",
+            &[("qwen", None), ("Idol-MLX-Serve-8bit", None)],
+        );
+        mlx_serve.base_url = "http://127.0.0.1:11234/v1".to_owned();
+        m.engines.push(mlx_serve);
+        let found = meshes_check(&m);
+        assert_eq!(found.level, Level::Ok);
+        assert_eq!(
+            found.found,
+            "Idol-MLX-Serve-8bit on mlx-serve at http://127.0.0.1:11234/v1"
+        );
+        assert_eq!(
+            found.fix,
+            vec![
+                "Give it to a run: --meshes http://127.0.0.1:11234/v1 --mesh-model Idol-MLX-Serve-8bit"
+            ]
+        );
         assert!(ready(&examine(&m, FLOOR)));
     }
 

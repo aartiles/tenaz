@@ -151,6 +151,13 @@ pub(crate) struct InitArgs {
     /// The image model to ask the `--images` API for.
     #[arg(long)]
     pub(crate) image_model: Option<String>,
+    /// Base URL of an image-to-3D API (`http://host:port/v1`, mlx-serve's
+    /// `/v1/3d/generations`); enables the 3D tool.
+    #[arg(long)]
+    pub(crate) meshes: Option<String>,
+    /// The 3D model to ask the `--meshes` API for.
+    #[arg(long)]
+    pub(crate) mesh_model: Option<String>,
     /// Media job time limit, in seconds (default 1800).
     #[arg(long)]
     pub(crate) media_timeout: Option<u64>,
@@ -216,6 +223,8 @@ impl InitArgs {
         flags.extend([
             ("images", self.images.clone()),
             ("image-model", self.image_model.clone()),
+            ("meshes", self.meshes.clone()),
+            ("mesh-model", self.mesh_model.clone()),
             ("media-timeout", self.media_timeout.map(|t| t.to_string())),
         ]);
         let switches = [
@@ -501,6 +510,8 @@ fn launch(plan: &InitPlan) -> anyhow::Result<Launch> {
         workflows: pinned_workflows(&plan.args.workflows)?,
         images_url: plan.args.images.clone(),
         image_model: plan.args.image_model.clone(),
+        meshes_url: plan.args.meshes.clone(),
+        mesh_model: plan.args.mesh_model.clone(),
         media_timeout_sec: plan.args.media_timeout,
     })
 }
