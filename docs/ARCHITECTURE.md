@@ -29,7 +29,7 @@ Pure modules, each unit-tested without I/O:
 | `task` | Task IDs (`T007`, `T007a`), statuses, card frontmatter parse and field updates. |
 | `spec` | Requirement lines (`- R1: ...`, `manual:`) and coverage. |
 | `backlog` | Card validation, dependency DAG, resolved and ready tasks. |
-| `conflict` | A builder's declared conflict with checks of done tasks, and which checks a card's `amends` may name (ADR 0009). |
+| `conflict` | A builder's declared conflict with checks of done tasks, and which checks a card's `amends` may name (ADR 0009, 0018). |
 | `job` | A heavy job a builder declares, and the report of how it ran (ADR 0010). |
 | `verify` | The `verify` contract: last-line JSON, exit code, clipping; whether a builder attempt passed. |
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time, provider-error and outside-write rules; emits steer, abort or interrupt (stop the turn, prompt again). |
@@ -96,7 +96,7 @@ module with unit tests turns the harness's own records into those events.
 | | `tenaz-acp` (fx, OpenCode, Qwen Code) | `tenaz-pi` (Pi) |
 |---|---|---|
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
-| Per session | the agent's configuration written for the session's model in its own `HOME` (ADR 0018; Qwen Code also gets the model on its command line), then `initialize`, `session/new` | `pi --mode rpc --session-dir DIR|--no-session --model P/ID (the session role's model) --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
+| Per session | the agent's configuration written for the session's model in its own `HOME` (ADR 0019; Qwen Code also gets the model on its command line), then `initialize`, `session/new` | `pi --mode rpc --session-dir DIR|--no-session --model P/ID (the session role's model) --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
 | Prompt | `session/prompt` | `{"id":"prompt-N","type":"prompt","message":...}`; a `response` that is not `success` or whose disposition is `handled` becomes `PromptRejected` |
 | Steer | fx's extension: a `session/prompt` with `_meta.fx.steer: true` while a prompt runs; otherwise dropped | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
 | Abort | `session/cancel` | `clear_queue` then `abort`; `agent_settled {aborted:true}` follows |

@@ -1,4 +1,4 @@
-# ADR 0018: OpenCode and Qwen Code as harnesses
+# ADR 0019: OpenCode and Qwen Code as harnesses
 
 Status: accepted, 2026-11-03.
 

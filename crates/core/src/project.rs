@@ -352,16 +352,16 @@ impl Project {
         loaded
     }
 
-    /// The conflicts that stood (ADR 0009): those of the tasks of `backlog`
-    /// that are blocked, or dropped once a replan routed around them. A
-    /// conflict file of any other task is not one.
+    /// The conflicts that stand (`Conflict::stands_in`, ADR 0009 and 0018):
+    /// the readable conflict file of each card of `backlog`, kept if it
+    /// stands.
     fn conflicts(&self, backlog: &Backlog) -> Vec<Conflict> {
         backlog
             .cards()
-            .filter(|card| matches!(card.status, TaskStatus::Blocked | TaskStatus::Dropped))
             .filter_map(|card| {
                 Conflict::read(&card.id, &self.conflict_text(card.id.as_str())?).ok()
             })
+            .filter(|conflict| conflict.stands_in(backlog))
             .collect()
     }
 
@@ -547,6 +547,57 @@ mod tests {
         assert_eq!(p.note("T001"), None);
         p.write(".tenaz/notes/T001.md", "did it").unwrap();
         assert_eq!(p.note("T001").as_deref(), Some("did it"));
+    }
+
+    /// Writes card `id` with `status` and the front matter lines `extra`.
+    fn write_card(p: &Project, id: &str, status: &str, extra: &str) {
+        let text = format!("---\nid: {id}\nstatus: {status}\n{extra}---\n## Goal\n");
+        p.write(&format!(".tenaz/tasks/{id}.md"), &text).unwrap();
+    }
+
+    /// A conflict file of a task set back to `todo` stands, and licenses
+    /// an `amends`, only while a card still to build amends its checks
+    /// (ADR 0018); otherwise it is left from an earlier attempt.
+    #[test]
+    fn a_reopened_task_s_conflict_stands_only_while_its_amend_is_to_build() {
+        let (_dir, p) = project();
+        let card = |id: &str, status: &str, extra: &str| write_card(&p, id, status, extra);
+        card("T001", "done", "");
+        card("T002", "todo", "depends: [T001]\n");
+        p.write(
+            ".tenaz/conflicts/T002.md",
+            "---\nchecks: [T001.runs]\n---\n",
+        )
+        .unwrap();
+        assert_eq!(p.load_backlog().conflicts, [], "no card amends");
+        card("T008", "todo", "amends: [T001.runs]\n");
+        let loaded = p.load_backlog();
+        assert_eq!(loaded.errors, Vec::<String>::new());
+        let tasks: Vec<&str> = loaded.conflicts.iter().map(|c| c.task.as_str()).collect();
+        assert_eq!(tasks, ["T002"]);
+        card("T008", "done", "amends: [T001.runs]\n");
+        let loaded = p.load_backlog();
+        assert_eq!(loaded.conflicts, []);
+        assert_eq!(loaded.errors, Vec::<String>::new(), "a done card amends");
+    }
+
+    /// A conflict file never read, as when the last attempt passed
+    /// `verify`, licenses no `amends` unless it would have stood.
+    #[test]
+    fn a_conflict_with_a_check_of_a_task_not_done_does_not_stand() {
+        let (_dir, p) = project();
+        let card = |id: &str, status: &str, extra: &str| write_card(&p, id, status, extra);
+        card("T002", "blocked", "");
+        card("T003", "todo", "");
+        card("T008", "todo", "amends: [T003.x]\n");
+        p.write(".tenaz/conflicts/T002.md", "---\nchecks: [T003.x]\n---\n")
+            .unwrap();
+        let loaded = p.load_backlog();
+        assert_eq!(loaded.conflicts, []);
+        assert_eq!(
+            loaded.errors,
+            ["T008: amends `T003.x`, which no file in .tenaz/conflicts/ names"]
+        );
     }
 
     /// The card of T001 after `change`, starting from `front` (its

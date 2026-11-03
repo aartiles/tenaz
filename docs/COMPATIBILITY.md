@@ -13,7 +13,7 @@ below; this page is about the real ones.
 | | Windows | Not supported. |
 | Harness | [fx](https://github.com/vercel-labs/fx) 0.0.14 and 0.0.15 over ACP | Tested end to end: preflight, bootstrap, build, review, steering, pause and resume. |
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 and 1.4.0 in RPC mode | Tested end to end to a COMPLETE run: 1.1.0 with the user's own `models.json`, 1.4.0 with the generated configuration through the proxy and two models (see Known gaps). No media tools (see below). |
-| | [OpenCode](https://github.com/sst/opencode) 1.19.5 (`--harness opencode`) and [Qwen Code](https://github.com/QwenLM/qwen-code) 0.26.6 (`--harness qwen`), both over ACP | One real run each with Qwen3.8-27B on mlx-serve: OpenCode to COMPLETE, Qwen Code to BLOCKED by a replan the run rejected, not by the agent. Less tried than fx and Pi (see Known gaps). |
+| | [OpenCode](https://github.com/sst/opencode) 1.19.5 (`--harness opencode`) and [Qwen Code](https://github.com/QwenLM/qwen-code) 0.26.6 (`--harness qwen`), both over ACP | One real run each with Qwen3.8-27B on mlx-serve: OpenCode to COMPLETE, Qwen Code to BLOCKED by a replan the run rejected, not by the agent; Tenaz now accepts that replan (ADR 0018). Less tried than fx and Pi (see Known gaps). |
 | | Other ACP agents | Only through `--fx-bin`, which passes fx's `--log-file` and writes only fx's settings. Untested. |
 | Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve 26.10.3 loaded and unloaded two models through its API in two runs that swapped them (see Known gaps). |
 | | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run, before the start was skipped for an engine that still serves the model (see Known gaps). The servers named here are untried. |
@@ -117,6 +117,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **A blocked task reopened behind an amend** (ADR 0018). In a run with
+  Qwen Code 0.26.6 and Qwen3.8-27B (2026-11-03) a replan set a blocked
+  task back to `todo` behind the card that amends its conflict's check;
+  Tenaz rejected it twice and the run ended BLOCKED. Tenaz now accepts
+  that backlog. Tested with the scripted harness only, not yet in a run
+  with a real model.
 - **A model per role** (`--model-for`, ADR 0011). fx is launched with each
   session's model: its `settings.json` is rewritten before the session
   starts. Run once with fx 0.0.15 and mlx-serve 26.10.3 holding two
@@ -423,15 +429,15 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - Whether fx loads the project's `AGENTS.md` by itself has not been
   checked; Pi does. The Tenaz protocol is in every prompt either way.
 - **OpenCode and Qwen Code: the runs** (`--harness opencode`,
-  `--harness qwen`, ADR 0018). Each ran once on the same word-count brief
+  `--harness qwen`, ADR 0019). Each ran once on the same word-count brief
   with Qwen3.8-27B on mlx-serve. OpenCode 1.19.5 reached COMPLETE in 19
   sessions (six tasks). Qwen Code 0.26.6 finished two of seven tasks in
   11 sessions, then stopped BLOCKED: its builder declared a conflict with
   a done check, and both replans wrote the amending card but set the
-  blocked card back to `todo` instead of `dropped`, so Tenaz rejected the
-  `amends` (it only counts the conflicts of blocked or dropped tasks).
-  That rule is the same for every harness. Before these kinds existed,
-  each agent reached COMPLETE through a script given as `--fx-bin`
+  blocked card back to `todo` instead of `dropped`, and Tenaz rejected
+  that backlog. Tenaz now accepts it (ADR 0018); this run has not been
+  repeated. Before these kinds existed, each agent reached COMPLETE
+  through a script given as `--fx-bin`
   (OpenCode: 18 sessions, Qwen Code: 21). Most sessions that failed in
   these runs were mlx-serve running out of memory, which Tenaz ran
   again; Qwen Code's last replan reached the output limit. After the

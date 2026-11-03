@@ -1,5 +1,5 @@
 //! `OpenCode` specifics: its configuration in an isolated `HOME` and how
-//! `opencode acp` is launched (ADR 0018).
+//! `opencode acp` is launched (ADR 0019).
 
 use std::io;
 use std::path::{Path, PathBuf};

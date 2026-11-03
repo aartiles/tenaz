@@ -406,7 +406,7 @@ lists the model, the wizard offers it and the run keeps its settings there
 over ACP, as fx is. Each runs in a `HOME` of its own under
 `.tenaz/private/`, with a configuration Tenaz writes for each session's
 model, so your own settings, plugins, MCP servers and memories stay out of
-the run ([ADR 0018](docs/adr/0018-opencode-and-qwen-code.md)). Qwen Code's
+the run ([ADR 0019](docs/adr/0019-opencode-and-qwen-code.md)). Qwen Code's
 memory and chat recording are turned off, and the context files it reads
 from its `HOME` are removed before each session, so every session starts
 from the plan and the repository alone. Neither takes a steering message:

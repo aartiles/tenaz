@@ -1,5 +1,5 @@
 //! Qwen Code specifics: its settings in an isolated `HOME` and how
-//! `qwen --acp` is launched (ADR 0018).
+//! `qwen --acp` is launched (ADR 0019).
 
 use std::fs;
 use std::io;

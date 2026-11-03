@@ -1,5 +1,5 @@
 //! The harness of a run, built from the ledger: each kind writes its own
-//! configuration into the project (ADR 0018) and is launched through the
+//! configuration into the project (ADR 0019) and is launched through the
 //! sandbox when the run has one.
 
 use std::path::{Path, PathBuf};
