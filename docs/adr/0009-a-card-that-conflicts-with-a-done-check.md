@@ -1,7 +1,9 @@
 # ADR 0009: A card that conflicts with a done check
 
-Status: accepted, 2026-10-29. Since ADR 0018 a replan may also reopen
-the blocked task behind the amending card.
+Status: accepted, 2026-10-29. ADR 0018 changes two rules below: a
+conflict also stands while its task is reopened behind a card that amends
+its checks, and `amends` is checked only on cards that may still be built
+(todo, active or blocked), not on every card that is not done.
 
 ## Context
 
