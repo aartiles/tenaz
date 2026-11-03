@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use tenaz_acp::fx::{self, FxLaunch, FxSettings, write_profile};
-use tenaz_acp::opencode::{self, OpenCodeConfig, OpenCodeLaunch};
-use tenaz_acp::qwen::{self, QwenLaunch, QwenSettings};
+use tenaz_acp::fx::{self, FxLaunch, FxSettings};
+use tenaz_acp::opencode::{OpenCodeConfig, OpenCodeLaunch};
+use tenaz_acp::qwen::{QwenLaunch, QwenSettings};
 use tenaz_acp::{EngineObservation, McpEndpoint, ProfileMcpServer};
 use tenaz_core::ledger::{HarnessKind, ModelConfig, SkillPin};
 use tenaz_core::ports::Harness;
@@ -127,8 +127,7 @@ fn fx_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
         skill_catalog: agent_skills || !skills.is_empty(),
     };
-    write_profile(&home, &settings, &profile_mcp).context("cannot write the fx profile")?;
-    link_skills(project, &home.join(".agents/skills"), skills)?;
+    fx::write_mcp(&home, &profile_mcp).context("cannot write the fx profile")?;
     if !skills.is_empty() && !agent_skills {
         tracing::warn!(
             "fx lists the pinned skills, and with them any skills it finds in the folders \
@@ -154,7 +153,12 @@ fn fx_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
                 .unwrap_or_default(),
         );
     }
-    Ok(Arc::new(fx::configured(acp, &launch.home, settings)))
+    // A home that cannot be written stops the run here, not in its first session.
+    let fx = launch
+        .configured(acp, settings, &config.run_model())
+        .context("cannot write the fx profile")?;
+    link_skills(project, &home.join(".agents/skills"), skills)?;
+    Ok(Arc::new(fx))
 }
 
 /// `OpenCode` with its configuration in `.tenaz/private/opencode-home`.
@@ -177,10 +181,6 @@ fn opencode_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
         skills: allowed_skills(skills, inputs.agent_skills),
     };
     let mut launch = OpenCodeLaunch::new(&inputs.options.bin, &home);
-    // A home that cannot be written stops the run here, not in its first session.
-    opencode::write_config(&home, &opencode).context("cannot write the OpenCode configuration")?;
-    // OpenCode finds skills in `.agents/skills` of its home, as fx does.
-    link_skills(project, &home.join(".agents/skills"), skills)?;
     // npm's own cache, which the sandbox lets the agent write by default;
     // a `sandboxAllowWrite` without `~/.npm` leaves OpenCode unable to start.
     launch.npm_cache = std::env::home_dir().map(|h| h.join(".npm"));
@@ -188,7 +188,13 @@ fn opencode_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
     let acp = launch
         .harness(config.harness_version.clone())
         .with_observations(inputs.feed.clone());
-    Ok(Arc::new(opencode::configured(acp, home, opencode)))
+    // A home that cannot be written stops the run here, not in its first session.
+    let agent = launch
+        .configured(acp, opencode, &config.run_model())
+        .context("cannot write the OpenCode configuration")?;
+    // OpenCode finds skills in `.agents/skills` of its home, as fx does.
+    link_skills(project, &home.join(".agents/skills"), skills)?;
+    Ok(Arc::new(agent))
 }
 
 /// Qwen Code with its settings in `.tenaz/private/qwen-home`.
@@ -199,15 +205,17 @@ fn qwen_harness(inputs: HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         mcp: inputs.profile_mcp(),
         discover_skills: inputs.agent_skills,
     };
-    // A home that cannot be written stops the run here, not in its first session.
-    qwen::prepare_home(&home, &settings).context("cannot prepare the Qwen Code home")?;
-    link_skills(inputs.project, &home.join(".qwen/skills"), inputs.skills)?;
     let mut launch = QwenLaunch::new(&inputs.options.bin, &home, inputs.base_url);
     launch.wrapper = inputs.wrapper.to_vec();
     let acp = launch
         .harness(inputs.config.harness_version.clone())
         .with_observations(inputs.feed.clone());
-    Ok(Arc::new(qwen::configured(acp, home, settings)))
+    // A home that cannot be written stops the run here, not in its first session.
+    let agent = launch
+        .configured(acp, settings, &inputs.config.run_model())
+        .context("cannot prepare the Qwen Code home")?;
+    link_skills(inputs.project, &home.join(".qwen/skills"), inputs.skills)?;
+    Ok(Arc::new(agent))
 }
 
 /// The provider name the harness's configuration uses.
@@ -359,6 +367,19 @@ mod tests {
         build(dir.path(), HarnessKind::OpenCode, &[pin("rust")]).unwrap();
         let home = Project::new(dir.path()).private_dir().join("opencode-home");
         assert_eq!(json(&home.join("opencode.json"))["model"], "engine/m");
+        assert!(home.join(".agents/skills/rust").is_symlink());
+    }
+
+    #[test]
+    fn fx_is_set_up_in_its_home_before_its_first_session() {
+        let dir = tempfile::tempdir().unwrap();
+        build(dir.path(), HarnessKind::Fx, &[pin("rust")]).unwrap();
+        let home = Project::new(dir.path()).private_dir().join("fx-home");
+        assert_eq!(
+            json(&home.join(".fx/settings.json"))["models"]["engine"],
+            "m"
+        );
+        assert!(home.join(".fx/mcp.json").exists());
         assert!(home.join(".agents/skills/rust").is_symlink());
     }
 

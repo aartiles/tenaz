@@ -91,13 +91,9 @@ impl FxSettings {
     }
 }
 
-/// Writes `settings.json` and `mcp.json` under `<home>/.fx/`.
-pub fn write_profile(
-    home: &Path,
-    settings: &FxSettings,
-    mcp: &[ProfileMcpServer],
-) -> io::Result<()> {
-    write_settings(home, settings)?;
+/// Writes `mcp.json` under `<home>/.fx/`: the MCP servers fx lists in
+/// every session.
+pub fn write_mcp(home: &Path, mcp: &[ProfileMcpServer]) -> io::Result<()> {
     let servers: serde_json::Map<String, serde_json::Value> = mcp
         .iter()
         .map(|s| (s.name.clone(), serde_json::json!({ "type": "http", "url": s.url, "enabled": true, "operation_timeout_ms": s.operation_timeout_ms })))
@@ -109,22 +105,8 @@ pub fn write_profile(
 }
 
 /// Writes `settings.json` under `<home>/.fx/`.
-pub fn write_settings(home: &Path, settings: &FxSettings) -> io::Result<()> {
+fn write_settings(home: &Path, settings: &FxSettings) -> io::Result<()> {
     write_json(&home.join(".fx/settings.json"), &settings.to_json())
-}
-
-/// fx with its settings in `home` written for each session's model
-/// before fx starts.
-pub fn configured(
-    acp: AcpHarness,
-    home: impl Into<PathBuf>,
-    settings: FxSettings,
-) -> ConfiguredHarness {
-    let home = home.into();
-    ConfiguredHarness::new(
-        acp,
-        Arc::new(move |model| write_settings(&home, &settings.for_model(model))),
-    )
 }
 
 /// How fx is launched for ACP.
@@ -172,6 +154,22 @@ pub fn normalize_line(line: &str) -> std::borrow::Cow<'_, str> {
 }
 
 impl FxLaunch {
+    /// `acp` with its settings written in [`home`](Self::home) for each
+    /// session's model before fx starts, and now for the run's `first`.
+    pub fn configured(
+        &self,
+        acp: AcpHarness,
+        settings: FxSettings,
+        first: &SessionModel,
+    ) -> io::Result<ConfiguredHarness> {
+        let home = self.home.clone();
+        ConfiguredHarness::new(
+            acp,
+            Arc::new(move |model| write_settings(&home, &settings.for_model(model))),
+            first,
+        )
+    }
+
     pub fn new(binary: impl Into<PathBuf>, home: impl Into<PathBuf>) -> Self {
         Self {
             binary: binary.into(),
@@ -262,7 +260,8 @@ mod tests {
             url: "http://127.0.0.1:4002/mcp".into(),
             operation_timeout_ms: 600_000,
         }];
-        write_profile(home.path(), &settings, &mcp).unwrap();
+        write_settings(home.path(), &settings).unwrap();
+        write_mcp(home.path(), &mcp).unwrap();
         let written: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(home.path().join(".fx/settings.json")).unwrap(),
         )

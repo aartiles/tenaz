@@ -169,7 +169,8 @@ impl OpenCodeLaunch {
     }
 
     /// The agent: [`command`](Self::command) with [`env`](Self::env).
-    /// [`configured`] writes its configuration for each session's model.
+    /// [`configured`](Self::configured) writes its configuration for each
+    /// session's model.
     pub fn harness(&self, version: String) -> AcpHarness {
         let info = HarnessInfo {
             name: HarnessKind::OpenCode.as_str().to_owned(),
@@ -178,15 +179,23 @@ impl OpenCodeLaunch {
         let (command, args) = self.command();
         AcpHarness::subprocess(info, command, args, self.env())
     }
-}
 
-/// `acp` with `config` written under `home` for each session's model
-/// before `OpenCode` starts.
-pub fn configured(acp: AcpHarness, home: PathBuf, config: OpenCodeConfig) -> ConfiguredHarness {
-    ConfiguredHarness::new(
-        acp,
-        Arc::new(move |model| write_config(&home, &config.for_model(model))),
-    )
+    /// `acp` with `config` written in [`home`](Self::home) for each
+    /// session's model before `OpenCode` starts, and now for the run's
+    /// `first`.
+    pub fn configured(
+        &self,
+        acp: AcpHarness,
+        config: OpenCodeConfig,
+        first: &SessionModel,
+    ) -> io::Result<ConfiguredHarness> {
+        let home = self.home.clone();
+        ConfiguredHarness::new(
+            acp,
+            Arc::new(move |model| write_config(&home, &config.for_model(model))),
+            first,
+        )
+    }
 }
 
 /// Where the configuration is written under `home`.
@@ -195,7 +204,7 @@ fn config_path(home: &Path) -> PathBuf {
 }
 
 /// Writes the configuration under `home`.
-pub fn write_config(home: &Path, config: &OpenCodeConfig) -> io::Result<()> {
+fn write_config(home: &Path, config: &OpenCodeConfig) -> io::Result<()> {
     write_json(&config_path(home), &config.to_json())
 }
 

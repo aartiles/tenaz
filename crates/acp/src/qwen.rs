@@ -125,7 +125,8 @@ impl QwenLaunch {
     }
 
     /// The agent: `qwen --acp` with [`env`](Self::env), each session on its
-    /// own model. [`configured`] prepares its home for that model.
+    /// own model. [`configured`](Self::configured) prepares its home for
+    /// that model.
     pub fn harness(&self, version: String) -> AcpHarness {
         let info = HarnessInfo {
             name: HarnessKind::Qwen.as_str().to_owned(),
@@ -140,15 +141,22 @@ impl QwenLaunch {
             self.env(),
         )
     }
-}
 
-/// `acp` with its home prepared ([`prepare_home`]) for each session's
-/// model before Qwen Code starts.
-pub fn configured(acp: AcpHarness, home: PathBuf, settings: QwenSettings) -> ConfiguredHarness {
-    ConfiguredHarness::new(
-        acp,
-        Arc::new(move |model| prepare_home(&home, &settings.for_model(model))),
-    )
+    /// `acp` with its home prepared ([`prepare_home`]) for each session's
+    /// model before Qwen Code starts, and now for the run's `first`.
+    pub fn configured(
+        &self,
+        acp: AcpHarness,
+        settings: QwenSettings,
+        first: &SessionModel,
+    ) -> io::Result<ConfiguredHarness> {
+        let home = self.home.clone();
+        ConfiguredHarness::new(
+            acp,
+            Arc::new(move |model| prepare_home(&home, &settings.for_model(model))),
+            first,
+        )
+    }
 }
 
 /// The context files Qwen Code 0.26.6 reads from `<home>/.qwen/` into
@@ -157,7 +165,7 @@ const CONTEXT_FILES: [&str; 2] = ["QWEN.md", "AGENTS.md"];
 
 /// Writes `settings.json` under `<home>/.qwen/` and removes the context
 /// files there, so a session starts from the plan and the repository.
-pub fn prepare_home(home: &Path, settings: &QwenSettings) -> io::Result<()> {
+fn prepare_home(home: &Path, settings: &QwenSettings) -> io::Result<()> {
     for name in CONTEXT_FILES {
         match fs::remove_file(home.join(".qwen").join(name)) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),

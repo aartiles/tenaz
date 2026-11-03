@@ -173,8 +173,12 @@ impl std::fmt::Debug for ConfiguredHarness {
 }
 
 impl ConfiguredHarness {
-    pub fn new(acp: AcpHarness, write: WriteConfig) -> Self {
-        Self { acp, write }
+    /// `acp` with `write` run before each session, and once now for the
+    /// run's model `first`, so a configuration that cannot be written
+    /// stops the run before its first session.
+    pub fn new(acp: AcpHarness, write: WriteConfig, first: &SessionModel) -> io::Result<Self> {
+        write(first)?;
+        Ok(Self { acp, write })
     }
 }
 
