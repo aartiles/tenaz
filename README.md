@@ -456,6 +456,20 @@ depends on the engine:
   stays loaded and serving while the image renders, so the memory has to
   hold the two models together.
 
+### 3D
+
+`--meshes http://127.0.0.1:11234/v1 --mesh-model <model>` gives the agent
+`generate_3d`, which turns a picture of one object into a 3D mesh (GLB)
+through mlx-serve's `POST /v1/3d/generations`, with models such as Idol
+or TRELLIS.2 ([ADR 0020](docs/adr/0020-a-3d-tool.md)). The agent names a
+PNG or JPEG inside the project and where to write the `.glb`, also inside
+the project, and may set `resolution`, `seed`, `steps` and `mode`.
+TRELLIS.2 needs a cutout whose alpha is the object; Idol cuts the object
+out itself. A call frees the LLM first, as an image does, and is limited
+by `--media-timeout` (1800 s by default): TRELLIS.2 at 1024 took about
+7 minutes on an M5 Mac. A run may have an image engine, a 3D engine or
+both, on the same server or not. Pi gets no media tools.
+
 ### Protocol, prompts and skills
 
 The protocol in `.tenaz/protocol.md` and the prompts in `.tenaz/prompts/`

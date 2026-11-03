@@ -7,7 +7,7 @@ on the core, the core depends on nothing of theirs.
 crates/
   core/      tenaz-core      domain + ports + orchestration. No process, network or git code.
   adapters/  tenaz-adapters  git, verify and heavy-job runners, macOS memory probe, notifier, engine adapters
-                           (generic commands, a load API as Sushi's), media adapters (ComfyUI, OpenAI Images),
+                           (generic commands, a load API as Sushi's), media adapters (ComfyUI, OpenAI Images, a 3D API),
                            Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
                            engine error messages, tool-argument repair, the lowered
@@ -33,6 +33,7 @@ Pure modules, each unit-tested without I/O:
 | `job` | A heavy job a builder declares, and the report of how it ran (ADR 0010). |
 | `verify` | The `verify` contract: last-line JSON, exit code, clipping; whether a builder attempt passed. |
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time, provider-error and outside-write rules; emits steer, abort or interrupt (stop the turn, prompt again). |
+| `mesh` | The `generate_3d` tool's paths, which must stay inside the project, what counts as a GLB, and 3D model names (ADR 0020). |
 | `write_scope` | Where a session may write without the sandbox, and whether a write tool's target is outside it (ADR 0008). |
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal). |
 | `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |

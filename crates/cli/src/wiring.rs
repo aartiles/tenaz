@@ -14,6 +14,7 @@ use tenaz_adapters::engine::load_api::LoadApiEngine;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::job::JobProcess;
 use tenaz_adapters::media::comfyui::ComfyUi;
+use tenaz_adapters::media::meshes::MeshApi;
 use tenaz_adapters::media::openai_images::OpenAiImages;
 use tenaz_adapters::metrics::PrometheusMetrics;
 use tenaz_adapters::notify::DesktopNotifier;
@@ -103,6 +104,9 @@ pub struct MediaOptions {
     /// An `OpenAI` Images API base URL and the model to ask it for.
     pub images_url: Option<String>,
     pub image_model: Option<String>,
+    /// An image-to-3D API base URL and the model to ask it for (ADR 0020).
+    pub meshes_url: Option<String>,
+    pub mesh_model: Option<String>,
     pub timeout: Duration,
 }
 
@@ -175,6 +179,25 @@ fn media_adapter(
     }
 }
 
+/// The run's 3D engine, if it has one; it shares the LLM's engine when it
+/// has the same origin as `llm_base_url`.
+fn mesh_adapter(
+    media: &MediaOptions,
+    llm_base_url: &str,
+) -> anyhow::Result<Option<Arc<dyn MediaAdapter>>> {
+    let Some(meshes_url) = &media.meshes_url else {
+        return Ok(None);
+    };
+    let model = media
+        .mesh_model
+        .clone()
+        .context("--meshes needs --mesh-model, the 3D model to ask it for")?;
+    let shares = origin(meshes_url)? == origin(llm_base_url)?;
+    Ok(Some(Arc::new(
+        MeshApi::new(meshes_url, model, media.timeout).sharing_the_engine(shares),
+    )))
+}
+
 /// The `reasoning_effort` the engine is asked for, from the ledger's
 /// thinking level; `None` leaves the engine's default (`off`, `none`, unset).
 fn reasoning_effort(thinking: Option<&str>) -> Option<&str> {
@@ -228,6 +251,37 @@ fn reqwest_url(base_url: &str) -> anyhow::Result<(String, String, Option<u16>)> 
     Ok((scheme.to_owned(), host, port))
 }
 
+/// The run's media engines: an image engine, a 3D engine, both or neither.
+struct MediaEngines {
+    image: Option<Arc<dyn MediaAdapter>>,
+    mesh: Option<Arc<dyn MediaAdapter>>,
+}
+
+/// The media MCP server with the tools of the run's engines; `None` when
+/// it has none.
+async fn media_server(
+    lease: &Arc<LeaseManager>,
+    project: &Project,
+    media: &MediaOptions,
+    engines: &MediaEngines,
+) -> anyhow::Result<Option<tenaz_mcp::McpHandle>> {
+    if engines.image.is_none() && engines.mesh.is_none() {
+        return Ok(None);
+    }
+    let mut tools = MediaTools::new(lease.clone(), project.private_dir().join("media"));
+    if let Some(adapter) = &engines.image {
+        tools = tools.with_images(adapter.name(), media.workflows.clone());
+    }
+    if let Some(adapter) = &engines.mesh {
+        tools = tools.with_meshes(adapter.name(), project.root());
+    }
+    let handle = serve(tools, "127.0.0.1:0".parse()?)
+        .await
+        .context("cannot start the media MCP server")?;
+    tracing::info!("media MCP server at {}", handle.url());
+    Ok(Some(handle))
+}
+
 /// Builds everything a run needs.
 pub async fn wire(
     project: &Project,
@@ -263,22 +317,15 @@ pub async fn wire(
     let mut lease = swapping(lease, engine.swap)?;
     let mut services = Services::default();
     let mut mcp_endpoints = Vec::new();
-    let media_engine = media_adapter(media, &base_url)?;
-    if let Some(adapter) = &media_engine {
+    let engines = MediaEngines {
+        image: media_adapter(media, &base_url)?,
+        mesh: mesh_adapter(media, &base_url)?,
+    };
+    for adapter in engines.image.iter().chain(&engines.mesh) {
         lease = lease.with_media(adapter.clone());
     }
     let lease = Arc::new(lease);
-    if let Some(adapter) = &media_engine {
-        let tools = MediaTools::new(
-            lease.clone(),
-            project.private_dir().join("media"),
-            media.workflows.clone(),
-            adapter.name(),
-        );
-        let handle = serve(tools, "127.0.0.1:0".parse()?)
-            .await
-            .context("cannot start the media MCP server")?;
-        tracing::info!("media MCP server at {}", handle.url());
+    if let Some(handle) = media_server(&lease, project, media, &engines).await? {
         mcp_endpoints.push(McpEndpoint {
             name: "media".to_owned(),
             url: handle.url(),
@@ -570,8 +617,8 @@ mod tests {
     use tenaz_core::ports::EngineAdapter;
 
     use super::{
-        BTreeMap, Duration, MediaOptions, harness_usage, media_adapter, reasoning_effort,
-        request_defaults, swapping,
+        BTreeMap, Duration, MediaOptions, harness_usage, media_adapter, mesh_adapter,
+        reasoning_effort, request_defaults, swapping,
     };
 
     /// Pi's agent directory lists the run's model first, then each role's
@@ -696,8 +743,33 @@ mod tests {
             workflows: BTreeMap::new(),
             images_url: Some(url.to_owned()),
             image_model: model.map(str::to_owned),
+            meshes_url: None,
+            mesh_model: None,
             timeout: Duration::from_mins(1),
         }
+    }
+
+    #[test]
+    fn a_mesh_api_needs_its_model_and_may_share_the_llms_engine() {
+        let llm = "http://127.0.0.1:11234/v1";
+        let meshes = |url: &str, model: Option<&str>| MediaOptions {
+            images_url: None,
+            meshes_url: Some(url.to_owned()),
+            mesh_model: model.map(str::to_owned),
+            ..images("", None)
+        };
+        let same = mesh_adapter(&meshes(llm, Some("Idol")), llm)
+            .unwrap()
+            .unwrap();
+        assert_eq!(same.name(), "mesh-api");
+        assert!(same.shares_engine());
+        let other = mesh_adapter(&meshes("http://127.0.0.1:18000/v1", Some("Idol")), llm)
+            .unwrap()
+            .unwrap();
+        assert!(!other.shares_engine());
+        let error = mesh_adapter(&meshes(llm, None), llm).err().unwrap();
+        assert!(error.to_string().contains("--mesh-model"), "{error}");
+        assert!(mesh_adapter(&images("", None), llm).unwrap().is_none());
     }
 
     #[test]

@@ -65,6 +65,12 @@ pub(crate) struct RunArgs {
     /// The image model to ask the `--images` API for.
     #[arg(long)]
     image_model: Option<String>,
+    /// Base URL of an image-to-3D API; replaces the pinned one.
+    #[arg(long)]
+    meshes: Option<String>,
+    /// The 3D model to ask the `--meshes` API for.
+    #[arg(long)]
+    mesh_model: Option<String>,
     /// Media job time limit, in seconds.
     #[arg(long)]
     media_timeout: Option<u64>,
@@ -93,6 +99,8 @@ impl RunArgs {
         }
         replace(&mut next.images_url, self.images.as_ref());
         replace(&mut next.image_model, self.image_model.as_ref());
+        replace(&mut next.meshes_url, self.meshes.as_ref());
+        replace(&mut next.mesh_model, self.mesh_model.as_ref());
         replace(&mut next.media_timeout_sec, self.media_timeout.as_ref());
         Ok(next)
     }
@@ -141,6 +149,8 @@ pub(crate) async fn execute(args: RunArgs) -> anyhow::Result<ExitCode> {
         workflows: wiring::parse_workflows(&workflow_specs)?,
         images_url: launch.images_url.clone(),
         image_model: launch.image_model.clone(),
+        meshes_url: launch.meshes_url.clone(),
+        mesh_model: launch.mesh_model.clone(),
         timeout: std::time::Duration::from_secs(launch.media_timeout_sec.unwrap_or(1800)),
     };
     let engine = wiring::EngineOptions {

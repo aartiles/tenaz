@@ -18,6 +18,13 @@ uses [Semantic Versioning](https://semver.org/).
   it reads from its `HOME` are removed before each session. Neither
   agent takes a steering message.
   `tenaz doctor` and the setup wizard find both on `PATH`. See ADR 0019.
+- A `generate_3d` media tool: `--meshes <base URL> --mesh-model <model>`
+  (at `init` or `run`, pinned in `run.json` as `launch.meshesUrl` and
+  `launch.meshModel`) let the agent turn a PNG or JPEG inside the project
+  into a GLB inside the project through mlx-serve's
+  `POST /v1/3d/generations` (Idol, TRELLIS.2). Each call takes the lease
+  like an image and is limited by `--media-timeout`. `tenaz doctor` has an
+  optional `3d` line that offers a 3D model an engine lists. See ADR 0020.
 
 ### Fixed
 

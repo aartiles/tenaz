@@ -21,6 +21,7 @@ below; this page is about the real ones.
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
 | Media | ComfyUI images (`generate_image` over MCP) | Tested against a mock, and in real runs with FLUX models next to TensorFold and Sushi (8 and 10 images). Needs an API-format workflow with `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}` and `{{height}}` placeholders. |
 | | OpenAI Images API (`--images`, `POST /v1/images/generations`): mlx-serve, Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock, and by hand against mlx-serve 26.10.3 (see Known gaps). Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Does not unload the image model after a job. On the LLM's own origin the LLM stays loaded. |
+| | Image-to-3D API (`--meshes`, `POST /v1/3d/generations`): mlx-serve 26.11.1 | Tested against a mock, and by hand through the adapter against mlx-serve 26.11.1 with Idol and TRELLIS.2 at 512 (see Known gaps). Sends `model`, the picture as base64 `image`, and `resolution`, `seed`, `steps` and `mode` when given. Does not unload the 3D model after a job. |
 | | TTS, STT, video | Not built. |
 
 ## What the model needs
@@ -342,6 +343,25 @@ above), so a 32k context is the practical floor (`contextFloor`).
   the LLM back in 2 to 4 s, the size and seed respected. The first chat
   request after each image computes its prompt again, since the prefix
   cache goes with the LLM.
+- **mlx-serve and 3D** (ADR 0020). Checked by hand on 2026-11-03 against
+  mlx-serve 26.11.1 on a spare port, with Tenaz's `MeshApi` adapter and a
+  512×512 drawn cutout of a cabinet: Idol (seed 7, `mode: synthetic`)
+  wrote a 27 MB GLB in 76 to 80 s; TRELLIS.2 at 512 (seed 7) wrote a
+  10 MB GLB (300000 faces) in 50 s. Both files start with the `glTF`
+  magic. mlx-serve keeps a 3D model loaded after its job: with Idol still
+  resident (4 GB), TRELLIS.2 was refused with `503 … out_of_memory`,
+  since its free-memory check asks for about 26 GB even at 512, and
+  worked once Idol was unloaded (`POST /v1/unload-model`). Tenaz does
+  not unload the 3D model after a call, so a run that uses one 3D model
+  is not affected, but other models loaded in the same server are. Not
+  verified: a `generate_3d` call from an agent in a real run (the MCP
+  tool is tested only against fakes), TRELLIS.2 at 1024 or 1536 (about
+  6.7 minutes at 1024 measured outside Tenaz), Hunyuan3D and Pixal3D,
+  and a run whose LLM is on the same mlx-serve. The tool refuses a picture
+  that is not a PNG or JPEG, and paths that leave the project, also
+  through a symbolic link, or go into `.git` or `.tenaz`; these checks run
+  before the call waits for the lease, so a file or link swapped in
+  between is not seen (the agent's own shell can reach as much).
 - **A capacity ceiling tried again** (ADR 0014). Covered by unit tests of
   the ledger only. No run has yet held the ceiling for twice the wait and
   raised the budget past it, with an engine that held the raise or

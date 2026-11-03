@@ -46,7 +46,10 @@ Do this once, and again whenever a run fails before its first session.
    or `missing` for each with the fix under it, and exits with 1 while
    something is missing.
    Its `images` line is optional: it names an image engine it found and
-   the `--images` or `--comfyui` flags that give it to a run.
+   the `--images` or `--comfyui` flags that give it to a run. Its `3d`
+   line is optional too: a 3D model (Idol, TRELLIS.2) an engine lists,
+   and the `--meshes` and `--mesh-model` flags that give the agent
+   `generate_3d`, which turns a picture inside the project into a GLB.
    Work through the fixes in order:
    - git or the agent missing: the fix is an install command. Show it and
      ask before running it; installing software is the user's call.
