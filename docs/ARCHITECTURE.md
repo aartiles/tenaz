@@ -12,7 +12,7 @@ crates/
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
                            engine error messages, tool-argument repair, the lowered
                            reasoning effort, and replies at the output limit reported as cut.
-  acp/       tenaz-acp       HarnessAdapter over ACP (fx and any ACP agent), harness as a subprocess.
+  acp/       tenaz-acp       HarnessAdapter over ACP (fx, OpenCode, Qwen Code), harness as a subprocess.
   pi/        tenaz-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
   mcp/       tenaz-mcp       MCP server (streamable HTTP) exposing media tools that take the lease.
   cli/       tenaz           the `tenaz` binary: init (flags or the setup wizard), run, status,
@@ -62,8 +62,9 @@ in memory; `vcs_contract_tests!` holds it and
 and the crates above it. `tenaz-adapters` has a `testing` feature too:
 `write_executable`, for a test that writes a script and then runs it, and
 `gone_within`, which checks that a process is gone, zombies included.
-Its private `process` module starts and stops the process groups that
-`verify` and heavy jobs run in.
+`tenaz-acp`'s tests use it too. `tenaz-adapters`' private `process`
+module starts and stops the process groups that `verify` and heavy jobs
+run in.
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations
@@ -92,10 +93,10 @@ Both adapters follow one shape: the harness process runs behind a background
 task, commands go in, `SessionEvent`s come out, and a pure `translate`
 module with unit tests turns the harness's own records into those events.
 
-| | `tenaz-acp` (fx) | `tenaz-pi` (Pi) |
+| | `tenaz-acp` (fx, OpenCode, Qwen Code) | `tenaz-pi` (Pi) |
 |---|---|---|
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
-| Per session | `settings.json` written for the session's model, then `initialize`, `session/new` with the runner's MCP servers | `pi --mode rpc --session-dir DIR|--no-session --model P/ID (the session role's model) --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
+| Per session | the agent's configuration written for the session's model in its own `HOME` (ADR 0019; Qwen Code also gets the model on its command line), then `initialize`, `session/new` | `pi --mode rpc --session-dir DIR|--no-session --model P/ID (the session role's model) --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
 | Prompt | `session/prompt` | `{"id":"prompt-N","type":"prompt","message":...}`; a `response` that is not `success` or whose disposition is `handled` becomes `PromptRejected` |
 | Steer | fx's extension: a `session/prompt` with `_meta.fx.steer: true` while a prompt runs; otherwise dropped | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
 | Abort | `session/cancel` | `clear_queue` then `abort`; `agent_settled {aborted:true}` follows |

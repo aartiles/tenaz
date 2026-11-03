@@ -14,6 +14,7 @@ use tenaz_core::role::Role;
 use tenaz_core::role_models::{self, Known, RoleFlags, RolePick, RunDefaults};
 use tenaz_pi::models::ModelEntry;
 
+use super::harness_bins::HarnessBins;
 use super::{
     EngineKind, absolute, pinned_path, pinned_workflows, runner_version, shell_quote, templates,
 };
@@ -27,6 +28,11 @@ pub(crate) enum HarnessArg {
     Fx,
     /// Pi in RPC mode, with a models.json Tenaz writes for the run.
     Pi,
+    /// `OpenCode` over ACP.
+    #[value(name = "opencode")]
+    OpenCode,
+    /// Qwen Code over ACP.
+    Qwen,
     /// The scripted fake harness: exercises the runner without a model.
     Fake,
 }
@@ -36,6 +42,8 @@ impl HarnessArg {
         match self {
             Self::Fx => HarnessKind::Fx,
             Self::Pi => HarnessKind::Pi,
+            Self::OpenCode => HarnessKind::OpenCode,
+            Self::Qwen => HarnessKind::Qwen,
             Self::Fake => HarnessKind::Fake,
         }
     }
@@ -48,6 +56,8 @@ impl From<HarnessKind> for HarnessArg {
         match kind {
             HarnessKind::Fx => Self::Fx,
             HarnessKind::Pi => Self::Pi,
+            HarnessKind::OpenCode => Self::OpenCode,
+            HarnessKind::Qwen => Self::Qwen,
             HarnessKind::Fake => Self::Fake,
         }
     }
@@ -75,17 +85,13 @@ pub(crate) struct InitArgs {
     /// The coding agent (default: fx; the wizard offers what is installed).
     #[arg(long, value_enum)]
     pub(crate) harness: Option<HarnessArg>,
-    /// The fx executable.
-    #[arg(long)]
-    pub(crate) fx_bin: Option<PathBuf>,
-    /// The pi executable.
-    #[arg(long)]
-    pub(crate) pi_bin: Option<PathBuf>,
+    #[command(flatten)]
+    pub(crate) bins: HarnessBins,
     /// The model id as the engine lists it; without it, the setup wizard runs.
     #[arg(long)]
     pub(crate) model: Option<String>,
     /// The provider name used in the harness configuration (with --harness pi,
-    /// the provider in models.json).
+    /// the provider in models.json; Qwen Code does not use it).
     #[arg(long)]
     pub(crate) provider: Option<String>,
     /// The engine's OpenAI-compatible base URL (default: Sushi on 127.0.0.1:12345;
@@ -165,15 +171,6 @@ pub(crate) struct InitArgs {
 }
 
 impl InitArgs {
-    /// The `--fx-bin` or `--pi-bin` given for `harness`.
-    pub(crate) fn harness_bin(&self, harness: HarnessKind) -> Option<PathBuf> {
-        match harness {
-            HarnessKind::Fx => self.fx_bin.clone(),
-            HarnessKind::Pi => self.pi_bin.clone(),
-            HarnessKind::Fake => None,
-        }
-    }
-
     /// The `tenaz init` command line that gives these answers without questions.
     pub(crate) fn command_line(&self) -> String {
         let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
@@ -181,13 +178,14 @@ impl InitArgs {
             ("project", path(&self.project)),
             ("brief", path(&self.brief)),
             ("harness", self.harness.map(|h| h.kind().to_string())),
-            ("fx-bin", path(&self.fx_bin)),
-            ("pi-bin", path(&self.pi_bin)),
+        ];
+        flags.extend(self.bins.flags());
+        flags.extend([
             ("model", self.model.clone()),
             ("provider", self.provider.clone()),
             ("base-url", self.base_url.clone()),
             ("context-window", self.context_window.map(|c| c.to_string())),
-        ];
+        ]);
         flags.extend(
             self.models_for
                 .iter()
@@ -310,7 +308,7 @@ impl InitPlan {
         Ok(Self {
             project,
             harness,
-            harness_bin: args.harness_bin(harness),
+            harness_bin: args.bins.get(harness).map(Path::to_path_buf),
             model,
             role_picks,
             provider,
@@ -546,26 +544,17 @@ fn pin_harness(
     provider: &str,
 ) -> anyhow::Result<(String, Listed)> {
     let bin = bin.unwrap_or_else(|| Path::new(harness.as_str()));
-    Ok(match harness {
-        HarnessKind::Fx => (
-            tenaz_acp::fx::fx_version(bin)
-                .with_context(|| format!("cannot run {} --version", bin.display()))?,
-            Listed::default(),
-        ),
+    let version = detect::agent_version(harness, bin)
+        .with_context(|| format!("cannot run {} --version", bin.display()))?;
+    let listed = match harness {
         HarnessKind::Pi => {
-            let path = tenaz_pi::models::default_models_path();
-            let listed = Listed::read(path.as_deref(), provider)?;
-            (
-                tenaz_pi::pi_version(bin)
-                    .with_context(|| format!("cannot run {} --version", bin.display()))?,
-                listed,
-            )
+            Listed::read(tenaz_pi::models::default_models_path().as_deref(), provider)?
         }
-        HarnessKind::Fake => (
-            tenaz_core::testing::ScriptedHarness::default().version(),
-            Listed::default(),
-        ),
-    })
+        HarnessKind::Fx | HarnessKind::OpenCode | HarnessKind::Qwen | HarnessKind::Fake => {
+            Listed::default()
+        }
+    };
+    Ok((version, listed))
 }
 
 /// The models the user's Pi `models` file lists under the run's provider:
@@ -782,25 +771,33 @@ mod tests {
 
     #[test]
     fn the_harness_is_fx_unless_given_and_keeps_only_its_own_binary() {
-        let line = with(&["--fx-bin", "/opt/fx", "--pi-bin", "/opt/pi"]);
-        let fx = plan(&line, None);
-        assert_eq!(
-            (fx.harness, fx.harness_bin),
-            (HarnessKind::Fx, Some(PathBuf::from("/opt/fx")))
-        );
-        let line = with(&[
-            "--harness",
-            "pi",
+        const BINS: [&str; 8] = [
             "--fx-bin",
             "/opt/fx",
             "--pi-bin",
             "/opt/pi",
-        ]);
-        let pi = plan(&line, None);
+            "--opencode-bin",
+            "/opt/opencode",
+            "--qwen-bin",
+            "/opt/qwen",
+        ];
+        let fx = plan(&with(&BINS), None);
         assert_eq!(
-            (pi.harness, pi.harness_bin),
-            (HarnessKind::Pi, Some(PathBuf::from("/opt/pi")))
+            (fx.harness, fx.harness_bin),
+            (HarnessKind::Fx, Some(PathBuf::from("/opt/fx")))
         );
+        for (name, kind) in [
+            ("pi", HarnessKind::Pi),
+            ("opencode", HarnessKind::OpenCode),
+            ("qwen", HarnessKind::Qwen),
+        ] {
+            let line = with(&[&["--harness", name][..], &BINS].concat());
+            let got = plan(&line, None);
+            assert_eq!(
+                (got.harness, got.harness_bin),
+                (kind, Some(PathBuf::from(format!("/opt/{name}"))))
+            );
+        }
     }
 
     #[test]

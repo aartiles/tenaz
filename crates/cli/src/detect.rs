@@ -32,20 +32,24 @@ pub struct Agent {
 
 /// The agents on `PATH` that answer `--version`.
 pub fn agents() -> Vec<Agent> {
-    let mut found = Vec::new();
-    if let Ok(version) = tenaz_acp::fx::fx_version(Path::new("fx")) {
-        found.push(Agent {
-            harness: HarnessKind::Fx,
-            version,
-        });
+    HarnessKind::AGENTS
+        .into_iter()
+        .filter_map(|harness| {
+            let version = agent_version(harness, Path::new(harness.as_str())).ok()?;
+            Some(Agent { harness, version })
+        })
+        .collect()
+}
+
+/// The first line of `bin --version`, for an agent of kind `harness`; the
+/// scripted harness has its own.
+pub fn agent_version(harness: HarnessKind, bin: &Path) -> std::io::Result<String> {
+    match harness {
+        HarnessKind::Fake => Ok(tenaz_core::testing::ScriptedHarness::default().version()),
+        HarnessKind::Pi | HarnessKind::Fx | HarnessKind::OpenCode | HarnessKind::Qwen => {
+            tenaz_acp::agent_version(bin)
+        }
     }
-    if let Ok(version) = tenaz_pi::pi_version(Path::new("pi")) {
-        found.push(Agent {
-            harness: HarnessKind::Pi,
-            version,
-        });
-    }
-    found
 }
 
 /// `git --version`, or `None` when git is not on `PATH`.
@@ -422,6 +426,35 @@ fn apply_lm_studio_models(models: &mut [Model], v0: &Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn every_agent_s_version_is_what_its_binary_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("agent");
+        tenaz_adapters::testing::write_executable(&bin, "#!/bin/sh\necho 9.9.9\n");
+        for harness in HarnessKind::AGENTS {
+            assert_eq!(
+                agent_version(harness, &bin).unwrap(),
+                "9.9.9",
+                "{harness:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_agent_that_is_missing_has_no_version() {
+        for harness in HarnessKind::AGENTS {
+            assert!(agent_version(harness, Path::new("/nonexistent/agent")).is_err());
+        }
+    }
+
+    #[test]
+    fn the_fake_harness_has_its_own_version() {
+        assert_eq!(
+            agent_version(HarnessKind::Fake, Path::new("/nonexistent/agent")).unwrap(),
+            tenaz_core::testing::ScriptedHarness::default().version()
+        );
+    }
 
     fn engine(url: &str, ids: &[&str]) -> Engine {
         Engine {

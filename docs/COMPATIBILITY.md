@@ -13,7 +13,8 @@ below; this page is about the real ones.
 | | Windows | Not supported. |
 | Harness | [fx](https://github.com/vercel-labs/fx) 0.0.14 and 0.0.15 over ACP | Tested end to end: preflight, bootstrap, build, review, steering, pause and resume. |
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 and 1.4.0 in RPC mode | Tested end to end to a COMPLETE run: 1.1.0 with the user's own `models.json`, 1.4.0 with the generated configuration through the proxy and two models (see Known gaps). No media tools (see below). |
-| | Other ACP agents | Should work through the same adapter; fx-specific settings are only applied to fx. Untested. |
+| | [OpenCode](https://github.com/sst/opencode) 1.19.5 (`--harness opencode`) and [Qwen Code](https://github.com/QwenLM/qwen-code) 0.26.6 (`--harness qwen`), both over ACP | One real run each with Qwen3.8-27B on mlx-serve: OpenCode to COMPLETE, Qwen Code to BLOCKED by a replan the run rejected, not by the agent; Tenaz now accepts that replan (ADR 0018). Less tried than fx and Pi (see Known gaps). |
+| | Other ACP agents | Only through `--fx-bin`, which passes fx's `--log-file` and writes only fx's settings. Untested. |
 | Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve 26.10.3 loaded and unloaded two models through its API in two runs that swapped them (see Known gaps). |
 | | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run, before the start was skipped for an engine that still serves the model (see Known gaps). The servers named here are untried. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
@@ -267,6 +268,19 @@ above), so a 32k context is the practical floor (`contextFloor`).
   the same session again (ADR 0004). Tested with the fake harness only:
   that Pi takes a prompt after `abort` with its context, and that fx stays
   usable after `session/cancel`, have not been run against the real tools.
+  An ACP call announced as pending is timed from when it is about to run:
+  its permission request or `in_progress`. An agent that sends neither
+  for a call reports it only when it ends, so `toolMinutes` cannot stop
+  it, and an agent that exits during such a call is taken for an engine
+  failure rather than a crash in the call. Seen by hand with a minimal
+  ACP client, not recorded: fx 0.0.16 (newer than 0.0.14 and 0.0.15,
+  the versions in the table above) in the `ask` mode Tenaz sets asks
+  permission for a shell call, and OpenCode 1.19.5 and Qwen Code 0.26.6
+  send `in_progress` with the call's input. A call announced while the
+  reply streams now usually starts after that reply's turn ends, so its
+  time and its loop check fall in the next turn. An update or an end for
+  a call the agent never announced with `tool_call` is not reported at
+  all.
 - **Streamed replies through the proxy.** The proxy decodes a streamed
   reply one whole event at a time, so a character the network splits
   between two chunks arrives intact; that is tested with unit tests, not
@@ -311,7 +325,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
   ([vercel-labs/fx#1458](https://github.com/vercel-labs/fx/issues/1458)).
 
 - **Pi and the proxy.** Pi's requests go through the proxy, so the engine
-  hold covers them, but the media tools are fx only (Pi runs with
+  hold covers them, but Pi gets no media tools (it runs with
   `--no-mcp`), and Pi's request records take their usage from Pi rather
   than the proxy, so they carry no server timings (draft acceptance).
   `--no-proxy` points Pi straight at the engine.
@@ -414,6 +428,33 @@ above), so a 32k context is the practical floor (`contextFloor`).
   repository.
 - Whether fx loads the project's `AGENTS.md` by itself has not been
   checked; Pi does. The Tenaz protocol is in every prompt either way.
+- **OpenCode and Qwen Code: the runs** (`--harness opencode`,
+  `--harness qwen`, ADR 0019). Each ran once on the same word-count brief
+  with Qwen3.8-27B on mlx-serve. OpenCode 1.19.5 reached COMPLETE in 19
+  sessions (six tasks). Qwen Code 0.26.6 finished two of seven tasks in
+  11 sessions, then stopped BLOCKED: its builder declared a conflict with
+  a done check, and both replans wrote the amending card but set the
+  blocked card back to `todo` instead of `dropped`, and Tenaz rejected
+  that backlog. Tenaz now accepts it (ADR 0018); this run has not been
+  repeated. Before these kinds existed, each agent reached COMPLETE
+  through a script given as `--fx-bin`
+  (OpenCode: 18 sessions, Qwen Code: 21). Most sessions that failed in
+  these runs were mlx-serve running out of memory, which Tenaz ran
+  again; Qwen Code's last replan reached the output limit. After the
+  runs, Qwen Code's `HOME` held a process registry and undo copies of
+  edited files, but no conversations or memories.
+- **OpenCode and Qwen Code: not checked.** Media tools over MCP and their
+  time limit (OpenCode's MCP `timeout` may only bound listing the tools),
+  pinned skills, `--model-for`, pause and resume, a run in the OS sandbox,
+  and whether Qwen Code knows the model reads images (its settings do not
+  say). Tenaz removes the context files Qwen Code reads from its `HOME`
+  before each session; no run has written one. Neither agent takes a
+  steering message: Tenaz steers only fx and Pi, so a watchdog stops their
+  sessions without a warning. OpenCode installs its plugin package (about
+  60 MB) into its `HOME` on the first run, from npm's cache in `~/.npm`: a
+  `sandboxAllowWrite` without `~/.npm` should break it. Qwen Code starts
+  with a system prompt of about 21k tokens (OpenCode about 7k), so a small
+  window fills sooner.
 - **Install script and Homebrew formula.** Both installed `tenaz` 0.1.0
   from the published v0.1.0 release on macOS (Apple silicon): the install
   script into a scratch folder, `brew install aartiles/tap/tenaz` into
@@ -422,10 +463,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   pushes the formula needs `HOMEBREW_TAP_TOKEN` to have write access to
   `aartiles/homebrew-tap` (Contents: read and write on that repository).
 - **`tenaz doctor`'s advice** has been checked on macOS with Sushi running
-  and with nothing on `PATH`. The install commands it gives for Pi and fx
-  come from their READMEs and were not run; the context settings it gives
-  for LM Studio, Ollama, llama.cpp and vLLM were not tried against those
-  engines.
+  and with nothing on `PATH`. The install commands it gives for Pi, fx,
+  OpenCode and Qwen Code come from their READMEs and were not run; the
+  context settings it gives for LM Studio, Ollama, llama.cpp and vLLM were
+  not tried against those engines.
 
 ## Model and engine behaviour seen in testing
 

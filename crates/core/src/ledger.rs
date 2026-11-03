@@ -113,15 +113,24 @@ pub enum HarnessKind {
     Fx,
     /// Pi in RPC mode.
     Pi,
+    /// `OpenCode` over ACP.
+    OpenCode,
+    /// Qwen Code over ACP.
+    Qwen,
     /// The scripted harness, which needs no agent and no engine.
     Fake,
 }
 
 impl HarnessKind {
+    /// The real coding agents, in the order the setup wizard offers them.
+    pub const AGENTS: [Self; 4] = [Self::Fx, Self::Pi, Self::OpenCode, Self::Qwen];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Fx => "fx",
             Self::Pi => "pi",
+            Self::OpenCode => "opencode",
+            Self::Qwen => "qwen",
             Self::Fake => "fake",
         }
     }
@@ -811,6 +820,8 @@ mod tests {
         for (kind, name) in [
             (HarnessKind::Fx, "fx"),
             (HarnessKind::Pi, "pi"),
+            (HarnessKind::OpenCode, "opencode"),
+            (HarnessKind::Qwen, "qwen"),
             (HarnessKind::Fake, "fake"),
         ] {
             assert_eq!(serde_json::json!(kind), name);

@@ -6,8 +6,33 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `--harness opencode` and `--harness qwen` drive OpenCode and Qwen Code
+  over ACP, as fx is (`--opencode-bin` and `--qwen-bin` name their
+  executables). Each runs in a `HOME` of its own under `.tenaz/private/`
+  with a configuration Tenaz writes for each session's model: the engine
+  proxy, the model's window, asking before every edit and command, and
+  the media MCP server; the pinned skills are linked into that `HOME`.
+  Qwen Code's memory and chat recording are off, and the context files
+  it reads from its `HOME` are removed before each session. Neither
+  agent takes a steering message.
+  `tenaz doctor` and the setup wizard find both on `PATH`. See ADR 0019.
+
 ### Fixed
 
+- An ACP agent's tool call is reported with the input it runs with.
+  OpenCode and Qwen Code announce a call before its input is complete
+  (`bash` with only its folder, a read with no file) and send the input
+  once it runs; Tenaz took the first version, so different calls looked
+  the same and the loop check stopped sessions that were working. A
+  pending call is now reported when it is about to run: at its permission
+  request, when it starts, or when it ends. `toolMinutes` counts from
+  then, so a call the agent sends neither a permission request nor
+  `in_progress` for is not timed. A context stop held for a reply's tool
+  calls now also waits for a call that starts after another one ended.
+  A permission request names the call as its start does, not by the
+  title the agent shows people.
 - A replan that routes a blocked task's work through a card that amends
   its conflict's checks may set the blocked task back to `todo`, depending
   on that card, instead of dropping it. Tenaz used to reject that backlog

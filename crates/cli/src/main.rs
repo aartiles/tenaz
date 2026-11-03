@@ -80,7 +80,7 @@ Example:
 
 Everything shown is in .tenaz/private/: orchestrator.log and, per session,
 <label>.rpc.jsonl (the events; Pi's own records with Pi), <label>.prompt.md, <label>.thinking.md (the
-reasoning, with fx) and the harness logs.
+reasoning, with an ACP agent) and the harness logs.
 ";
 
 const STATUS_HELP: &str = "\
@@ -138,7 +138,7 @@ enum Command {
     /// Work on the goal until it is met or a task blocks; can take hours.
     /// Ctrl-C pauses; run again to continue.
     #[command(after_help = RUN_HELP)]
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     /// Where the run is: phase, tasks, current task (reads files only, safe
     /// while a run works).
     #[command(after_help = STATUS_HELP)]
@@ -234,7 +234,7 @@ async fn dispatch(command: Command) -> anyhow::Result<ExitCode> {
     let done = |()| ExitCode::SUCCESS;
     match command {
         Command::Init(args) => commands::init::execute(args).await.map(done),
-        Command::Run(args) => commands::run::execute(args).await,
+        Command::Run(args) => commands::run::execute(*args).await,
         Command::Status { project, json } => commands::status::execute(project, json).map(done),
         Command::Finish(args) => commands::finish::execute(args).map(done),
         Command::Watch {

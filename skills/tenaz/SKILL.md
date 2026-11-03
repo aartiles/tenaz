@@ -40,10 +40,11 @@ Do this once, and again whenever a run fails before its first session.
 
    The README's Install section has every way, with what each needs. Do
    not download and run an install script yourself.
-2. `tenaz doctor`. It checks git, a coding agent (Pi or fx), an engine on
-   the usual ports (`--base-url` adds another address) and a model with at
-   least 32k tokens of context, prints `ok`, `check` or `missing` for each
-   with the fix under it, and exits with 1 while something is missing.
+2. `tenaz doctor`. It checks git, a coding agent (Pi, fx, OpenCode or Qwen
+   Code), an engine on the usual ports (`--base-url` adds another address)
+   and a model with at least 32k tokens of context, prints `ok`, `check`
+   or `missing` for each with the fix under it, and exits with 1 while
+   something is missing.
    Its `images` line is optional: it names an image engine it found and
    the `--images` or `--comfyui` flags that give it to a run.
    Work through the fixes in order:
@@ -121,14 +122,14 @@ sessions with the engine's memory freed where the engine can, logs it to
 While a job runs no session is in flight (`inflight` is null in
 `tenaz status --json`): `.tenaz/private/orchestrator.log` names the job,
 and its log grows in `.tenaz/private/jobs/`.
-To see why a session went wrong, read its briefing and,
-with fx, the model's reasoning: `.tenaz/private/<label>.prompt.md` and
-`<label>.thinking.md` (the label is in `tenaz status`). Fix what you can (an
-engine down, an unclear brief: tell the user, since the brief cannot change
-after `init`), then `tenaz run --project <dir> --resume`; after updating
-Tenaz, add `--refresh-templates` so the run gets the new prompts. Do not
-edit `.tenaz/run.json` or the task cards to force progress; the one edit
-a block reason asks for is the exception.
+To see why a session went wrong, read its briefing and, with fx, OpenCode
+or Qwen Code, the model's reasoning: `.tenaz/private/<label>.prompt.md`
+and `<label>.thinking.md` (the label is in `tenaz status`). Fix what you
+can (an engine down, an unclear brief: tell the user, since the brief
+cannot change after `init`), then `tenaz run --project <dir> --resume`;
+after updating Tenaz, add `--refresh-templates` so the run gets the new
+prompts. Do not edit `.tenaz/run.json` or the task cards to force
+progress; the one edit a block reason asks for is the exception.
 
 ## Check the result
 

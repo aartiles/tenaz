@@ -19,6 +19,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tenaz-adapters = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

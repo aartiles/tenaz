@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
-use tenaz_acp::fx::{FxHarness, FxLaunch, FxSettings, ProfileMcpServer, write_profile};
 use tenaz_acp::{EngineObservation, McpEndpoint, stop_reason_for_finish};
 use tenaz_adapters::clock::SystemClock;
 use tenaz_adapters::engine::generic::{Commands, GenericEngine};
@@ -24,18 +23,20 @@ use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::cache_report::CacheReport;
 use tenaz_core::effort::EffortDial;
 use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
-use tenaz_core::ledger::{HarnessKind, JournalRecord, ModelConfig, SkillPin};
+use tenaz_core::ledger::{HarnessKind, JournalRecord, ModelConfig};
 use tenaz_core::orchestrator::Deps;
 use tenaz_core::params::RunParams;
-use tenaz_core::ports::{EngineAdapter, Harness, MediaAdapter};
+use tenaz_core::ports::{EngineAdapter, MediaAdapter};
 use tenaz_core::project::Project;
 use tenaz_core::session::Usage;
-use tenaz_core::testing::ScriptedHarness;
 use tenaz_core::write_scope::WriteScope;
 use tenaz_mcp::workflow::WorkflowTemplate;
 use tenaz_mcp::{MediaTools, serve};
-use tenaz_pi::PiLaunch;
 use tenaz_proxy::{Proxy, ProxyEvent};
+
+use harness::{HarnessInputs, build_harness};
+
+mod harness;
 
 pub enum EngineChoice {
     LoadApi,
@@ -90,9 +91,10 @@ pub struct EngineOptions {
 }
 
 pub struct HarnessOptions {
-    pub fx_bin: PathBuf,
+    /// The executable of the run's harness.
+    pub bin: PathBuf,
+    /// The arguments that put fx in ACP mode; only fx reads them.
     pub fx_args: Vec<String>,
-    pub pi_bin: PathBuf,
 }
 
 pub struct MediaOptions {
@@ -309,19 +311,19 @@ pub async fn wire(
         .as_ref()
         .map(|s| s.wrapper.clone())
         .unwrap_or_default();
-    let mut harness = build_harness(
+    let mut harness = build_harness(&HarnessInputs {
         project,
         config,
-        harness,
-        &media.timeout,
-        harness_base_url,
-        &mcp_endpoints,
-        &ledger.skills,
-        ledger.params.agent_skills,
-        ledger.params.verify_path(),
-        &feed,
-        &wrapper,
-    )?;
+        options: harness,
+        media_timeout: media.timeout,
+        base_url: harness_base_url,
+        mcp_endpoints: &mcp_endpoints,
+        skills: &ledger.skills,
+        agent_skills: ledger.params.agent_skills,
+        verify_path: ledger.params.verify_path(),
+        feed: &feed,
+        wrapper: &wrapper,
+    })?;
     let (verify, jobs) = runners(project, &ledger.params, sandbox.as_ref());
     if let Some(sandbox) = sandbox {
         harness = Arc::new(GuardedHarness::new(harness, sandbox.guard));
@@ -478,8 +480,8 @@ fn harness_usage(u: &tenaz_proxy::ProxyUsage) -> Usage {
     }
 }
 
-/// The output limit fx is configured with, and what the proxy takes as the
-/// limit of a request that does not say.
+/// The output limit fx and `OpenCode` are configured with, and what the
+/// proxy takes as the limit of a request that does not say.
 const HARNESS_MAX_OUTPUT_TOKENS: u64 = 16_384;
 
 /// The engine proxy for `project`'s run (`ledger`): per-request usage and
@@ -558,196 +560,6 @@ async fn start_proxy(
     Ok(handle)
 }
 
-/// The harness named in the ledger: fx over ACP with its profile written
-/// into the project, Pi in RPC mode with the pinned skills, or the scripted
-/// fake (writing `verify` where the run expects it).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the harnesses need different subsets of these; a struct would only move the list"
-)]
-fn build_harness(
-    project: &Project,
-    config: &tenaz_core::ledger::ModelConfig,
-    options: &HarnessOptions,
-    media_timeout: &Duration,
-    harness_base_url: String,
-    mcp_endpoints: &[McpEndpoint],
-    skills: &[SkillPin],
-    agent_skills: bool,
-    verify_path: &str,
-    feed: &tokio::sync::broadcast::Sender<EngineObservation>,
-    wrapper: &[String],
-) -> anyhow::Result<Arc<dyn Harness>> {
-    match config.harness {
-        // The scripted harness writes from inside Tenaz: there is no process to sandbox.
-        HarnessKind::Fake => Ok(Arc::new(ScriptedHarness {
-            verify_path: Some(verify_path.to_owned()),
-            ..ScriptedHarness::every_recovery()
-        })),
-        HarnessKind::Pi => {
-            // Pi gets an agent directory of its own pointing it at the proxy
-            // (or the engine); the media MCP server is not on its path.
-            let agent_dir = project.private_dir().join("pi-agent");
-            let user_models = tenaz_pi::models::default_models_path();
-            let models = write_pi_agent(
-                &agent_dir,
-                config,
-                &harness_base_url,
-                user_models.as_deref(),
-            )?;
-            let launch = PiLaunch::new(&options.pi_bin, models.run_name())
-                .other_models(models.other_names())
-                .thinking(
-                    config
-                        .thinking
-                        .clone()
-                        .unwrap_or_else(|| "medium".to_owned()),
-                )
-                .skills(
-                    skills
-                        .iter()
-                        .map(|s| project.tenaz_dir().join("skills").join(&s.name))
-                        .collect(),
-                )
-                .agent_dir(&agent_dir)
-                .discover_skills(agent_skills)
-                .wrapper(wrapper.to_vec());
-            Ok(Arc::new(launch.harness(config.harness_version.clone())))
-        }
-        HarnessKind::Fx => {
-            let home = project.private_dir().join("fx-home");
-            let settings = FxSettings {
-                provider: config
-                    .provider
-                    .clone()
-                    .unwrap_or_else(|| "engine".to_owned()),
-                base_url: harness_base_url,
-                model: config.id.clone(),
-                context_window: config.context_window,
-                max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
-                supports_vision: config.supports_images(),
-                permission_mode: "ask".to_owned(),
-                effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
-                skill_catalog: agent_skills || !skills.is_empty(),
-            };
-            let profile_mcp: Vec<ProfileMcpServer> = mcp_endpoints
-                .iter()
-                .map(|e| ProfileMcpServer {
-                    name: e.name.clone(),
-                    url: e.url.clone(),
-                    operation_timeout_ms: u64::try_from(media_timeout.as_millis())
-                        .unwrap_or(u64::MAX),
-                })
-                .collect();
-            write_profile(&home, &settings, &profile_mcp).context("cannot write the fx profile")?;
-            link_fx_skills(project, &home, skills)?;
-            if !skills.is_empty() && !agent_skills {
-                tracing::warn!(
-                    "fx lists the pinned skills, and with them any skills it finds in the folders \
-                     above the project; Pi loads only the pinned ones"
-                );
-            }
-            let mut launch = FxLaunch::new(&options.fx_bin, &home);
-            launch.args.clone_from(&options.fx_args);
-            launch.log_dir = Some(project.private_dir());
-            // fx is started through this binary, which puts right what fx
-            // says outside the protocol (see tenaz_acp::fx::normalize_line).
-            launch.shim = std::env::current_exe().ok();
-            launch.wrapper = wrapper.to_vec();
-            let mut acp = launch
-                .harness(config.harness_version.clone())
-                .with_observations(feed.clone());
-            if !mcp_endpoints.is_empty() {
-                // Profile servers accept a long operation timeout; servers passed in session/new are cut at 60 s.
-                acp = acp.with_session_meta(
-                    serde_json::json!({ "fx": { "profileMcpServers": true } })
-                        .as_object()
-                        .cloned()
-                        .unwrap_or_default(),
-                );
-            }
-            Ok(Arc::new(FxHarness::new(acp, &launch.home, settings)))
-        }
-    }
-}
-
-/// Writes Pi's agent directory for the run's models, the run's own first
-/// and each role's model once with its own window and inputs (ADR 0011),
-/// keeping what the user's `models` file (`user_models`) has for them.
-fn write_pi_agent(
-    agent_dir: &Path,
-    config: &ModelConfig,
-    base_url: &str,
-    user_models: Option<&Path>,
-) -> anyhow::Result<tenaz_pi::models::AgentModels> {
-    let models = pi_models(config, base_url);
-    let template = user_models.and_then(|path| pi_template(path, &models));
-    tenaz_pi::write_agent_dir(agent_dir, &models, template)
-        .context("cannot write Pi's agent directory")?;
-    Ok(models)
-}
-
-/// The run's models as Pi's `models.json` describes them, on the run's
-/// provider at `base_url`.
-fn pi_models(config: &ModelConfig, base_url: &str) -> tenaz_pi::models::AgentModels {
-    let reasoning = reasoning_effort(config.thinking.as_deref()).is_some();
-    let model = |id: &str, context_window, input: &[String]| tenaz_pi::models::AgentModel {
-        id: id.to_owned(),
-        context_window,
-        input: input.to_vec(),
-        reasoning,
-    };
-    let mut others: Vec<tenaz_pi::models::AgentModel> = Vec::new();
-    for role in config.role_models.values() {
-        if role.id != config.id && others.iter().all(|m| m.id != role.id) {
-            others.push(model(&role.id, role.context_window, &role.input));
-        }
-    }
-    tenaz_pi::models::AgentModels {
-        provider: config
-            .provider
-            .clone()
-            .or_else(|| config.model.split_once('/').map(|(p, _)| p.to_owned()))
-            .unwrap_or_else(|| "engine".to_owned()),
-        base_url: base_url.to_owned(),
-        run: model(&config.id, config.context_window, &config.input),
-        others,
-    }
-}
-
-/// The user's own settings for `models`, when their Pi `models` file at
-/// `path` lists them; the file is optional, so a broken one is only logged.
-fn pi_template(
-    path: &Path,
-    models: &tenaz_pi::models::AgentModels,
-) -> Option<serde_json::Map<String, serde_json::Value>> {
-    tenaz_pi::models::provider_template(path, &models.provider, &models.ids())
-        .inspect_err(|error| tracing::warn!(%error, "ignoring Pi's models.json"))
-        .ok()
-        .flatten()
-}
-
-/// Puts the pinned skills where fx looks for its own: `.agents/skills/` in
-/// its isolated `HOME`, as links to `.tenaz/skills/<name>`. Links from an
-/// earlier run are replaced.
-fn link_fx_skills(project: &Project, home: &Path, skills: &[SkillPin]) -> anyhow::Result<()> {
-    let dir = home.join(".agents/skills");
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).context("cannot clear fx's skill folder")?;
-    }
-    if skills.is_empty() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(&dir)?;
-    for skill in skills {
-        let target = project.tenaz_dir().join("skills").join(&skill.name);
-        let target = std::path::absolute(&target).unwrap_or(target);
-        std::os::unix::fs::symlink(&target, dir.join(&skill.name))
-            .with_context(|| format!("cannot link the skill {} for fx", skill.name))?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -795,7 +607,8 @@ mod tests {
         };
         let agent = dir.path().join("pi-agent");
         let base_url = "http://127.0.0.1:4001/v1";
-        let models = super::write_pi_agent(&agent, &config, base_url, Some(&user_models)).unwrap();
+        let models =
+            super::harness::write_pi_agent(&agent, &config, base_url, Some(&user_models)).unwrap();
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(agent.join("models.json")).unwrap())
                 .unwrap();

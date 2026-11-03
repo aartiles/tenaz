@@ -3,14 +3,14 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::Arc;
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionModel, SessionSpec};
+use tenaz_core::ledger::HarnessKind;
+use tenaz_core::ports::{HarnessInfo, SessionModel};
 use tenaz_core::util::wrap_command;
 
-use crate::AcpHarness;
+use crate::{AcpHarness, ConfiguredHarness, ProfileMcpServer, write_json};
 
 /// `~/.fx/settings.json` as the spike used it: one OpenAI-compatible provider
 /// (the engine proxy) with the model's metadata, and `ask` permissions so
@@ -91,95 +91,22 @@ impl FxSettings {
     }
 }
 
-/// An MCP server in `~/.fx/mcp.json`. Profile servers accept a long
-/// `operation_timeout_ms`; servers passed in `session/new` are cut at 60 s.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProfileMcpServer {
-    pub name: String,
-    pub url: String,
-    pub operation_timeout_ms: u64,
-}
-
-/// Writes `settings.json` and `mcp.json` under `<home>/.fx/`.
-pub fn write_profile(
-    home: &Path,
-    settings: &FxSettings,
-    mcp: &[ProfileMcpServer],
-) -> io::Result<()> {
-    write_settings(home, settings)?;
-    let dir = home.join(".fx");
+/// Writes `mcp.json` under `<home>/.fx/`: the MCP servers fx lists in
+/// every session.
+pub fn write_mcp(home: &Path, mcp: &[ProfileMcpServer]) -> io::Result<()> {
     let servers: serde_json::Map<String, serde_json::Value> = mcp
         .iter()
         .map(|s| (s.name.clone(), serde_json::json!({ "type": "http", "url": s.url, "enabled": true, "operation_timeout_ms": s.operation_timeout_ms })))
         .collect();
-    std::fs::write(
-        dir.join("mcp.json"),
-        serde_json::to_string_pretty(&serde_json::json!({ "mcp": servers }))?,
-    )?;
-    Ok(())
-}
-
-/// Writes `settings.json` under `<home>/.fx/`.
-pub fn write_settings(home: &Path, settings: &FxSettings) -> io::Result<()> {
-    let dir = home.join(".fx");
-    std::fs::create_dir_all(&dir)?;
-    std::fs::write(
-        dir.join("settings.json"),
-        serde_json::to_string_pretty(&settings.to_json())?,
+    write_json(
+        &home.join(".fx/mcp.json"),
+        &serde_json::json!({ "mcp": servers }),
     )
 }
 
-/// fx with its settings written for each session's model before fx starts.
-/// Sessions run one after another, so the one `HOME` holds the model of the
-/// session that is starting.
-#[derive(Debug)]
-pub struct FxHarness {
-    acp: AcpHarness,
-    home: PathBuf,
-    settings: FxSettings,
-}
-
-impl FxHarness {
-    /// `acp` launched with `HOME` at `home`, where `settings` are rewritten
-    /// for each session's model.
-    pub fn new(acp: AcpHarness, home: impl Into<PathBuf>, settings: FxSettings) -> Self {
-        Self {
-            acp,
-            home: home.into(),
-            settings,
-        }
-    }
-}
-
-#[async_trait]
-impl Harness for FxHarness {
-    fn info(&self) -> HarnessInfo {
-        self.acp.info()
-    }
-
-    async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
-        write_settings(&self.home, &self.settings.for_model(&spec.model))
-            .map_err(|e| HarnessError::Spawn(format!("cannot write the fx settings: {e}")))?;
-        self.acp.open(spec).await
-    }
-}
-
-/// The first line of `fx --version`.
-pub fn fx_version(binary: &Path) -> io::Result<String> {
-    let output = Command::new(binary).arg("--version").output()?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "{} --version exited with {}",
-            binary.display(),
-            output.status
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_owned())
+/// Writes `settings.json` under `<home>/.fx/`.
+fn write_settings(home: &Path, settings: &FxSettings) -> io::Result<()> {
+    write_json(&home.join(".fx/settings.json"), &settings.to_json())
 }
 
 /// How fx is launched for ACP.
@@ -227,6 +154,23 @@ pub fn normalize_line(line: &str) -> std::borrow::Cow<'_, str> {
 }
 
 impl FxLaunch {
+    /// `acp` with its settings written in [`home`](Self::home) for each
+    /// session's model before fx starts, and now for the run's `first`.
+    pub fn configured(
+        &self,
+        acp: AcpHarness,
+        settings: FxSettings,
+        first: &SessionModel,
+    ) -> io::Result<ConfiguredHarness> {
+        let home = self.home.clone();
+        ConfiguredHarness::new(
+            acp,
+            "the fx profile",
+            Arc::new(move |model| write_settings(&home, &settings.for_model(model))),
+            first,
+        )
+    }
+
     pub fn new(binary: impl Into<PathBuf>, home: impl Into<PathBuf>) -> Self {
         Self {
             binary: binary.into(),
@@ -263,7 +207,7 @@ impl FxLaunch {
     /// stdout through [`normalize_line`]), fx is started through it.
     pub fn harness(&self, version: String) -> AcpHarness {
         let info = HarnessInfo {
-            name: "fx".to_owned(),
+            name: HarnessKind::Fx.as_str().to_owned(),
             version,
         };
         let launch = self.clone();
@@ -294,6 +238,8 @@ impl FxLaunch {
 
 #[cfg(test)]
 mod tests {
+    use tenaz_core::ports::Harness as _;
+
     use super::*;
 
     #[test]
@@ -315,7 +261,8 @@ mod tests {
             url: "http://127.0.0.1:4002/mcp".into(),
             operation_timeout_ms: 600_000,
         }];
-        write_profile(home.path(), &settings, &mcp).unwrap();
+        write_settings(home.path(), &settings).unwrap();
+        write_mcp(home.path(), &mcp).unwrap();
         let written: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(home.path().join(".fx/settings.json")).unwrap(),
         )
@@ -362,8 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn version_of_a_missing_binary_is_an_error() {
-        assert!(fx_version(Path::new("/nonexistent/fx")).is_err());
+    fn each_session_gets_its_own_fx_log() {
         let mut launch = FxLaunch::new("/usr/local/bin/fx", "/tmp/home");
         assert_eq!(launch.command_args("001-bootstrap"), vec!["acp"]);
         launch.log_dir = Some("/tmp/run/private".into());

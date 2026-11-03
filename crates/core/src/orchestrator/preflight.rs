@@ -177,7 +177,7 @@ fn checks(p: &Preflight) -> [Check; 5] {
             failure: |_, harness| {
                 format!(
                     "the model could not run `cat {TOOL_PROBE_FILE}` with {harness}'s shell \
-                     tool, so it cannot work in the project; try another model, or the other \
+                     tool, so it cannot work in the project; try another model, or another \
                      harness"
                 )
             },
@@ -388,7 +388,9 @@ pub(crate) fn engine_error_note(preflight: &Preflight) -> Option<String> {
 fn details(harness: HarnessKind) -> &'static str {
     match harness {
         HarnessKind::Fx => ".tenaz/run.json \"preflight\" and .tenaz/private/preflight.fx-acp.log",
-        HarnessKind::Pi | HarnessKind::Fake => ".tenaz/run.json \"preflight\"",
+        HarnessKind::Pi | HarnessKind::OpenCode | HarnessKind::Qwen | HarnessKind::Fake => {
+            ".tenaz/run.json \"preflight\""
+        }
     }
 }
 
@@ -533,7 +535,7 @@ mod tests {
             "no reasoning at the configured level",
             "the engine did not reuse the cached prompt prefix",
             "the model could not run `cat probe.txt` with pi's shell tool, so it cannot work in \
-             the project; try another model, or the other harness",
+             the project; try another model, or another harness",
             "the model did not read the test image correctly (it answered \"blue\")",
         ];
         assert_eq!(failures(HarnessKind::Pi, &p), failed.join("; "));
@@ -931,7 +933,12 @@ mod tests {
             fx.contains("and .tenaz/private/preflight.fx-acp.log;"),
             "{fx}"
         );
-        for harness in [HarnessKind::Pi, HarnessKind::Fake] {
+        for harness in [
+            HarnessKind::Pi,
+            HarnessKind::OpenCode,
+            HarnessKind::Qwen,
+            HarnessKind::Fake,
+        ] {
             let text = stop_with(harness);
             assert!(
                 text.contains("Details in .tenaz/run.json \"preflight\";"),
