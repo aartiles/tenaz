@@ -14,6 +14,7 @@ use tenaz_core::role::Role;
 use tenaz_core::role_models::{self, Known, RoleFlags, RolePick, RunDefaults};
 use tenaz_pi::models::ModelEntry;
 
+use super::harness_bins::HarnessBins;
 use super::{
     EngineKind, absolute, pinned_path, pinned_workflows, runner_version, shell_quote, templates,
 };
@@ -84,18 +85,8 @@ pub(crate) struct InitArgs {
     /// The coding agent (default: fx; the wizard offers what is installed).
     #[arg(long, value_enum)]
     pub(crate) harness: Option<HarnessArg>,
-    /// The fx executable.
-    #[arg(long)]
-    pub(crate) fx_bin: Option<PathBuf>,
-    /// The pi executable.
-    #[arg(long)]
-    pub(crate) pi_bin: Option<PathBuf>,
-    /// The opencode executable.
-    #[arg(long)]
-    pub(crate) opencode_bin: Option<PathBuf>,
-    /// The qwen executable.
-    #[arg(long)]
-    pub(crate) qwen_bin: Option<PathBuf>,
+    #[command(flatten)]
+    pub(crate) bins: HarnessBins,
     /// The model id as the engine lists it; without it, the setup wizard runs.
     #[arg(long)]
     pub(crate) model: Option<String>,
@@ -180,18 +171,6 @@ pub(crate) struct InitArgs {
 }
 
 impl InitArgs {
-    /// The `--fx-bin`, `--pi-bin`, `--opencode-bin` or `--qwen-bin` given
-    /// for `harness`.
-    pub(crate) fn harness_bin(&self, harness: HarnessKind) -> Option<PathBuf> {
-        match harness {
-            HarnessKind::Fx => self.fx_bin.clone(),
-            HarnessKind::Pi => self.pi_bin.clone(),
-            HarnessKind::OpenCode => self.opencode_bin.clone(),
-            HarnessKind::Qwen => self.qwen_bin.clone(),
-            HarnessKind::Fake => None,
-        }
-    }
-
     /// The `tenaz init` command line that gives these answers without questions.
     pub(crate) fn command_line(&self) -> String {
         let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
@@ -199,15 +178,14 @@ impl InitArgs {
             ("project", path(&self.project)),
             ("brief", path(&self.brief)),
             ("harness", self.harness.map(|h| h.kind().to_string())),
-            ("fx-bin", path(&self.fx_bin)),
-            ("pi-bin", path(&self.pi_bin)),
-            ("opencode-bin", path(&self.opencode_bin)),
-            ("qwen-bin", path(&self.qwen_bin)),
+        ];
+        flags.extend(self.bins.flags());
+        flags.extend([
             ("model", self.model.clone()),
             ("provider", self.provider.clone()),
             ("base-url", self.base_url.clone()),
             ("context-window", self.context_window.map(|c| c.to_string())),
-        ];
+        ]);
         flags.extend(
             self.models_for
                 .iter()
@@ -330,7 +308,7 @@ impl InitPlan {
         Ok(Self {
             project,
             harness,
-            harness_bin: args.harness_bin(harness),
+            harness_bin: args.bins.get(harness).map(Path::to_path_buf),
             model,
             role_picks,
             provider,

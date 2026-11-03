@@ -8,6 +8,7 @@ use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, Phase, swap_refusal};
 use tenaz_core::orchestrator::{RunOptions, Runner};
 use tokio_util::sync::CancellationToken;
 
+use super::harness_bins::HarnessBins;
 use super::{EngineKind, initialized, pinned_path, pinned_workflows, runner_version, templates};
 use crate::{wiring, worktree};
 
@@ -28,22 +29,11 @@ pub(crate) struct RunArgs {
     /// Copy the binary's templates into a started run.
     #[arg(long)]
     refresh_templates: bool,
-    /// The fx executable (default: the one pinned at init, else fx on PATH).
-    #[arg(long)]
-    fx_bin: Option<PathBuf>,
+    #[command(flatten)]
+    bins: HarnessBins,
     /// Arguments that put fx in ACP mode (default: acp).
     #[arg(long, value_delimiter = ' ')]
     fx_args: Option<Vec<String>>,
-    /// The pi executable (default: the one pinned at init, else pi on PATH).
-    #[arg(long)]
-    pi_bin: Option<PathBuf>,
-    /// The opencode executable (default: the one pinned at init, else
-    /// opencode on PATH).
-    #[arg(long)]
-    opencode_bin: Option<PathBuf>,
-    /// The qwen executable (default: the one pinned at init, else qwen on PATH).
-    #[arg(long)]
-    qwen_bin: Option<PathBuf>,
     /// The engine API (default: the one pinned at init).
     #[arg(long, value_enum)]
     engine: Option<EngineKind>,
@@ -93,7 +83,7 @@ impl RunArgs {
         if self.swap_models || self.no_swap_models {
             next.swap_models = self.swap_models;
         }
-        if let Some(bin) = self.harness_bin(harness) {
+        if let Some(bin) = self.bins.get(harness) {
             next.harness_bin = Some(pinned_path(bin));
         }
         replace(&mut next.fx_args, self.fx_args.as_ref());
@@ -116,18 +106,6 @@ impl RunArgs {
             anyhow::bail!("{why}; tenaz run --no-swap-models turns swapping off");
         }
         Ok(launch)
-    }
-
-    /// The `--fx-bin`, `--pi-bin`, `--opencode-bin` or `--qwen-bin` given
-    /// for `harness`.
-    fn harness_bin(&self, harness: HarnessKind) -> Option<&std::path::Path> {
-        match harness {
-            HarnessKind::Fx => self.fx_bin.as_deref(),
-            HarnessKind::Pi => self.pi_bin.as_deref(),
-            HarnessKind::OpenCode => self.opencode_bin.as_deref(),
-            HarnessKind::Qwen => self.qwen_bin.as_deref(),
-            HarnessKind::Fake => None,
-        }
     }
 }
 
@@ -267,5 +245,30 @@ mod tests {
         assert!(!swap(&["tenaz", "run", "--no-swap-models"], true));
         assert!(swap(&["tenaz", "run"], true));
         assert!(!swap(&["tenaz", "run"], false));
+    }
+
+    #[test]
+    fn run_replaces_the_pinned_binary_only_with_its_harness_s_flag() {
+        let launch = Launch {
+            harness_bin: Some("/pinned/qwen".into()),
+            ..Launch::default()
+        };
+        let bin = |line: &[&str]| {
+            let next = run_args(line).apply(&launch, HarnessKind::Qwen).unwrap();
+            next.harness_bin
+        };
+        let both = [
+            "tenaz",
+            "run",
+            "--fx-bin",
+            "/opt/fx",
+            "--qwen-bin",
+            "/opt/qwen",
+        ];
+        assert_eq!(bin(&both), Some("/opt/qwen".to_owned()));
+        assert_eq!(
+            bin(&["tenaz", "run", "--fx-bin", "/opt/fx"]),
+            Some("/pinned/qwen".to_owned())
+        );
     }
 }

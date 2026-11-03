@@ -3,6 +3,7 @@
 pub(crate) mod demo;
 pub(crate) mod doctor;
 pub(crate) mod finish;
+pub(crate) mod harness_bins;
 pub(crate) mod info;
 pub(crate) mod init;
 pub(crate) mod run;
