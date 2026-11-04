@@ -97,5 +97,21 @@ No other local server offers this API yet, and it is not a standard.
   engine, and lists only the tools it can serve.
 - Pi gets no media tools (it runs with `--no-mcp`), so it has no 3D tool
   either.
+- mlx-serve keeps a 3D model loaded after its job. In the first real run
+  (2026-11-03) TRELLIS.2 stayed resident for about 8 hours at 24 GB next
+  to a 47 GB LLM on a 64 GB Mac, and the Mac swapped. So the adapter's
+  `unload` asks for `POST /v1/unload-model {"model": <mesh model>}` after
+  each job, and the `--images` adapter does the same. A 404, 405 or 501
+  without mlx-serve's `model_not_found` means the server has no such
+  route, and nothing is freed.
+- The 3D model is unloaded also when the mesh API is the LLM's own
+  server, where the lease keeps the LLM loaded. That server does not free
+  a media model by itself, and keeping one costs its whole size for the
+  rest of the run, while loading it again costs seconds against a job of
+  minutes. Only the mesh model is named, never the LLM. A run whose 3D
+  model is also its LLM would lose the LLM here; no such model exists yet.
+- A failed media unload is journaled (`failed` with `unload: …`) and
+  does not fail the job, whose file is already written. If the memory is
+  short, the LLM's reload says so.
 - The adapter is tested against a mock server, and by hand against
   mlx-serve 26.11.1 (see `docs/COMPATIBILITY.md`).

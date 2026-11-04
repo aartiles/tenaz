@@ -357,11 +357,11 @@ impl LeaseManager {
         let step = |transition| Step::new(holder.clone(), transition);
         self.timed(step("load"), adapter.load()).await?;
         let output = self.timed(step("job"), adapter.run(job)).await;
-        // Always free the media engine, even after a failed job.
-        let unloaded = self.timed(step("unload"), adapter.unload()).await;
-        let output = output?;
-        unloaded?;
-        Ok(output)
+        // Always free the media engine, even after a failed job. A failed
+        // unload is journaled as `failed` but does not fail the job: its
+        // output is written, and the LLM's reload says whether memory is short.
+        let _ = self.timed(step("unload"), adapter.unload()).await;
+        Ok(output?)
     }
 
     /// `op` observed as `step` with its duration, or as `failed` with the
@@ -403,8 +403,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::fakes::{
-        FakeLlm, Unload, job, kinds, noting_job, records, setup, setup_engine, setup_llm,
-        setup_media, setup_two, two,
+        FakeLlm, Unload, job, kinds, noting_job, records, setup, setup_engine,
+        setup_failing_media_unload, setup_llm, setup_media, setup_two, two,
     };
     use super::*;
 
@@ -451,6 +451,31 @@ mod tests {
             ]
         );
     }
+
+    /// A media engine that would not free its model does not cost the job
+    /// its output: the failure is journaled and the LLM is loaded again.
+    #[tokio::test]
+    async fn a_failed_media_unload_keeps_the_output_and_is_journaled() {
+        let (manager, log, transitions) = setup_failing_media_unload();
+        let output = manager.run_media("comfyui", job()).await.unwrap();
+        let failed = "media:comfyui failed unload: media engine unreachable: connection refused";
+        let journaled = records(&transitions).iter().any(|r| r == failed);
+        assert_eq!(
+            (
+                output.paths,
+                log.lines().last().cloned(),
+                journaled,
+                llms_hold(&manager).await
+            ),
+            (
+                vec![std::path::PathBuf::from("/tmp/out/out.png")],
+                Some("llm load m".to_owned()),
+                true,
+                true
+            )
+        );
+    }
+
     /// A heavy job (ADR 0010) gets the engine's memory: the LLM is unloaded
     /// and requests wait while it runs, then the LLM comes back.
     #[tokio::test]

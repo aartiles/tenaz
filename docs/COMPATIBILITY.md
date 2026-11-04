@@ -20,8 +20,8 @@ below; this page is about the real ones.
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
 | Media | ComfyUI images (`generate_image` over MCP) | Tested against a mock, and in real runs with FLUX models next to TensorFold and Sushi (8 and 10 images). Needs an API-format workflow with `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}` and `{{height}}` placeholders. |
-| | OpenAI Images API (`--images`, `POST /v1/images/generations`): mlx-serve, Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock, and by hand against mlx-serve 26.10.3 (see Known gaps). Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Does not unload the image model after a job. On the LLM's own origin the LLM stays loaded. |
-| | Image-to-3D API (`--meshes`, `POST /v1/3d/generations`): mlx-serve 26.11.1 | Tested against a mock, and by hand through the adapter against mlx-serve 26.11.1 with Idol and TRELLIS.2 at 512 (see Known gaps). Sends `model`, the picture as base64 `image`, and `resolution`, `seed`, `steps` and `mode` when given. Does not unload the 3D model after a job. |
+| | OpenAI Images API (`--images`, `POST /v1/images/generations`): mlx-serve, Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock, and by hand against mlx-serve 26.10.3 (see Known gaps). Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Frees the image model after a job through `POST /v1/unload-model` where the server has it (mlx-serve), also on the LLM's own origin, where the LLM stays loaded. |
+| | Image-to-3D API (`--meshes`, `POST /v1/3d/generations`): mlx-serve 26.11.1 | Tested against a mock, and by hand through the adapter against mlx-serve 26.11.1 with Idol and TRELLIS.2 at 512 (see Known gaps). Sends `model`, the picture as base64 `image`, and `resolution`, `seed`, `steps` and `mode` when given. Frees the 3D model after each job through `POST /v1/unload-model`. |
 | | TTS, STT, video | Not built. |
 
 ## What the model needs
@@ -351,10 +351,20 @@ above), so a 32k context is the practical floor (`contextFloor`).
   magic. mlx-serve keeps a 3D model loaded after its job: with Idol still
   resident (4 GB), TRELLIS.2 was refused with `503 … out_of_memory`,
   since its free-memory check asks for about 26 GB even at 512, and
-  worked once Idol was unloaded (`POST /v1/unload-model`). Tenaz does
-  not unload the 3D model after a call, so a run that uses one 3D model
-  is not affected, but other models loaded in the same server are. Not
-  verified: a `generate_3d` call from an agent in a real run (the MCP
+  worked once Idol was unloaded (`POST /v1/unload-model`). In the first
+  real run TRELLIS.2 stayed loaded for hours after its job, next to the
+  LLM, so Tenaz now unloads the 3D model (and an `--images` model) after
+  each job. Checked by hand on 2026-11-04 through the adapters against
+  mlx-serve 26.11.1 on a spare port with no model loaded:
+  `/v1/unload-model` answers 200 `state: unloaded` for a known model and
+  404 `model_not_found` for an unknown one, which Tenaz journals as a
+  failed unload. Freeing a loaded TRELLIS.2 through it was seen by the
+  operator (HTTP 200), not through Tenaz: a run was using the memory.
+  The unload is not checked against `--images` servers other than
+  mlx-serve: one that answers an unknown route with something other than
+  404, 405 or 501 gets a `failed unload` in the journal after each job
+  (the job is kept).
+  Not verified: a `generate_3d` call from an agent in a real run (the MCP
   tool is tested only against fakes), TRELLIS.2 at 1024 or 1536 (about
   6.7 minutes at 1024 measured outside Tenaz), Hunyuan3D and Pixal3D,
   and a run whose LLM is on the same mlx-serve. The tool refuses a picture
