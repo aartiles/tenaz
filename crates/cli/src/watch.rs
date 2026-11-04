@@ -493,6 +493,7 @@ mod tests {
             id: "1".into(),
             name: "shell".into(),
             args: serde_json::json!({"command": "cd /some/project && grep -n x src/main.js"}),
+            effect: None,
         };
         assert_eq!(
             render(&call, Level::Actions),
@@ -523,6 +524,7 @@ mod tests {
             id: "2".into(),
             name: "shell".into(),
             args: serde_json::json!({"action": "interact", "session_id": "shell-9", "yield_time_ms": 60000}),
+            effect: None,
         };
         assert_eq!(
             render(&interact, Level::Actions),

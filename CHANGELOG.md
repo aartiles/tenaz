@@ -28,6 +28,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The watchdog sees Qwen Code's reads and writes (`ReadFile`,
+  `WriteFile`, `Edit`), so it no longer stops a Qwen Code session that is
+  reading new files as idle, and the journal counts its writes. For an
+  ACP agent (fx, OpenCode, Qwen Code) it now goes by the tool call's
+  `kind` first (`read` or `edit`) and by the name only when the kind says
+  nothing about files. See ADR 0021.
+
 - An ACP agent's tool call is reported with the input it runs with.
   OpenCode and Qwen Code announce a call before its input is complete
   (`bash` with only its folder, a read with no file) and send the input

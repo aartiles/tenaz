@@ -4,9 +4,10 @@
 use agent_client_protocol::schema::v1::{
     ContentBlock, PermissionOptionKind, RequestPermissionRequest, SessionUpdate,
     StopReason as AcpStop, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ToolKind,
 };
 use std::collections::HashMap;
-use tenaz_core::session::{PermissionOption, SessionEvent, StopReason, Usage};
+use tenaz_core::session::{PermissionOption, SessionEvent, StopReason, ToolEffect, Usage};
 
 /// A tool call the agent announced that has not run yet.
 #[derive(Debug)]
@@ -14,6 +15,8 @@ struct Pending {
     name: String,
     /// The latest input the agent sent for it.
     args: serde_json::Value,
+    /// What its latest `kind` says it does to files.
+    effect: Option<ToolEffect>,
 }
 
 /// Session state the translation depends on.
@@ -51,6 +54,7 @@ impl Translator {
                     self.announced.entry(id).or_insert_with(|| Pending {
                         name: call.title.clone(),
                         args: serde_json::Value::Null,
+                        effect: None,
                     });
                 }
                 self.tool_call_update(&ToolCallUpdate::from(call.clone()))
@@ -105,6 +109,10 @@ impl Translator {
             if let Some(input) = &fields.raw_input {
                 call.args.clone_from(input);
             }
+            // A later `other` (the default) does not undo a declared effect.
+            if let Some(declared) = fields.kind.and_then(effect) {
+                call.effect = Some(declared);
+            }
         }
     }
 
@@ -116,6 +124,7 @@ impl Translator {
             id: id.to_owned(),
             name: call.name,
             args: call.args,
+            effect: call.effect,
         })
     }
 
@@ -256,6 +265,17 @@ pub fn thought_text(update: &SessionUpdate) -> Option<&str> {
     }
 }
 
+/// What an ACP tool kind does to files: `read` reads, `edit` writes.
+/// `delete` and `move` are left out: no agent has sent them to Tenaz. Any other kind says nothing, and the
+/// watchdog then goes by the call's name (ADR 0021).
+fn effect(kind: ToolKind) -> Option<ToolEffect> {
+    match kind {
+        ToolKind::Read => Some(ToolEffect::Read),
+        ToolKind::Edit => Some(ToolEffect::Write),
+        _ => None,
+    }
+}
+
 fn kind_name(kind: PermissionOptionKind) -> &'static str {
     match kind {
         PermissionOptionKind::AllowOnce => "allow_once",
@@ -346,6 +366,7 @@ mod tests {
             id: ID.into(),
             name: name.into(),
             args,
+            effect: None,
         }
     }
 
@@ -388,6 +409,40 @@ mod tests {
             t.update(&update(done)),
             vec![end("mcp_lease_slow_render", "/tmp/out.png", false)]
         );
+    }
+
+    /// The effect of a call announced with `announced` and run with
+    /// `running` as its kind.
+    fn effect_of(announced: ToolKind, running_kind: ToolKind) -> Option<ToolEffect> {
+        let mut t = Translator::new();
+        let call = ToolCall::new(ToolCallId::new(ID), "ToolCall").kind(announced);
+        assert!(t.update(&SessionUpdate::ToolCall(call)).is_empty());
+        match t.update(&update(running().kind(running_kind))).as_slice() {
+            [SessionEvent::ToolCallStart { effect, .. }] => *effect,
+            other => panic!("expected one start, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_call_starts_with_the_effect_its_kind_declares() {
+        use ToolKind::{Delete, Edit, Execute, Other, Read, Search};
+        let cases = [
+            (Read, Other, Some(ToolEffect::Read)),
+            (Other, Edit, Some(ToolEffect::Write)),
+            (Read, Edit, Some(ToolEffect::Write)),
+            (Edit, Other, Some(ToolEffect::Write)),
+            (Other, Delete, None),
+            (Other, Execute, None),
+            (Search, Other, None),
+        ];
+        // (announced kind, running kind, effect)
+        for (announced, running_kind, want) in cases {
+            assert_eq!(
+                effect_of(announced, running_kind),
+                want,
+                "announced {announced:?}, running {running_kind:?}"
+            );
+        }
     }
 
     #[test]

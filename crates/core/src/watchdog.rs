@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::params::RunParams;
 use crate::session::{
-    PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics, StopReason, WatchdogEvent,
-    capacity_limit, is_image_refusal, is_out_of_memory, is_read_tool, is_write_tool,
+    PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics, StopReason, ToolEffect,
+    WatchdogEvent, capacity_limit, is_image_refusal, is_out_of_memory, tool_effect,
 };
 use crate::util::{approx_tokens, sha256_hex};
 use crate::write_scope::WriteScope;
@@ -259,8 +259,8 @@ impl Watchdog {
                 elapsed_ms,
                 &mut actions,
             ),
-            SessionEvent::ToolCallStart { id, name, args } => {
-                self.tool_start(id, name, args, elapsed_ms, &mut actions);
+            call @ SessionEvent::ToolCallStart { .. } => {
+                self.tool_call(call, elapsed_ms, &mut actions);
             }
             SessionEvent::ToolCallEnd {
                 id,
@@ -388,6 +388,33 @@ impl Watchdog {
         });
     }
 
+    /// A tool call starting: the loop rules, then its effect on files. A
+    /// write, or a read of something not read before, is progress for the
+    /// idle rule; a write is also counted and its path checked.
+    fn tool_call(&mut self, call: &SessionEvent, elapsed_ms: u64, actions: &mut Vec<Action>) {
+        let SessionEvent::ToolCallStart {
+            id,
+            name,
+            args,
+            effect,
+        } = call
+        else {
+            return;
+        };
+        self.tool_start(id, name, args, elapsed_ms, actions);
+        match tool_effect(name, *effect) {
+            Some(ToolEffect::Write) => {
+                self.metrics.writes += 1;
+                self.idle_turns = -1;
+                self.check_write_target(args, elapsed_ms, actions);
+            }
+            Some(ToolEffect::Read) if self.reads.insert(args.to_string()) => {
+                self.idle_turns = -1;
+            }
+            _ => {}
+        }
+    }
+
     fn tool_start(
         &mut self,
         id: &str,
@@ -426,13 +453,6 @@ impl Watchdog {
                     actions,
                 );
             }
-        }
-        if is_write_tool(name) {
-            self.metrics.writes += 1;
-            self.idle_turns = -1;
-            self.check_write_target(args, elapsed_ms, actions);
-        } else if is_read_tool(name) && self.reads.insert(args.to_string()) {
-            self.idle_turns = -1;
         }
     }
 
@@ -751,6 +771,7 @@ mod tests {
                 id: id.clone(),
                 name: name.into(),
                 args: args.clone(),
+                effect: None,
             },
             0,
             String::new,
@@ -972,6 +993,7 @@ mod tests {
             id: "call_10".into(),
             name: "write".into(),
             args: serde_json::json!({ "path": "src/core/render.ts" }),
+            effect: None,
         };
         assert!(w.handle(&second, 6, String::new).is_empty());
         assert!(
@@ -1128,6 +1150,7 @@ mod tests {
                     id: id.into(),
                     name: "bash".into(),
                     args: serde_json::json!({ "command": "./verify --all" }),
+                    effect: None,
                 },
                 at,
                 String::new,
@@ -1209,26 +1232,14 @@ mod tests {
             "idle"
         ));
         // A write tool call resets the count even before the next fingerprint.
-        w.handle(
-            &SessionEvent::ToolCallStart {
-                id: "c".into(),
-                name: "edit".into(),
-                args: serde_json::Value::Null,
-            },
-            0,
-            String::new,
-        );
+        w.handle(&tool_call("edit", serde_json::Value::Null), 0, String::new);
         assert!(
             w.handle(&SessionEvent::TurnEnd, 0, || "b".into())
                 .is_empty()
         );
         assert_eq!(w.metrics().writes, 1);
         // So does a read of something not read before, but not a repeat.
-        let read = |path: &str| SessionEvent::ToolCallStart {
-            id: "r".into(),
-            name: "read".into(),
-            args: serde_json::json!({ "path": path }),
-        };
+        let read = |path: &str| tool_call("read", serde_json::json!({ "path": path }));
         w.handle(&read("src/lib.rs"), 0, String::new);
         assert!(
             w.handle(&SessionEvent::TurnEnd, 0, || "b".into())
@@ -1250,6 +1261,85 @@ mod tests {
             vec![Action::Abort {
                 reason: "3 turns without changing or reading anything new".into()
             }]
+        );
+    }
+
+    /// A tool call that declares no effect.
+    fn tool_call(name: &str, args: serde_json::Value) -> SessionEvent {
+        SessionEvent::ToolCallStart {
+            id: "c".into(),
+            name: name.into(),
+            args,
+            effect: None,
+        }
+    }
+
+    #[test]
+    fn qwen_code_reads_of_new_files_are_not_idle() {
+        // Session 043-builder-T007 (Qwen Code 0.26.6) read 20 files with
+        // `ReadFile` and was aborted as idle.
+        let mut p = RunParams::default();
+        p.idle_steer = 2;
+        p.idle_abort = 3;
+        let mut w = Watchdog::new(
+            p,
+            Some(WatchConfig {
+                turns: 40,
+                context_tokens: 60_000,
+                idle: true,
+                wrap_up: Role::Builder.wrap_up(),
+            }),
+        );
+        w.set_fingerprint(Some("a".into()));
+        for n in 0..20 {
+            let path = format!("src/{n}.rs");
+            let read = tool_call("ReadFile", serde_json::json!({ "file_path": path }));
+            w.handle(&read, 0, String::new);
+            assert!(
+                w.handle(&SessionEvent::TurnEnd, 0, || "a".into())
+                    .is_empty(),
+                "read {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_write_counts_whatever_its_name() {
+        // Qwen Code titles a call it cannot describe yet `ToolCall`.
+        let mut w = Watchdog::new(RunParams::default(), None);
+        let write = SessionEvent::ToolCallStart {
+            id: "w".into(),
+            name: "ToolCall".into(),
+            args: serde_json::json!({ "file_path": "src/new.rs" }),
+            effect: Some(ToolEffect::Write),
+        };
+        w.handle(&write, 0, String::new);
+        assert_eq!(w.metrics().writes, 1);
+    }
+
+    #[test]
+    fn a_declared_read_of_a_new_file_is_progress_whatever_its_name() {
+        let mut p = RunParams::default();
+        p.idle_steer = 1;
+        p.idle_abort = 2;
+        let config = WatchConfig {
+            turns: 40,
+            context_tokens: 60_000,
+            idle: true,
+            wrap_up: Role::Builder.wrap_up(),
+        };
+        let mut w = Watchdog::new(p, Some(config));
+        w.set_fingerprint(Some("a".into()));
+        let read = SessionEvent::ToolCallStart {
+            id: "r".into(),
+            name: "ToolCall".into(),
+            args: serde_json::json!({ "file_path": "src/new.rs" }),
+            effect: Some(ToolEffect::Read),
+        };
+        w.handle(&read, 0, String::new);
+        assert!(
+            w.handle(&SessionEvent::TurnEnd, 0, || "a".into())
+                .is_empty()
         );
     }
 
@@ -1362,6 +1452,7 @@ mod tests {
                 id: "c9".into(),
                 name: "shell".into(),
                 args: serde_json::json!({"command": "head -c 400 x.json"}),
+                effect: None,
             },
             0,
             String::new,

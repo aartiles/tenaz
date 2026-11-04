@@ -83,6 +83,10 @@ pub enum SessionEvent {
         id: String,
         name: String,
         args: serde_json::Value,
+        /// What the call does to files, when the harness says so (ACP's
+        /// `kind`); otherwise the watchdog goes by the name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effect: Option<ToolEffect>,
     },
     ToolCallEnd {
         id: String,
@@ -201,18 +205,25 @@ impl ServerTimings {
     }
 }
 
-/// Tool names that change files, for the idle rule's quick count.
-pub fn is_write_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "write" | "edit" | "Write" | "Edit" | "fs_write" | "edit_file" | "write_file"
-    )
+/// What a tool call does to files, for the idle rule and the write count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolEffect {
+    Read,
+    Write,
 }
 
-/// Tool names that read files: a read of something new counts as progress
-/// for the idle rule.
-pub fn is_read_tool(name: &str) -> bool {
-    matches!(name, "read" | "Read" | "read_file" | "fs_read")
+/// A call's effect: the one its harness declared, else the one its name
+/// says (ADR 0021). The names are Pi's and `OpenCode`'s (`read`, `write`,
+/// `edit`), fx's (`read_file`, `write_file`, `edit_file`), Qwen Code's
+/// (`ReadFile`, `WriteFile`, `Edit`) and Claude-style ones.
+pub fn tool_effect(name: &str, declared: Option<ToolEffect>) -> Option<ToolEffect> {
+    declared.or(match name {
+        "write" | "edit" | "Write" | "Edit" | "WriteFile" | "fs_write" | "edit_file"
+        | "write_file" => Some(ToolEffect::Write),
+        "read" | "Read" | "ReadFile" | "read_file" | "fs_read" => Some(ToolEffect::Read),
+        _ => None,
+    })
 }
 
 /// A watchdog event recorded in the session's journal record.
@@ -471,6 +482,46 @@ pub fn is_image_refusal(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_agents_file_tools_have_their_effect() {
+        let cases = [
+            // Pi and OpenCode 1.19.5.
+            ("read", Some(ToolEffect::Read)),
+            ("write", Some(ToolEffect::Write)),
+            ("edit", Some(ToolEffect::Write)),
+            ("bash", None),
+            ("grep", None),
+            // fx.
+            ("read_file", Some(ToolEffect::Read)),
+            ("write_file", Some(ToolEffect::Write)),
+            ("edit_file", Some(ToolEffect::Write)),
+            ("shell", None),
+            ("grep_files", None),
+            // Qwen Code 0.26.6.
+            ("ReadFile", Some(ToolEffect::Read)),
+            ("WriteFile", Some(ToolEffect::Write)),
+            ("Edit", Some(ToolEffect::Write)),
+            ("Shell", None),
+            ("Grep", None),
+        ];
+        for (name, want) in cases {
+            assert_eq!(tool_effect(name, None), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_declared_effect_wins_over_the_name() {
+        // Qwen Code titles a call it cannot describe yet `ToolCall`.
+        assert_eq!(
+            tool_effect("ToolCall", Some(ToolEffect::Read)),
+            Some(ToolEffect::Read)
+        );
+        assert_eq!(
+            tool_effect("read", Some(ToolEffect::Write)),
+            Some(ToolEffect::Write)
+        );
+    }
 
     /// mlx-serve 26.10.3, in the Digger 3D run of 2026-10-29.
     const MLX_SERVE_REFUSAL: &str = "This prompt (30245 tokens) does not fit in GPU memory even after freeing the prefix cache: it requires ~7720MB GPU memory but only ~6960MB is available. It was refused before any work started. Reduce the prompt length, lower --ctx-size, or free memory on the machine.";
