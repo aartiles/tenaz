@@ -60,6 +60,10 @@ pub enum ProxyEvent {
     /// is tenaz-core's `engine_unreachable_text`. tenaz-core reads what the
     /// message means.
     EngineError { request: u64, message: String },
+    /// The harness asked the engine to summarize its conversation, and the
+    /// proxy refused instead of forwarding it (see
+    /// [`crate::Proxy::compaction_prompt_opening`]).
+    CompactionRefused { request: u64 },
 }
 
 /// Receives proxy events (the runner feeds them to its watchdog and journal).

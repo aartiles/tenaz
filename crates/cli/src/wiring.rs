@@ -531,6 +531,59 @@ fn harness_usage(u: &tenaz_proxy::ProxyUsage) -> Usage {
 /// proxy takes as the limit of a request that does not say.
 const HARNESS_MAX_OUTPUT_TOKENS: u64 = 16_384;
 
+/// What the runner does with each proxy event: usage, engine errors and
+/// refused compactions go to the sessions' `feed`, whether the usage names
+/// cached tokens to `cache_report`, and repaired tool arguments to
+/// `repair_log`.
+fn proxy_observer(
+    feed: tokio::sync::broadcast::Sender<EngineObservation>,
+    cache_report: CacheReport,
+    repair_log: Option<std::path::PathBuf>,
+) -> tenaz_proxy::Observer {
+    let first_repair = std::sync::atomic::AtomicBool::new(true);
+    Arc::new(move |event: ProxyEvent| match event {
+        ProxyEvent::Completed {
+            usage: Some(u),
+            finish_reason,
+            timings,
+            sent,
+            ..
+        } => {
+            cache_report.note(u.cached_tokens.is_some());
+            let _ = feed.send(EngineObservation::Completed {
+                usage: harness_usage(&u),
+                stop_reason: stop_reason_for_finish(finish_reason.as_deref()),
+                server: timings,
+                sent,
+            });
+        }
+        ProxyEvent::EngineError { message, .. } => {
+            let _ = feed.send(EngineObservation::Error { message });
+        }
+        ProxyEvent::CompactionRefused { .. } => {
+            tracing::info!("the proxy refused the agent's request to compact its context");
+            let _ = feed.send(EngineObservation::CompactionRefused);
+        }
+        ProxyEvent::ToolArgsRepaired {
+            request,
+            tool,
+            fields,
+        } => {
+            if let Some(log) = &repair_log {
+                if first_repair.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::info!(
+                        "the engine sends some tool-call arguments as text; the proxy repairs them \
+                         (each one in {}, the count in tenaz status)",
+                        log.display()
+                    );
+                }
+                log_repair(log, request, &tool, &fields);
+            }
+        }
+        ProxyEvent::Completed { .. } | ProxyEvent::Held { .. } => {}
+    })
+}
+
 /// The engine proxy for `project`'s run (`ledger`): per-request usage and
 /// errors go to `feed`, whether the usage names cached tokens to
 /// `cache_report`, requests are given the `reasoning_effort` the thinking
@@ -551,52 +604,16 @@ async fn start_proxy(
             .private_dir()
             .join(tenaz_core::orchestrator::TOOL_REPAIRS)
     });
-    let repair_log = repairs.clone();
-    let first_repair = std::sync::atomic::AtomicBool::new(true);
     let mut proxy = Proxy::new(
         origin(base_url)?,
         gate,
-        Arc::new(move |event: ProxyEvent| match event {
-            ProxyEvent::Completed {
-                usage: Some(u),
-                finish_reason,
-                timings,
-                sent,
-                ..
-            } => {
-                cache_report.note(u.cached_tokens.is_some());
-                let _ = feed.send(EngineObservation::Completed {
-                    usage: harness_usage(&u),
-                    stop_reason: stop_reason_for_finish(finish_reason.as_deref()),
-                    server: timings,
-                    sent,
-                });
-            }
-            ProxyEvent::EngineError { message, .. } => {
-                let _ = feed.send(EngineObservation::Error { message });
-            }
-            ProxyEvent::ToolArgsRepaired {
-                request,
-                tool,
-                fields,
-            } => {
-                if let Some(log) = &repair_log {
-                    if first_repair.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                        tracing::info!(
-                            "the engine sends some tool-call arguments as text; the proxy repairs them \
-                             (each one in {}, the count in tenaz status)",
-                            log.display()
-                        );
-                    }
-                    log_repair(log, request, &tool, &fields);
-                }
-            }
-            ProxyEvent::Completed { .. } | ProxyEvent::Held { .. } => {}
-        }),
+        proxy_observer(feed, cache_report, repairs.clone()),
     );
     proxy.repair_tool_args = repairs.is_some();
     proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
     proxy.effort = effort;
+    proxy.compaction_prompt_opening = (ledger.config.harness == HarnessKind::Qwen)
+        .then(|| tenaz_acp::qwen::COMPACTION_PROMPT.to_owned());
     proxy.request_defaults =
         request_defaults(ledger.config.thinking.as_deref(), ledger.params.temperature);
     let handle = Arc::new(proxy)

@@ -28,6 +28,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- With `--harness qwen`, the engine proxy refuses Qwen Code's own request
+  to summarize its conversation, and Tenaz ends the session there as one
+  out of context; a fresh session continues. Before, each summary took
+  minutes, showed as an empty reply, and the session was stopped right
+  after it anyway. See ADR 0022.
 - A reviewer stopped (for example at its turn budget) after writing its
   review now says so in the log, as in
   `turn budget exceeded (38/25) after writing its review; its verdict (CHANGES) is used`.

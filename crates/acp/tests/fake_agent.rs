@@ -412,6 +412,31 @@ async fn proxy_observations_become_per_request_turns() {
     session.close(Duration::from_secs(5)).await;
 }
 
+/// The proxy's refusal of the agent's compaction request reaches the
+/// watchdog as its own event, not as a reply.
+#[tokio::test]
+async fn a_refused_compaction_becomes_a_session_event() {
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let dir = tempfile::tempdir().unwrap();
+    let (feed, _keep) = tokio::sync::broadcast::channel(16);
+    let harness = harness(seen).with_observations(feed.clone());
+    let mut session = harness.open(spec(dir.path())).await.unwrap();
+    session.prompt("render a cat").await.unwrap();
+    feed.send(EngineObservation::CompactionRefused).unwrap();
+    let events = drain(&mut session, PermissionDecision::Allow).await;
+    assert!(
+        events.contains(&SessionEvent::CompactionRefused),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::MessageEnd { .. })),
+        "the refusal is not a reply: {events:?}"
+    );
+    session.close(Duration::from_secs(5)).await;
+}
+
 /// Runs the `loop` prompt, steers at the third tool call and, with `abort`,
 /// aborts at the sixth; returns the tool-call count and every `Settled`.
 async fn loop_with_steer(

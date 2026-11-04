@@ -12,6 +12,11 @@ use tenaz_core::util::wrap_command;
 
 use crate::{AcpHarness, ConfiguredHarness, ProfileMcpServer, write_json};
 
+/// The opening of Qwen Code's request to summarize its conversation
+/// (`getCompressionPrompt` in 0.26.6). It cannot be turned off: the engine
+/// proxy refuses the request and Tenaz ends the session there (ADR 0022).
+pub const COMPACTION_PROMPT: &str = "You are the component that summarizes a conversation when its context window is about to overflow.";
+
 /// What Tenaz writes into `~/.qwen/settings.json`. The model and the engine
 /// are given on the command line; the settings hold the model's window and
 /// turn off what would carry from one session to the next.

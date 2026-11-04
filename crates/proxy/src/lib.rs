@@ -52,6 +52,12 @@ pub struct Proxy {
     /// The harness's output limit, for requests that do not carry one: a
     /// reply that reaches it is reported with `finish_reason: length`.
     pub max_output_tokens: Option<u64>,
+    /// The text that opens the harness's own request to summarize its
+    /// conversation, for a harness that cannot be told not to send one.
+    /// Such a request is answered with an error and never reaches the
+    /// engine: the runner ends the session there instead, and a fresh one
+    /// continues (ADR 0022).
+    pub compaction_prompt_opening: Option<String>,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -81,6 +87,9 @@ impl ProxyHandle {
         let _ = self.task.await;
     }
 }
+
+/// The error message a refused compaction request is answered with.
+const COMPACTION_REFUSED: &str = "Tenaz ends this session instead of compacting its context";
 
 /// Headers that belong to one hop and are never forwarded.
 const HOP_BY_HOP: [&str; 8] = [
@@ -116,6 +125,7 @@ impl Proxy {
             repair_tool_args: true,
             effort: None,
             max_output_tokens: None,
+            compaction_prompt_opening: None,
         }
     }
 
@@ -136,6 +146,30 @@ impl Proxy {
             shutdown,
             task,
         })
+    }
+
+    /// The answer to the harness's request to summarize its conversation,
+    /// which is refused (see [`Proxy::compaction_prompt_opening`]); `None` for any
+    /// other request.
+    fn refuse_if_compaction(
+        &self,
+        id: u64,
+        request: Option<&serde_json::Value>,
+    ) -> Option<Response> {
+        let opening = self.compaction_prompt_opening.as_deref()?;
+        if !asks_to_compact(request?, opening) {
+            return None;
+        }
+        self.observe(ProxyEvent::CompactionRefused { request: id });
+        Some(
+            (
+                StatusCode::BAD_REQUEST,
+                axum::Json(
+                    serde_json::json!({ "error": { "message": COMPACTION_REFUSED, "type": "proxy_error" } }),
+                ),
+            )
+                .into_response(),
+        )
     }
 
     fn observe(&self, event: ProxyEvent) {
@@ -166,6 +200,31 @@ fn is_completion(method: &axum::http::Method, path: &str) -> bool {
         && (path.ends_with("/chat/completions")
             || path.ends_with("/completions")
             || path.ends_with("/responses"))
+}
+
+/// Is a chat request the harness's own request to summarize its
+/// conversation? Qwen Code 0.26.6 sends it as the last message, from the
+/// user, opening with `opening` (its system prompt is the agent's own).
+fn asks_to_compact(request: &serde_json::Value, opening: &str) -> bool {
+    let Some(last) = request
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|m| m.last())
+    else {
+        return false;
+    };
+    if last.get("role").and_then(serde_json::Value::as_str) != Some("user") {
+        return false;
+    }
+    let text = match last.get("content") {
+        Some(serde_json::Value::String(text)) => Some(text.as_str()),
+        Some(serde_json::Value::Array(parts)) => parts
+            .first()
+            .and_then(|p| p.get("text"))
+            .and_then(serde_json::Value::as_str),
+        _ => None,
+    };
+    text.is_some_and(|t| t.trim_start().starts_with(opening))
 }
 
 /// Rewrites a completion request: `stream_options.include_usage` on a
@@ -235,15 +294,13 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
     } else {
         None
     };
-    let body = match rewritten {
-        Some(rewritten) => bytes::Bytes::from(rewritten),
-        None => body,
-    };
-    let request_json = if completion {
-        serde_json::from_slice::<serde_json::Value>(&body).ok()
-    } else {
-        None
-    };
+    let body = rewritten.map_or(body, bytes::Bytes::from);
+    let request_json = completion
+        .then(|| serde_json::from_slice::<serde_json::Value>(&body).ok())
+        .flatten();
+    if let Some(refused) = proxy.refuse_if_compaction(id, request_json.as_ref()) {
+        return refused;
+    }
     let stream = request_json
         .as_ref()
         .and_then(|j| j.get("stream").and_then(serde_json::Value::as_bool))

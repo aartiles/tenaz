@@ -11,7 +11,8 @@ crates/
                            Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
                            engine error messages, tool-argument repair, the lowered
-                           reasoning effort, and replies at the output limit reported as cut.
+                           reasoning effort, replies at the output limit reported as cut, and
+                           a harness's own compaction request refused when set (Qwen Code, ADR 0022).
   acp/       tenaz-acp       HarnessAdapter over ACP (fx, OpenCode, Qwen Code), harness as a subprocess.
   pi/        tenaz-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
   mcp/       tenaz-mcp       MCP server (streamable HTTP) exposing media tools that take the lease.

@@ -9,6 +9,17 @@ use serde::{Deserialize, Serialize};
 /// The abort reason of a session whose context the harness compacted twice.
 pub const SECOND_COMPACTION: &str = "second context compaction";
 
+/// The abort reason of a session whose harness began to summarize its own
+/// conversation, which the engine proxy refused (ADR 0022).
+pub const HARNESS_COMPACTION: &str = "the harness began to compact its context";
+
+/// Does an abort reason say the session ran out of context?
+fn is_context_abort(reason: &str) -> bool {
+    reason == SECOND_COMPACTION
+        || reason == HARNESS_COMPACTION
+        || reason.starts_with("context budget exceeded")
+}
+
 /// Token usage of one assistant message, as the harness reports it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -113,6 +124,9 @@ pub enum SessionEvent {
     CompactionStart {
         reason: String,
     },
+    /// The harness asked the engine to summarize its conversation, and the
+    /// engine proxy refused: the session ends as one out of context.
+    CompactionRefused,
     /// The harness asks whether a tool call may run. The session runner answers.
     PermissionRequest {
         id: String,
@@ -348,14 +362,10 @@ impl SessionMetrics {
         self.tool_calls > 0 && self.tool_errors >= self.tool_calls
     }
 
-    /// The session ran out of context: stopped at its context budget, or
-    /// at its second compaction.
+    /// The session ran out of context: stopped at its context budget, at
+    /// its second compaction, or when its harness began to compact.
     pub fn context_stopped(&self) -> bool {
-        self.compaction_stopped()
-            || self
-                .abort_reason
-                .as_deref()
-                .is_some_and(|r| r.starts_with("context budget exceeded"))
+        self.abort_reason.as_deref().is_some_and(is_context_abort)
     }
 
     /// The session was stopped when the harness compacted its context a

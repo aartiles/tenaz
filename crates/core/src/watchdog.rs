@@ -5,8 +5,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::params::RunParams;
 use crate::session::{
-    PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics, StopReason, ToolEffect,
-    WatchdogEvent, capacity_limit, is_image_refusal, is_out_of_memory, tool_effect,
+    HARNESS_COMPACTION, PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics,
+    StopReason, ToolEffect, WatchdogEvent, capacity_limit, is_image_refusal, is_out_of_memory,
+    tool_effect,
 };
 use crate::util::{approx_tokens, sha256_hex};
 use crate::write_scope::WriteScope;
@@ -297,19 +298,9 @@ impl Watchdog {
             }
             SessionEvent::TurnEnd => self.turn_end(elapsed_ms, fingerprint, &mut actions),
             SessionEvent::CompactionStart { reason } => {
-                self.metrics.compactions += 1;
-                self.event("compaction", Some(reason), elapsed_ms);
-                if self.watch.is_some() {
-                    if self.metrics.compactions >= 2 {
-                        self.abort(SECOND_COMPACTION, elapsed_ms, &mut actions);
-                    } else {
-                        let wrap_up = self.watch.map_or("", |w| w.wrap_up);
-                        let message =
-                            format!("Context is being compacted, which loses detail. {wrap_up}");
-                        self.steer("compaction", &message, elapsed_ms, &mut actions);
-                    }
-                }
+                self.compaction_started(reason, elapsed_ms, &mut actions);
             }
+            SessionEvent::CompactionRefused => self.compaction_refused(elapsed_ms, &mut actions),
             SessionEvent::Settled { aborted } => {
                 self.call_started.clear();
                 let interrupted = std::mem::take(&mut self.interrupting);
@@ -353,6 +344,33 @@ impl Watchdog {
         self.call_started.remove(id);
         if let Some(held) = self.held_stop.as_mut() {
             held.calls_ended = self.call_started.is_empty();
+        }
+    }
+
+    /// The harness compacted its context: a watched session is steered to
+    /// wrap up at the first and stopped at the second.
+    fn compaction_started(&mut self, reason: &str, elapsed_ms: u64, actions: &mut Vec<Action>) {
+        self.metrics.compactions += 1;
+        self.event("compaction", Some(reason), elapsed_ms);
+        let Some(watch) = self.watch else { return };
+        if self.metrics.compactions >= 2 {
+            self.abort(SECOND_COMPACTION, elapsed_ms, actions);
+        } else {
+            let message = format!(
+                "Context is being compacted, which loses detail. {}",
+                watch.wrap_up
+            );
+            self.steer("compaction", &message, elapsed_ms, actions);
+        }
+    }
+
+    /// The proxy refused the harness's request to compact: a watched
+    /// session ends there, as one out of context (ADR 0022).
+    fn compaction_refused(&mut self, elapsed_ms: u64, actions: &mut Vec<Action>) {
+        self.metrics.compactions += 1;
+        self.event("compaction", Some("refused by the proxy"), elapsed_ms);
+        if self.watch.is_some() {
+            self.abort(HARNESS_COMPACTION, elapsed_ms, actions);
         }
     }
 
@@ -1403,6 +1421,37 @@ mod tests {
         assert!(m.aborted && !m.settled && !m.ok());
         assert_eq!(m.compactions, 2);
         assert_eq!(m.duration_ms, 1234);
+    }
+
+    /// A compaction the proxy refused ends the session at once, as one out
+    /// of context, so a fresh session continues the work.
+    #[test]
+    fn a_refused_compaction_stops_the_session_out_of_context() {
+        let mut w = watched();
+        assert_eq!(
+            w.handle(&SessionEvent::CompactionRefused, 0, String::new),
+            vec![Action::Abort {
+                reason: HARNESS_COMPACTION.into()
+            }]
+        );
+        w.handle(&SessionEvent::Settled { aborted: true }, 0, String::new);
+        w.finish(Some(0), 1);
+        let m = w.into_metrics();
+        assert!(m.aborted && m.context_stopped() && !m.compaction_stopped());
+        assert_eq!(m.compactions, 1);
+    }
+
+    /// A session nobody watches (the preflight) is only measured: the
+    /// refusal counts as a compaction and stops nothing.
+    #[test]
+    fn an_unwatched_session_is_not_stopped_by_a_refused_compaction() {
+        let mut w = Watchdog::new(RunParams::default(), None);
+        assert!(
+            w.handle(&SessionEvent::CompactionRefused, 0, String::new)
+                .is_empty()
+        );
+        assert_eq!(w.metrics().compactions, 1);
+        assert!(w.metrics().abort_reason.is_none());
     }
 
     /// A session answers its first prompt and is sent another: until that

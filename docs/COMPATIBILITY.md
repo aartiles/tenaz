@@ -118,6 +118,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **Qwen Code's compaction refused** (ADR 0022). The proxy knows Qwen
+  Code's summarizing request by the opening of its prompt in 0.26.6. In
+  the articulated-cabinet run (2026-11-03 and 04) it compacted 25 times
+  before this, each wasted. Tested with a fake engine and the watchdog's
+  unit tests, not yet in a run; a new Qwen Code version must be checked
+  for that prompt.
 - **A blocked task reopened behind an amend** (ADR 0018). In a run with
   Qwen Code 0.26.6 and Qwen3.8-27B (2026-11-03) a replan set a blocked
   task back to `todo` behind the card that amends its conflict's check;
