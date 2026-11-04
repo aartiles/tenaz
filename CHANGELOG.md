@@ -28,6 +28,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- When an ACP agent reports an edit as a diff, Tenaz records the edited
+  file's path as the call's result, not the agent's raw output. Qwen Code
+  sends the whole file before and after each edit in the diff, so every edit to
+  a large file raised a false big-output steer.
 - With `--harness qwen`, the engine proxy refuses Qwen Code's own request
   to summarize its conversation, and Tenaz ends the session there as one
   out of context; a fresh session continues. Before, each summary took

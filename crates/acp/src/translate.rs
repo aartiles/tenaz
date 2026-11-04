@@ -308,6 +308,9 @@ pub fn choose_option(
         .map(|o| o.option_id.clone())
 }
 
+/// A call's result as text. A diff is named by its path, not copied:
+/// agents such as Qwen Code send the whole file before and after, which
+/// would count as a big output.
 fn content_text(content: &[ToolCallContent]) -> String {
     content
         .iter()
@@ -316,6 +319,7 @@ fn content_text(content: &[ToolCallContent]) -> String {
                 ContentBlock::Text(text) => Some(text.text.clone()),
                 _ => None,
             },
+            ToolCallContent::Diff(diff) => Some(format!("wrote {}\n", diff.path.display())),
             _ => None,
         })
         .collect::<String>()
@@ -385,6 +389,25 @@ mod tests {
             ToolCallUpdate::new(ToolCallId::new(ID), fields),
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn an_edit_ends_with_the_file_it_changed_not_the_file_twice() {
+        use agent_client_protocol::schema::v1::Diff;
+        let mut t = Translator::new();
+        announce(&mut t, "Edit", serde_json::json!({"file_path": "/w/a.py"}));
+        t.update(&update(running()));
+        let whole = "x = 1\n".repeat(5000);
+        let done = ToolCallUpdateFields::new()
+            .status(ToolCallStatus::Completed)
+            .content(vec![ToolCallContent::Diff(
+                Diff::new("/w/a.py", format!("{whole}y = 2\n")).old_text(whole.clone()),
+            )])
+            .raw_output(serde_json::json!({"originalContent": whole, "newContent": "..."}));
+        assert_eq!(
+            t.update(&update(done)),
+            vec![end("Edit", "wrote /w/a.py\n", false)]
+        );
     }
 
     #[test]
