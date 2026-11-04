@@ -463,6 +463,14 @@ above), so a 32k context is the practical floor (`contextFloor`).
   again; Qwen Code's last replan reached the output limit. After the
   runs, Qwen Code's `HOME` held a process registry and undo copies of
   edited files, but no conversations or memories.
+- **Qwen Code: reads and writes.** A run with Qwen3.8 Flash on Sushi
+  (2026-11-03) stopped a session that had read 20 new files with
+  `ReadFile` as idle, and journaled `writes: 0` for every session: the
+  watchdog knew only Pi's and fx's tool names. It now takes the effect
+  from ACP's `kind` and knows Qwen Code's names (ADR 0021). Checked
+  against Qwen Code 0.26.6's sources (its tool names and that it sends
+  `kind`) and unit tests; no run has used it yet. OpenCode's `kind` was
+  not checked: no OpenCode session recorded it.
 - **OpenCode and Qwen Code: not checked.** Media tools over MCP and their
   time limit (OpenCode's MCP `timeout` may only bound listing the tools),
   pinned skills, `--model-for`, pause and resume, a run in the OS sandbox,

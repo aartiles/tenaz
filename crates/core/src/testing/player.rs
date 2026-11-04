@@ -182,6 +182,7 @@ impl Player {
             id: id.clone(),
             name: tool.to_owned(),
             args: args.clone(),
+            effect: None,
         });
         effect(self);
         self.emit(SessionEvent::ToolCallEnd {
@@ -387,6 +388,7 @@ impl Player {
                 id: format!("call_{}", self.call),
                 name: "shell".to_owned(),
                 args: serde_json::json!({ "command": "head -c 400 checks/result.json" }),
+                effect: None,
             });
             "Error: stream did not contain valid UTF-8\n"
         } else {
@@ -453,6 +455,7 @@ impl Player {
             id: id.clone(),
             name: "bash".to_owned(),
             args: serde_json::json!({ "command": "./verify --all" }),
+            effect: None,
         });
         self.until_no_more_read().await;
         self.emit(SessionEvent::ToolCallEnd {
@@ -493,6 +496,7 @@ impl Player {
             id: id.clone(),
             name: "write".to_owned(),
             args: serde_json::json!({ "path": path }),
+            effect: None,
         });
         let (result_text, is_error) = if self.reads_no_more() {
             ("Operation aborted", true)

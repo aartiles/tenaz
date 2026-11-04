@@ -61,6 +61,7 @@ impl Translator {
                 id: str_field(record, "toolCallId"),
                 name: str_field(record, "toolName"),
                 args: record.get("args").cloned().unwrap_or(Value::Null),
+                effect: None,
             }],
             "tool_execution_end" => vec![SessionEvent::ToolCallEnd {
                 id: str_field(record, "toolCallId"),
@@ -237,7 +238,8 @@ mod tests {
                 SessionEvent::ToolCallStart {
                     id: "call_1".into(),
                     name: "write".into(),
-                    args: json!({"path": "a.txt"})
+                    args: json!({"path": "a.txt"}),
+                    effect: None,
                 },
                 SessionEvent::ToolCallEnd {
                     id: "call_1".into(),

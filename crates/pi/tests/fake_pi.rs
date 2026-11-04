@@ -100,7 +100,7 @@ async fn a_tool_turn_round_trips_with_the_task_loops_command_line() {
         ]
     );
     assert!(
-        matches!(&events[2], SessionEvent::ToolCallStart { id, name, args } if id == "call_1" && name == "bash" && args["command"] == "ls")
+        matches!(&events[2], SessionEvent::ToolCallStart { id, name, args, .. } if id == "call_1" && name == "bash" && args["command"] == "ls")
     );
     assert!(
         matches!(&events[3], SessionEvent::ToolCallEnd { result_text, is_error: false, .. } if result_text == "a.txt\u{2028}b.txt")
