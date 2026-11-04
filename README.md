@@ -465,7 +465,8 @@ or TRELLIS.2 ([ADR 0020](docs/adr/0020-a-3d-tool.md)). The agent names a
 PNG or JPEG inside the project and where to write the `.glb`, also inside
 the project, and may set `resolution`, `seed`, `steps` and `mode`.
 TRELLIS.2 needs a cutout whose alpha is the object; Idol cuts the object
-out itself. A call frees the LLM first, as an image does, and is limited
+out itself. A call frees the LLM first, as an image does, frees the 3D
+model after it (`/v1/unload-model`), and is limited
 by `--media-timeout` (1800 s by default): TRELLIS.2 at 1024 took about
 7 minutes on an M5 Mac. A run may have an image engine, a 3D engine or
 both, on the same server or not. Pi gets no media tools.

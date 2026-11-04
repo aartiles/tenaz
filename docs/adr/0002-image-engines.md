@@ -59,7 +59,10 @@ memory anyway.
   the LLM loaded: the server renders the image and manages its memory. The
   adapter says so (`MediaAdapter::shares_engine`). Otherwise the lease
   frees the LLM as it does for ComfyUI.
-- The adapter does not unload anything after a job; the API has no way to.
+- The Images API has no way to free the model. Since ADR 0020 the adapter
+  asks for `POST /v1/unload-model` after each job (mlx-serve has it), and a
+  server without that route is left as it is. A failed media unload, also
+  ComfyUI's `/free`, is journaled and does not fail the job.
 - Discovery, in `init` and `tenaz doctor`: the LLM engine's own
   `/v1/models` is checked for image models by name (FLUX, SDXL, Stable
   Diffusion 3, Z-Image, Qwen-Image and similar), and known image servers

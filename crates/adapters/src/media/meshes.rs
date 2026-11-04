@@ -1,7 +1,7 @@
 //! An image-to-3D API (`POST /v1/3d/generations`), as mlx-serve serves it
 //! (ADR 0020). The picture goes as base64, the GLB comes back as base64
-//! and is written where the job says. The API has no way to free the
-//! model, so `unload` does nothing.
+//! and is written where the job says. `unload` frees the model through
+//! the server's `/v1/unload-model`, since mlx-serve keeps it loaded.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -193,8 +193,10 @@ impl MediaAdapter for MeshApi {
         })
     }
 
+    /// Frees the model, also when the LLM's own server serves it: that
+    /// server keeps it loaded otherwise, next to the LLM.
     async fn unload(&self) -> Result<(), MediaError> {
-        Ok(())
+        super::unload_model(&self.client, &self.base_url, &self.model).await
     }
 
     fn shares_engine(&self) -> bool {
@@ -218,6 +220,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct Fake {
         bodies: Arc<Mutex<Vec<serde_json::Value>>>,
+        unloads: Arc<Mutex<Vec<serde_json::Value>>>,
     }
 
     async fn server(status: StatusCode, reply: serde_json::Value) -> (String, Fake) {
@@ -237,6 +240,15 @@ mod tests {
                             f.bodies.lock().unwrap().push(body);
                             (status, axum::Json(reply))
                         }
+                    },
+                ),
+            )
+            .route(
+                "/v1/unload-model",
+                post(
+                    |State(f): State<Fake>, axum::Json(body): axum::Json<serde_json::Value>| async move {
+                        f.unloads.lock().unwrap().push(body.clone());
+                        axum::Json(serde_json::json!({"model": {"id": body["model"], "state": "unloaded"}}))
                     },
                 ),
             )
@@ -298,10 +310,23 @@ mod tests {
         );
     }
 
+    /// mlx-serve keeps a 3D model loaded after its job; `unload` frees the
+    /// run's model, also on the LLM's own server.
     #[tokio::test]
-    async fn it_shares_the_engine_only_when_told_and_unloads_nothing() {
-        let meshes = MeshApi::new("http://127.0.0.1:9/v1", "Idol", Duration::from_secs(1));
+    async fn unload_frees_the_run_s_model_on_the_server() {
+        let (url, fake) = server(StatusCode::OK, reply(GLB)).await;
+        let meshes =
+            MeshApi::new(&url, "TRELLIS.2", Duration::from_secs(10)).sharing_the_engine(true);
         meshes.unload().await.unwrap();
+        assert_eq!(
+            *fake.unloads.lock().unwrap(),
+            vec![serde_json::json!({"model": "TRELLIS.2"})]
+        );
+    }
+
+    #[test]
+    fn it_shares_the_engine_only_when_told() {
+        let meshes = MeshApi::new("http://127.0.0.1:9/v1", "Idol", Duration::from_secs(1));
         assert!(!meshes.shares_engine());
         assert!(meshes.sharing_the_engine(true).shares_engine());
     }

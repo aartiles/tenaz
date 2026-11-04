@@ -34,7 +34,14 @@ uses [Semantic Versioning](https://semver.org/).
   ACP agent (fx, OpenCode, Qwen Code) it now goes by the tool call's
   `kind` first (`read` or `edit`) and by the name only when the kind says
   nothing about files. See ADR 0021.
-
+- After a `generate_3d` or `--images` job, Tenaz frees the media model
+  through the server's `POST /v1/unload-model`, as for ComfyUI. mlx-serve
+  keeps a 3D or image model loaded after its job; in the first real 3D run
+  TRELLIS.2 stayed resident for hours next to the LLM and the Mac swapped.
+  This is done also when the server is the LLM's own. A server without
+  that route is left as it is. A failed media unload is journaled
+  (`media:<engine> failed unload: …`) and no longer fails the job, which has
+  already written its file.
 - An ACP agent's tool call is reported with the input it runs with.
   OpenCode and Qwen Code announce a call before its input is complete
   (`bash` with only its folder, a read with no file) and send the input
