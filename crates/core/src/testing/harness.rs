@@ -111,6 +111,10 @@ pub struct ScriptedHarness {
     pub outgrow_review: Option<String>,
     /// The first review of this task asks for changes with a MINOR finding.
     pub minor_review: Option<String>,
+    /// The first review of this task writes its verdict, then keeps
+    /// working until it is stopped at its turn budget. With
+    /// `rejected_review` on the same task, that verdict is CHANGES.
+    pub long_review: Option<String>,
     /// The builder of this task also writes an image, `assets/<task>.png`.
     pub image_task: Option<String>,
     /// The first attempt of this task deletes T001's check (any task but

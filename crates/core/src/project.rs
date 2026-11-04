@@ -478,13 +478,13 @@ pub fn verdict_in(text: &str) -> Option<Verdict> {
     text.lines().find_map(|line| {
         let plain: String = line.chars().filter(|c| *c != '*' && *c != '_').collect();
         let rest = plain.trim_start().strip_prefix("Verdict:")?.trim_start();
-        [("ACCEPT", Verdict::Accept), ("CHANGES", Verdict::Changes)]
+        [Verdict::Accept, Verdict::Changes]
             .into_iter()
-            .find(|(word, _)| {
+            .find(|verdict| {
+                let word = verdict.as_str();
                 rest.starts_with(word)
                     && !rest[word.len()..].starts_with(|c: char| c.is_alphanumeric())
             })
-            .map(|(_, verdict)| verdict)
     })
 }
 

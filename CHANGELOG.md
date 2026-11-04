@@ -26,6 +26,13 @@ uses [Semantic Versioning](https://semver.org/).
   like an image and is limited by `--media-timeout`. `tenaz doctor` has an
   optional `3d` line that offers a 3D model an engine lists. See ADR 0020.
 
+### Changed
+
+- A reviewer stopped (for example at its turn budget) after writing its
+  review now says so in the log, as in
+  `turn budget exceeded (38/25) after writing its review; its verdict (CHANGES) is used`.
+  Before, it read only as a failed session, though its verdict was taken.
+
 ### Fixed
 
 - The watchdog sees Qwen Code's reads and writes (`ReadFile`,

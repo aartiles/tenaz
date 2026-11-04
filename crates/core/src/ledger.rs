@@ -554,6 +554,17 @@ pub enum Verdict {
     Changes,
 }
 
+impl Verdict {
+    /// The word a reviewer writes for it, as journaled.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Accept => "ACCEPT",
+            Self::Changes => "CHANGES",
+        }
+    }
+}
+
 /// One line of `journal.jsonl`, tagged by `type`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[expect(
@@ -1055,5 +1066,15 @@ mod tests {
         let phase: Phase = serde_json::from_str("\"COMPLETE_WITH_GAPS\"").unwrap();
         assert_eq!(phase, Phase::CompleteWithGaps);
         assert!(!phase.is_running());
+    }
+
+    #[test]
+    fn a_verdict_is_journaled_as_the_word_a_reviewer_writes() {
+        for verdict in [Verdict::Accept, Verdict::Changes] {
+            assert_eq!(
+                serde_json::to_string(&verdict).unwrap(),
+                format!("\"{}\"", verdict.as_str())
+            );
+        }
     }
 }

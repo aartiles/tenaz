@@ -456,6 +456,43 @@ async fn a_reviewer_over_its_context_is_asked_for_its_verdict_not_notes() {
         assert!(line.contains("write your verdict file now"), "{line}");
         assert!(!line.contains("handoff notes"), "{line}");
     }
+    assert!(
+        !log.contains("after writing its review"),
+        "a reviewer stopped before its verdict is not said to have one:\n{log}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reviewer_stopped_after_its_verdict_says_the_verdict_is_used() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            long_review: Some("T002".into()),
+            rejected_review: Some("T002".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    let stopped = project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-reviewer-T002") => Some(s.clone()),
+            _ => None,
+        })
+        .expect("the review is journaled");
+    let why = stopped.abort_reason.expect("the reviewer was stopped");
+    assert!(why.contains("turn budget"), "{why}");
+    assert!(
+        log.contains(&format!(
+            "-reviewer-T002: {why} after writing its review; its verdict (CHANGES) is used"
+        )),
+        "{log}"
+    );
+    assert!(
+        log.contains("T002 done (2 attempts"),
+        "the builder was sent the review's findings:\n{log}"
+    );
 }
 
 #[tokio::test(start_paused = true)]
