@@ -431,6 +431,25 @@ impl Runner {
         }
     }
 
+    /// `--resume` on a blocked run: back to the phase it blocked in, and
+    /// give back what that phase may try only once.
+    fn unblock(&mut self) -> Result<(), RunError> {
+        self.ledger.phase = self.ledger.phase_before_block.take().unwrap_or(Phase::Loop);
+        self.ledger.blocked_reason = None;
+        // Whatever the block, the replan for no task ready may run once
+        // more: the cards may have been fixed, or a new Tenaz may route
+        // them. At worst a resume costs one replan.
+        self.ledger.stuck_replanned = false;
+        if self.ledger.phase == Phase::Bootstrap {
+            // A resumed bootstrap gets its attempts again.
+            self.ledger.bootstrap_attempts = 0;
+            self.ledger.bootstrap_tool_failures = 0;
+            self.ledger.bootstrap_uncounted = 0;
+        }
+        self.save()?;
+        Ok(())
+    }
+
     /// The whole run: preconditions, preflight, then the phases until the run
     /// ends, blocks or pauses.
     pub async fn run(&mut self, options: RunOptions) -> Result<(), RunError> {
@@ -454,15 +473,7 @@ impl Runner {
             )));
         }
         if self.ledger.phase == Phase::Blocked && options.resume {
-            self.ledger.phase = self.ledger.phase_before_block.take().unwrap_or(Phase::Loop);
-            self.ledger.blocked_reason = None;
-            if self.ledger.phase == Phase::Bootstrap {
-                // A resumed bootstrap gets its attempts again.
-                self.ledger.bootstrap_attempts = 0;
-                self.ledger.bootstrap_tool_failures = 0;
-                self.ledger.bootstrap_uncounted = 0;
-            }
-            self.save()?;
+            self.unblock()?;
         }
         self.refresh_templates(options.refresh_templates.as_ref())?;
         if options.runner_version != self.ledger.runner_version {

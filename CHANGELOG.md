@@ -48,6 +48,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `tenaz run --resume` on a run blocked with no task ready gets one
+  more replan. Before, the run had already used its one replan for
+  that, so it blocked again at once, and only an edit of
+  `.tenaz/run.json` let it go on.
 - A replan that sets a blocked task back to `todo` while no card still to
   build amends a check of its conflict gets one more prompt before it
   ends, once per session, saying that Tenaz will block the task again.

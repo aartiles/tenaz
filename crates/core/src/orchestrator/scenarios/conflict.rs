@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use super::{deps, fake_project, run};
+use super::{deps, fake_project, resume, run};
 use crate::ledger::{JournalRecord, Phase, TaskOutcome};
 use crate::project::Project;
 use crate::testing::{Routing, ScriptedConflict, ScriptedHarness, VirtualClock};
@@ -324,4 +324,37 @@ async fn a_conflict_with_the_task_s_own_check_does_not_stand() {
         builders.contains("Your .tenaz/conflicts/T003.md does not stand"),
         "{builders}"
     );
+}
+
+/// A run blocked with no task ready gets its replan again on `--resume`:
+/// here that replan, told its reopen would be undone, routes around it.
+#[tokio::test(start_paused = true)]
+async fn a_resumed_run_with_no_task_ready_replans_again() {
+    let work = tempfile::tempdir().unwrap();
+    let (project, vcs) = fake_project(work.path(), &["maxAttempts=3"]);
+    let clock = Arc::new(VirtualClock::new());
+    let harness = |routing| {
+        Arc::new(ScriptedHarness {
+            conflict: Some(ScriptedConflict {
+                task: "T003".into(),
+                check: "T001.exists".into(),
+                routing,
+            }),
+            ..Default::default()
+        })
+    };
+    let first = harness(Routing::ReopenWithoutAmend);
+    run(
+        &project,
+        deps(&project, vcs.clone(), first, clock.clone()),
+        CancellationToken::new(),
+    )
+    .await;
+    let blocked = project.load_ledger().unwrap();
+    assert_eq!(blocked.phase, Phase::Blocked);
+    assert!(blocked.stuck_replanned, "{:?}", blocked.blocked_reason);
+    let again = harness(Routing::ReopenWithoutAmendThenDrop);
+    resume(&project, deps(&project, vcs, again, clock)).await;
+    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    assert_eq!(status(&project, "T003"), "dropped", "{log}");
 }

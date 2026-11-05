@@ -322,8 +322,8 @@ interface the skill relies on:
 - `run` reads all of that from `run.json`. A launch flag given to `run`
   (`--comfyui`, `--engine-start`, ...) replaces the pinned value and is
   saved. `--resume` continues a blocked run after you have fixed what
-  blocked it. A second `run` on a project that is already running is
-  refused.
+  blocked it; a run blocked with no task ready gets a replan again. A
+  second `run` on a project that is already running is refused.
 - `status` reads files only and is safe while a run works.
 - `watch` follows the run as it works, session by session: with
   `--level summary` the run log only, with `actions` (the default) also each
