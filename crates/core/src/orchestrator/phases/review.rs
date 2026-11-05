@@ -139,6 +139,7 @@ impl Runner {
                     attempt: Some(input.attempt),
                     turns: Some(25),
                     context_tokens: None,
+                    replan_before: None,
                 },
             )
             .await?;

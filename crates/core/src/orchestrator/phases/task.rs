@@ -414,6 +414,7 @@ impl Runner {
             attempt: Some(attempt),
             turns: card.budget.turns,
             context_tokens: card.budget.tokens,
+            replan_before: None,
         };
         let result = self.session(Role::Builder, prompt, &ctx).await;
         if let Err(

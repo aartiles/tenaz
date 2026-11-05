@@ -48,6 +48,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A replan that sets a blocked task back to `todo` while no card still to
+  build amends a check of its conflict gets one more prompt before it
+  ends, once per session, saying that Tenaz will block the task again.
+  It may then add the `amends` or route around the task. Before, Tenaz set
+  the task back to `blocked` when the replan ended and said nothing, and
+  the run found no task ready and started another replan, or blocked.
+  The log says when Tenaz asks and when it blocks the task again (ADR
+  0018).
 - The watchdog sees Qwen Code's reads and writes (`ReadFile`,
   `WriteFile`, `Edit`), so it no longer stops a Qwen Code session that is
   reading new files as idle, and the journal counts its writes. For an

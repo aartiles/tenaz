@@ -355,7 +355,7 @@ impl Project {
     /// The conflicts that stand (`Conflict::stands_in`, ADR 0009 and 0018):
     /// the readable conflict file of each card of `backlog`, kept if it
     /// stands.
-    fn conflicts(&self, backlog: &Backlog) -> Vec<Conflict> {
+    pub(crate) fn conflicts(&self, backlog: &Backlog) -> Vec<Conflict> {
         backlog
             .cards()
             .filter_map(|card| {

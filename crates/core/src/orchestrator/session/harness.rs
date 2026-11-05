@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::backlog::Backlog;
 use crate::metrics::RequestRecord;
+use crate::orchestrator::phases::refused_reopens_of;
 use crate::orchestrator::{RunError, Runner};
 use crate::ports::{Clock, PermissionDecision, Session, SessionModel, SessionSpec};
 use crate::session::{SessionEvent, SessionMetrics};
@@ -45,6 +47,10 @@ pub(crate) struct HarnessRun<'a> {
     /// `./verify --task` runs no passing check of it gets one more prompt
     /// asking for them.
     pub own_checks: Option<&'a TaskId>,
+    /// A replan's backlog from before it: a session that answered every
+    /// prompt having set a blocked task back to `todo` that Tenaz would
+    /// block again gets one more prompt saying so (ADR 0018).
+    pub replan_before: Option<&'a Backlog>,
 }
 
 /// What the session loop does after an event or a wake-up.
@@ -70,6 +76,8 @@ struct SessionLoop<'a> {
     /// Sent so far.
     prompt_index: usize,
     own_checks: Option<&'a TaskId>,
+    /// Taken by the one prompt about refused reopens.
+    replan_before: Option<&'a Backlog>,
     session: Box<dyn Session>,
     watchdog: Watchdog,
     clock: Arc<dyn Clock>,
@@ -133,6 +141,7 @@ impl Runner {
             prompts: run.prompts,
             prompt_index: 0,
             own_checks: run.own_checks,
+            replan_before: run.replan_before,
             session,
             watchdog,
             clock,
@@ -190,6 +199,42 @@ impl SessionLoop<'_> {
             &no_own_checks(task, &own.summary),
             self.runner.params.verify_path(),
         ))
+    }
+
+    /// The prompt for a replan session that answered every prompt having
+    /// set a blocked task back to `todo` while no card still to build
+    /// amends a check of its conflict: Tenaz would block it again when the
+    /// session ends, and the run would find no task ready. Judged as Tenaz
+    /// judges it then (`refused_reopens_of`). `None` when it set none, or
+    /// after the first time in this session.
+    fn refused_reopens_prompt(&mut self) -> Option<String> {
+        let before = self.replan_before.take()?;
+        let project = &self.runner.project;
+        let after = project.load_backlog().backlog;
+        let refused: Vec<String> = refused_reopens_of(before, &after, |b| project.conflicts(b))
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        if refused.is_empty() {
+            return None;
+        }
+        let refused = refused.join(", ");
+        self.runner.log(&format!(
+            "  {}: {refused} set back to todo, but Tenaz would block each again; asking once more",
+            self.label
+        ));
+        Some(refused_reopens(&refused))
+    }
+
+    /// The one more prompt a session that answered every prompt gets, with
+    /// the watchdog's name for it: a builder's missing checks, or a
+    /// replan's refused reopens. A session has at most one of the two.
+    async fn follow_up(&mut self) -> Option<(&'static str, String)> {
+        if let Some(message) = self.own_checks_prompt().await {
+            return Some(("own-checks", message));
+        }
+        self.refused_reopens_prompt()
+            .map(|message| ("refused-reopens", message))
     }
 
     /// Sends the first prompt, then handles events until the session is
@@ -328,13 +373,11 @@ impl SessionLoop<'_> {
             self.prompt_index += 1;
             return Ok(Flow::Go);
         }
-        let Some(message) = self.own_checks_prompt().await else {
+        let Some((kind, message)) = self.follow_up().await else {
             return Ok(Flow::Stop);
         };
-        self.watchdog.note(
-            "own-checks",
-            self.clock.monotonic_ms().saturating_sub(self.started),
-        );
+        self.watchdog
+            .note(kind, self.clock.monotonic_ms().saturating_sub(self.started));
         self.send(&message).await?;
         Ok(Flow::Go)
     }
@@ -421,6 +464,18 @@ fn explain_early_end(metrics: &mut SessionMetrics, code: Option<i32>, stderr_log
 fn no_own_checks(task: &TaskId, summary: &str) -> String {
     format!(
         "[orchestrator] `./verify --task {task}` runs no passing check with ID prefix `{task}.`, so this attempt fails however the rest went. Add the card's acceptance checks to `verify` with IDs `{task}.<name>`, run `./verify --task {task}` until they pass, then stop.\n\n{summary}"
+    )
+}
+
+/// What the prompt about refused reopens says first; the scripted harness
+/// knows it by this.
+pub(crate) const REFUSED_REOPENS: &str = "when this session ends Tenaz blocks each again";
+
+/// The prompt for a replan session that set the blocked tasks `refused`
+/// back to `todo` with no amend to wait for.
+fn refused_reopens(refused: &str) -> String {
+    format!(
+        "[orchestrator] You set {refused} back to `todo`, but {REFUSED_REOPENS}: a blocked task goes back to `todo` only while another card still to build lists in `amends` a check named in the task's `.tenaz/conflicts/<ID>.md`, and one with no such file cannot go back at all. For each, either add those checks to the `amends` of the card that changes what they test, or route around it: set it to `status: dropped` and give its work to new cards. Then stop."
     )
 }
 

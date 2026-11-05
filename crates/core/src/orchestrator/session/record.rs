@@ -53,6 +53,7 @@ impl Runner {
                     .task
                     .as_ref()
                     .filter(|_| started.role == Role::Builder),
+                replan_before: started.ctx.replan_before.as_ref(),
             })
             .await?;
         let left = self.after_harness(&started, requests).await?;

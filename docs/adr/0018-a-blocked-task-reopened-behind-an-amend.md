@@ -88,7 +88,17 @@ keep: an amending card the planner wrote as `done` is `todo` by then.
 - A task reopened when no card still to build amends its checks is set
   back to `blocked`, as any status a planner may not set is. So a task
   whose new attempt declares the same conflict again cannot be reopened
-  over and over without a new amending card.
+  over and over without a new amending card. The replan is told before
+  it ends: a replan session that answered every prompt having reopened
+  such a task gets one more prompt, once per session, which asks it to
+  add the `amends` or route around the task. It is judged as the end of
+  the replan judges it, with the other statuses put right. A session the
+  watchdog stops is not asked; a continuation or retry of the replan is
+  asked again.
+- Why the prompt: a replan of the articulated-cabinet run (2026-11-05)
+  reopened a task behind a card that fixed the geometry but named no
+  `amends`. Tenaz blocked the task again in silence, and the run found
+  no task ready and blocked.
 - A conflict that names two checks stands behind a card that amends only
   one of them. The reopened task may then meet the other and declare the
   conflict again; the next replan sees it.

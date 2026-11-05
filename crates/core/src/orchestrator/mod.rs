@@ -24,6 +24,7 @@ pub use init::{InitOptions, Templates, init};
 pub(crate) use phases::CONFLICTS_TITLE;
 pub use preflight::TOOL_PROBE_FILE;
 pub use sampler::Sampler;
+pub(crate) use session::REFUSED_REOPENS;
 pub use status::{TOOL_REPAIRS, status_json, status_text};
 
 use crate::lease::LeaseError;

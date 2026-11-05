@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use crate::backlog::Backlog;
 use crate::briefing::without_map;
 use crate::lease::{LeaseError, LeaseManager};
 use crate::ledger::{JournalRecord, SessionRecord};
@@ -22,14 +23,14 @@ mod reasons;
 mod record;
 mod requests;
 
-pub(crate) use harness::HarnessRun;
+pub(crate) use harness::{HarnessRun, REFUSED_REOPENS};
 use reasons::{PromptLimit, give_up_reason, retry_notice, retry_reason};
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
 const CRITICAL_PRESSURE: u32 = 4;
 
 /// What a session is about.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SessionCtx {
     pub task: Option<TaskId>,
     pub attempt: Option<u32>,
@@ -37,6 +38,11 @@ pub(crate) struct SessionCtx {
     pub turns: Option<u32>,
     /// A card's token budget; the run's default otherwise.
     pub context_tokens: Option<u64>,
+    /// A replan's backlog from before it. A blocked task it sets back to
+    /// `todo` that Tenaz would block again is pointed out before the
+    /// session ends, once per harness session: a continuation or a retry
+    /// of the replan is asked again.
+    pub replan_before: Option<Backlog>,
 }
 
 /// A finished session: its journal record plus the raw metrics.

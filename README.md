@@ -63,6 +63,8 @@ without changing a check of a done task says so in
 may add a card that amends those checks, judged against the spec (ADR
 0009). The replan may also set the blocked task back to `todo`: it waits
 until that card is built, then starts again with no attempts (ADR 0018).
+A replan that reopens it with no such card is told, before it ends, that
+Tenaz will block it again.
 Work too heavy for a session, such as a long render, is declared
 by the builder in `.tenaz/jobs/<TASK>.json`; Tenaz runs it between
 sessions, with the engine's memory freed where it can, for at most

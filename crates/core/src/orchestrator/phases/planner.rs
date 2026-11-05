@@ -51,6 +51,7 @@ impl Runner {
             &prompt,
             &SessionCtx {
                 task: task.map(|t| t.id.clone()),
+                replan_before: (role == Role::Replan).then(|| tasks.clone()),
                 ..Default::default()
             },
         )
@@ -154,22 +155,18 @@ impl Runner {
     }
 
     /// Puts right the statuses a `role` session left that it may not set,
-    /// against the backlog as it was `before` (`status_fix`). A replan's
-    /// reopens are judged last, against the statuses the others keep
-    /// (`reopen_fix`, ADR 0018).
+    /// against the backlog as it was `before` (`status_fixes`), and logs a
+    /// reopen that is undone.
     fn undo_status_changes(&self, role: Role, before: &Backlog) -> Result<(), RunError> {
         let after = self.project.load_backlog().backlog;
-        let (reopened, others): (Vec<&TaskCard>, Vec<&TaskCard>) = after
-            .cards()
-            .partition(|t| reopens(role, before.get(&t.id), t));
-        for t in others {
-            if let Some(fix) = status_fix(before.get(&t.id), t) {
-                self.apply(&t.id, fix)?;
+        for fix in status_fixes(role, before, &after, |b| self.project.conflicts(b)) {
+            if fix.refused_reopen() {
+                self.log(&format!(
+                    "  the {role} set {} back to todo, {UNDONE_REOPEN}",
+                    fix.id
+                ));
             }
-        }
-        let conflicts = self.project.load_backlog().conflicts;
-        for t in reopened {
-            self.apply(&t.id, reopen_fix(&t.id, &conflicts))?;
+            self.apply(&fix.id, fix.fix)?;
         }
         Ok(())
     }
@@ -341,6 +338,82 @@ fn accepted(role: Role, task: Option<TaskId>, added: Vec<TaskId>) -> JournalReco
     }
 }
 
+/// What the log says of a reopen Tenaz undoes.
+const UNDONE_REOPEN: &str =
+    "but no card still to build amends a check of a conflict it declared; it stays blocked";
+
+/// What Tenaz writes on one card a planner left.
+struct CardFix {
+    id: TaskId,
+    fix: StatusFix,
+    /// A replan set it from `blocked` back to `todo` (`reopens`).
+    reopen: bool,
+}
+
+impl CardFix {
+    /// A reopen Tenaz undoes.
+    fn refused_reopen(&self) -> bool {
+        self.reopen && self.fix == StatusFix::Restore(TaskStatus::Blocked)
+    }
+}
+
+/// What Tenaz writes on the cards a `role` session left, `after`, against
+/// the backlog as it was `before`: the statuses it may not set are put
+/// right (`status_fix`), then a replan's reopens are judged against the
+/// conflicts that stand with those statuses (`conflicts_of`, `reopen_fix`,
+/// ADR 0018).
+fn status_fixes(
+    role: Role,
+    before: &Backlog,
+    after: &Backlog,
+    conflicts_of: impl Fn(&Backlog) -> Vec<Conflict>,
+) -> Vec<CardFix> {
+    let reopen = |t: &TaskCard| reopens(role, before.get(&t.id), t);
+    let mut fixes: Vec<CardFix> = after
+        .cards()
+        .filter(|t| !reopen(t))
+        .filter_map(|t| {
+            let fix = status_fix(before.get(&t.id), t)?;
+            Some(CardFix {
+                id: t.id.clone(),
+                fix,
+                reopen: false,
+            })
+        })
+        .collect();
+    let put_right = Backlog::from_cards(after.cards().map(|t| {
+        let mut card = t.clone();
+        if let Some(f) = fixes.iter().find(|f| f.id == t.id) {
+            card.status = match f.fix {
+                StatusFix::Reset => TaskStatus::Todo,
+                StatusFix::Restore(old) => old,
+            };
+        }
+        card
+    }));
+    let conflicts = conflicts_of(&put_right);
+    fixes.extend(after.cards().filter(|t| reopen(t)).map(|t| CardFix {
+        id: t.id.clone(),
+        fix: reopen_fix(&t.id, &conflicts),
+        reopen: true,
+    }));
+    fixes
+}
+
+/// The blocked tasks of `before` that a replan, leaving `after`, set back
+/// to `todo` and that Tenaz blocks again when it ends (`status_fixes`).
+pub(crate) fn refused_reopens_of(
+    before: &Backlog,
+    after: &Backlog,
+    conflicts_of: impl Fn(&Backlog) -> Vec<Conflict>,
+) -> Vec<TaskId> {
+    status_fixes(Role::Replan, before, after, conflicts_of)
+        .into_iter()
+        .filter(CardFix::refused_reopen)
+        .map(|f| f.id)
+        .collect()
+}
+
 /// What Tenaz does to a card a planner left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StatusFix {
@@ -450,6 +523,56 @@ mod tests {
         let blocked_again = StatusFix::Restore(TaskStatus::Blocked);
         assert_eq!(reopen_fix(&id, &[conflict_of("T003")]), blocked_again);
         assert_eq!(reopen_fix(&id, &[]), blocked_again);
+    }
+
+    /// A reopen is refused unless a card still to build amends a check of
+    /// its conflict, judged once the statuses a planner may not set are put
+    /// right: an amending card written as `done` still counts. A task with
+    /// no conflict, or one not set back to `todo`, is not a refused reopen.
+    #[test]
+    fn a_reopen_is_refused_without_an_amend_still_to_build() {
+        let amending = |status: &str, check: &str| {
+            let text =
+                format!("---\nid: T005\ntitle: t\nstatus: {status}\namends: [{check}]\n---\n");
+            TaskCard::parse("T005.md", &text).unwrap()
+        };
+        let done = card("T001", "done");
+        let before = Backlog::from_cards([done.clone(), card("T002", "blocked")]);
+        let refused = |reopened: &str, amender: Option<TaskCard>, conflict: bool| {
+            let after = Backlog::from_cards(
+                [done.clone(), card("T002", reopened)]
+                    .into_iter()
+                    .chain(amender),
+            );
+            let conflicts = |b: &Backlog| {
+                [conflict_of("T002")]
+                    .into_iter()
+                    .filter(|c| conflict && c.stands_in(b))
+                    .collect()
+            };
+            refused_reopens_of(&before, &after, conflicts)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        let other = Some(amending("todo", "T001.other"));
+        assert_eq!(
+            refused("todo", other, true),
+            ["T002"],
+            "amends another check"
+        );
+        assert_eq!(refused("todo", None, false), ["T002"], "no conflict at all");
+        let runs = |status| Some(amending(status, "T001.runs"));
+        assert!(
+            refused("todo", runs("todo"), true).is_empty(),
+            "behind its amend"
+        );
+        assert!(
+            refused("todo", runs("done"), true).is_empty(),
+            "amend marked done"
+        );
+        assert!(refused("blocked", None, true).is_empty(), "left blocked");
+        assert!(refused("dropped", None, true).is_empty(), "dropped");
     }
 
     /// Only a replan reopens, and only from `blocked` to `todo`.

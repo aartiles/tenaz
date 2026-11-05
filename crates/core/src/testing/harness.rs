@@ -327,6 +327,9 @@ pub enum Routing {
     ReopenAmenderMarkedDone,
     /// Sets it back to `todo` and writes no `T005`.
     ReopenWithoutAmend,
+    /// As `ReopenWithoutAmend`, then drops it when told it would be
+    /// blocked again.
+    ReopenWithoutAmendThenDrop,
     /// Sets it to `done`, which a planner may not.
     MarkDone,
 }

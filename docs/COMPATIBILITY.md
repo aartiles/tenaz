@@ -133,7 +133,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   task back to `todo` behind the card that amends its conflict's check;
   Tenaz rejected it twice and the run ended BLOCKED. Tenaz now accepts
   that backlog. Tested with the scripted harness only, not yet in a run
-  with a real model.
+  with a real model. In the articulated-cabinet run with Qwen3.8-Flash-Next
+  (2026-11-05) a replan reopened a task with no amending card; Tenaz now
+  tells the replan before it ends. The prompt is tested with the
+  scripted harness only, not yet with a real model.
 - **A model per role** (`--model-for`, ADR 0011). fx is launched with each
   session's model: its `settings.json` is rewritten before the session
   starts. Run once with fx 0.0.15 and mlx-serve 26.10.3 holding two

@@ -280,6 +280,9 @@ impl Player {
             self.write_check(task).await;
             return self.finish("Added the check.");
         }
+        if prompt.contains(crate::orchestrator::REFUSED_REOPENS) {
+            return self.drop_refused_reopen().await;
+        }
         let Some(role) = field(prompt, "Role").map(str::to_owned) else {
             return self.preflight(prompt);
         };
