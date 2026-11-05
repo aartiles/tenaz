@@ -392,7 +392,10 @@ is over the budget of the role's model; see
 [ADR 0012](docs/adr/0012-prompts-that-fit-their-model.md). Tenaz
 does not set the sampling temperature, so each engine uses its own
 default; `--set temperature=0` pins it for the run (through the proxy),
-which makes runs on different engines comparable.
+which makes runs on different engines comparable. The proxy forwards only the
+last assistant message's reasoning, so the model's earlier
+reasoning does not fill its window; `--set keepPastReasoning=true` sends
+it all ([ADR 0023](docs/adr/0023-send-only-the-last-reasoning.md)).
 
 ### Pi instead of fx
 

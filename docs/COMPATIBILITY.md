@@ -118,6 +118,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **Earlier reasoning dropped by default** (ADR 0023). The proxy forwards
+  only the last assistant message's reasoning; `--set
+  keepPastReasoning=true` sends it all. Not yet seen in a real run, and
+  how much longer a session lasts with it is not measured.
 - **Qwen Code's compaction refused** (ADR 0022). The proxy knows Qwen
   Code's summarizing request by the opening of its prompt in 0.26.6. In
   the articulated-cabinet run (2026-11-03 and 04) it compacted 25 times

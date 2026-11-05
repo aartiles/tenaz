@@ -28,6 +28,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The engine proxy now forwards only the last assistant message's
+  reasoning: a harness that sends all of it back filled the window with
+  the model's earlier reasoning. `--set
+  keepPastReasoning=true` sends it all. See ADR 0023.
 - When an ACP agent reports an edit as a diff, Tenaz records the edited
   file's path as the call's result, not the agent's raw output. Qwen Code
   sends the whole file before and after each edit in the diff, so every edit to

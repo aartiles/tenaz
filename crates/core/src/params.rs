@@ -134,6 +134,9 @@ pub struct RunParams {
     /// JSON text where the tool's schema accepts only an object, and logs
     /// each repair in `.tenaz/private/tool-repairs.jsonl`.
     pub repair_tool_args: bool,
+    /// The engine proxy sends the reasoning of every earlier assistant
+    /// message. Off, it removes all but the last one's (ADR 0023).
+    pub keep_past_reasoning: bool,
     /// Run the coding agent and `verify` in an OS sandbox (Seatbelt on macOS,
     /// Landlock on Linux): they can write only to the project, its git
     /// directory, the temporary directories, on macOS the per-user cache,
@@ -202,6 +205,7 @@ impl Default for RunParams {
             temperature: None,
             agent_skills: false,
             repair_tool_args: true,
+            keep_past_reasoning: false,
             sandbox: false,
             sandbox_allow_write: "~/.cargo/registry,~/.cargo/git,~/.npm,~/.cache,~/Library/Caches"
                 .to_owned(),
