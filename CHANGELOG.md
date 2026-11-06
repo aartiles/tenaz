@@ -48,6 +48,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A session the engine held past a lowered context budget, with no
+  engine error, now raises the budget at once to the headroom share of its
+  peak (`capacityHeadroom`, 0.8 by default), and
+  lifts a ceiling under that. Before, sessions that needed more than the
+  cap were cut one after another while Tenaz waited for a raise, and a
+  run could block. See ADR 0026.
 - A request the engine refuses for what is in it (400, 413, 415 or 422,
   other than an image, a prompt too long or the engine's memory) is no
   longer retried as it was. A fresh session continues the work with a

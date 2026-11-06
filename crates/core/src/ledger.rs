@@ -631,6 +631,13 @@ pub enum JournalRecord {
         context_cap: Option<u64>,
         clean_sessions: u32,
     },
+    /// A session the engine held past the run's cap lifted it (ADR 0026).
+    ContextCapOverrun {
+        label: String,
+        context_peak: u64,
+        /// `None`: back to each model's configured budget.
+        context_cap: Option<u64>,
+    },
     EngineRetry {
         label: String,
         retry: u32,

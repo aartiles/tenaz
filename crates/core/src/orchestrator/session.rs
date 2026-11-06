@@ -345,9 +345,6 @@ impl Runner {
         let Some(cap) = self.ledger.context_cap else {
             return Ok(());
         };
-        if self.params.capacity_recover_sessions == 0 {
-            return Ok(());
-        }
         let label = session.label.as_str();
         if session
             .memory
@@ -356,6 +353,9 @@ impl Runner {
         {
             self.ledger.note_cap_pressed();
             return self.save();
+        }
+        if self.note_cap_overrun(session)? || self.params.capacity_recover_sessions == 0 {
+            return Ok(());
         }
         if session.context_budget < cap {
             return Ok(());
@@ -380,6 +380,35 @@ impl Runner {
             .map_or_else(String::new, |c| format!(", past the ceiling of {c}"));
         self.log(&format!("  {label}: {} sessions in a row without the engine running out of memory; context budget raised to {budget}{past}", raise.clean_sessions));
         Ok(())
+    }
+
+    /// Lifts the cap to the headroom share of a peak the engine held past
+    /// it (`Ledger::note_cap_overrun`, ADR 0026). True when it did: the
+    /// session did not test the new cap, so it does not count toward a raise.
+    fn note_cap_overrun(&mut self, session: &SessionRecord) -> Result<bool, RunError> {
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a context peak times a fraction is far below 2^53 and floors to a positive u64"
+        )]
+        let held = (session.context_peak as f64 * self.params.capacity_headroom).floor() as u64;
+        let Some(cap) = self.ledger.note_cap_overrun(held) else {
+            return Ok(false);
+        };
+        self.save()?;
+        let label = session.label.as_str();
+        self.journal(JournalRecord::ContextCapOverrun {
+            label: label.to_owned(),
+            context_peak: session.context_peak,
+            context_cap: cap,
+        });
+        let budget = cap.unwrap_or_else(|| self.ledger.largest_budget_tokens());
+        self.log(&format!(
+            "  {label}: the engine held {} tokens with no error; context budget raised to {budget}",
+            session.context_peak
+        ));
+        Ok(true)
     }
 
     /// Waits before rerunning a session the engine failed: the base backoff,
