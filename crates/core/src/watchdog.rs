@@ -7,7 +7,7 @@ use crate::params::RunParams;
 use crate::session::{
     HARNESS_COMPACTION, PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics,
     StopReason, ToolEffect, WatchdogEvent, capacity_limit, is_image_refusal, is_out_of_memory,
-    tool_effect,
+    is_request_refusal, tool_effect,
 };
 use crate::util::{approx_tokens, sha256_hex};
 use crate::write_scope::WriteScope;
@@ -607,6 +607,7 @@ impl Watchdog {
         } else {
             // A reply after the error: it no longer says how the session ends.
             self.metrics.engine_out_of_memory = false;
+            self.metrics.request_refusal = None;
         }
         self.context_rules(stop_reason, elapsed_ms, actions);
     }
@@ -623,6 +624,9 @@ impl Watchdog {
         if is_image_refusal(message) {
             self.metrics.image_refusal = Some(message.to_owned());
         }
+        // The last error says how the session ends, as for memory.
+        self.metrics.request_refusal =
+            (!is_image_refusal(message) && is_request_refusal(message)).then(|| message.to_owned());
         self.metrics.engine_out_of_memory = is_out_of_memory(message);
         if self.watch.is_some() && self.metrics.provider_errors >= self.params.provider_error_abort
         {
@@ -1116,6 +1120,26 @@ mod tests {
         assert!(m.engine_failed());
         assert_eq!(m.last_stop_reason, Some(StopReason::Error));
         assert!(!m.engine_out_of_memory);
+    }
+
+    /// A request refused for what was in it is recorded as such, apart
+    /// from an image refusal.
+    #[test]
+    fn a_refused_request_is_recorded() {
+        let mut w = watched();
+        let refusal = "400: messages[26]: video could not be decoded";
+        message(&mut w, 0, StopReason::Error, Some(refusal));
+        let m = w.metrics();
+        assert_eq!(m.request_refusal.as_deref(), Some(refusal));
+        assert!(m.image_refusal.is_none());
+        assert!(m.engine_failed());
+        // A reply after it: the harness got past the refused request.
+        message(&mut w, 0, StopReason::Stop, None);
+        assert!(w.metrics().request_refusal.is_none());
+        // Another error after it says how the session ends.
+        message(&mut w, 0, StopReason::Error, Some(refusal));
+        message(&mut w, 0, StopReason::Error, Some("503: busy"));
+        assert!(w.metrics().request_refusal.is_none());
     }
 
     /// Sushi's error when Metal cannot get the memory, often because a

@@ -281,6 +281,9 @@ pub struct SessionMetrics {
     pub capacity_limits: Vec<u64>,
     pub big_outputs: u32,
     pub image_refusal: Option<String>,
+    /// The engine refused a request for what was in it (`is_request_refusal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_refusal: Option<String>,
     /// The session's last engine error said the engine ran out of memory
     /// ([`is_out_of_memory`]), and no reply came after it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -433,6 +436,15 @@ static UNAVAILABLE: LazyLock<Regex> = LazyLock::new(|| {
     let unreachable = regex::escape(ENGINE_UNREACHABLE);
     Regex::new(&format!(r"^(?:50[234]\b|{unreachable})")).expect("static regex")
 });
+static REQUEST: LazyLock<Regex> = LazyLock::new(|| {
+    // As engine_error_text leads an error with its status.
+    Regex::new(r"^(?:400|413|415|422)\b").expect("static regex")
+});
+static TOO_LONG: LazyLock<Regex> = LazyLock::new(|| {
+    // A prompt over the model's window, as engines other than Sushi say it.
+    Regex::new(r"(?i)context (?:length|size|window)|too many tokens|maximum context")
+        .expect("static regex")
+});
 static IMAGE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)at most \d+ images|image tokens|\bimage \d+ |images need|does not decode")
         .expect("static regex")
@@ -482,6 +494,20 @@ pub fn engine_unreachable_text(error: impl std::fmt::Display) -> String {
 /// template that failed) may be about the request or the model.
 pub fn is_engine_unavailable(error: &str) -> bool {
     is_out_of_memory(error) || UNAVAILABLE.is_match(error)
+}
+
+/// The engine refused a request for what was in it (400, 413, 415 or
+/// 422). Not an image ([`is_image_refusal`]), a prompt too long
+/// ([`capacity_limit`] or an engine's "context length" wording), or an
+/// engine out of memory ([`is_engine_unavailable`]). The same request is
+/// refused again, and the agent sends it with every later turn, so the
+/// session cannot go on.
+pub fn is_request_refusal(error: &str) -> bool {
+    REQUEST.is_match(error)
+        && !is_image_refusal(error)
+        && capacity_limit(error).is_none()
+        && !TOO_LONG.is_match(error)
+        && !is_engine_unavailable(error)
 }
 
 /// A vision engine refused an image the session read.
@@ -751,6 +777,27 @@ mod tests {
         ] {
             assert!(!is_engine_unavailable(error), "{error}");
         }
+    }
+
+    #[test]
+    fn request_refusals_are_recognised() {
+        assert!(is_request_refusal(
+            "400: messages[26]: video could not be decoded"
+        ));
+        assert!(is_request_refusal("422: unknown content part type"));
+        assert!(is_request_refusal("413: payload too large"));
+        assert!(is_request_refusal("415: unsupported media type"));
+        assert!(!is_request_refusal(
+            "400: the request exceeds the available context size"
+        ));
+        assert!(!is_request_refusal(
+            "400: Maximum context at KV8 and prefill chunk 512: 61488 tokens."
+        ));
+        assert!(!is_request_refusal("400: at most 2 images"), "an image");
+        assert!(!is_request_refusal("503: busy"), "engine unavailable");
+        assert!(!is_request_refusal("400: not enough GPU memory"), "memory");
+        assert!(!is_request_refusal("500: template failed"));
+        assert!(!is_request_refusal("4000 tokens"));
     }
 
     #[test]

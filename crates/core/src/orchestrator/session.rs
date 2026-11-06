@@ -148,6 +148,14 @@ impl Runner {
                 });
                 "the engine refused an image the session read"
             }
+            Continuation::Refused(refusal) => {
+                self.journal(JournalRecord::RefusedContinuation {
+                    label: label.clone(),
+                    refusal: refusal.chars().take(300).collect(),
+                    continuation: count,
+                });
+                "the engine refused a request of the session"
+            }
             Continuation::Turns => {
                 self.journal(JournalRecord::TurnContinuation {
                     label: label.clone(),

@@ -48,6 +48,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A request the engine refuses for what is in it (400, 413, 415 or 422,
+  other than an image, a prompt too long or the engine's memory) is no
+  longer retried as it was. A fresh session continues the work with a
+  note that quotes the refusal and says to read that input another way;
+  the journal records it as `refused-continuation`. Before, Tenaz
+  retried the same session six times with growing waits and then
+  blocked the run as "engine unavailable"; it still does once the
+  session's continuations are spent (ADR 0025).
 - A video file an agent reads reaches the engine as a note saying to
   read it as frames. Before, Qwen Code sent the whole file, Sushi
   refused each request, and the run blocked as "engine unavailable"

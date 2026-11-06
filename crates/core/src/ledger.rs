@@ -524,6 +524,8 @@ pub struct SessionRecord {
     pub provider_errors: u32,
     pub capacity_limits: Vec<u64>,
     pub image_refusal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_refusal: Option<String>,
     pub big_outputs: u32,
     pub watchdog: Vec<WatchdogEvent>,
     pub reverted: Vec<String>,
@@ -599,6 +601,13 @@ pub enum JournalRecord {
         continuation: u32,
     },
     ImageContinuation {
+        label: String,
+        refusal: String,
+        continuation: u32,
+    },
+    /// The engine refused what a request of a session held; a fresh
+    /// session continues its work (ADR 0025).
+    RefusedContinuation {
         label: String,
         refusal: String,
         continuation: u32,

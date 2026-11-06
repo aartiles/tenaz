@@ -118,6 +118,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **A refused request continues in a fresh session.** A 400, 413, 415
+  or 422 from the engine, other than an image, a prompt too long or the
+  engine's memory, is journaled as `refused-continuation` and a fresh
+  session goes on with a note (ADR 0025). A refusal that the fresh
+  session meets again, such as a template or tool-schema error, uses up
+  the continuations and is then retried as an engine failure, as before. Tested with unit
+  tests only, not yet in a run.
 - **A video file sent as a note** (ADR 0024). Qwen Code 0.26.6 sends a
   video it read as a `data:video/mp4` part, which Sushi refuses; the
   proxy puts a note in its place. Tested with unit tests only, not yet

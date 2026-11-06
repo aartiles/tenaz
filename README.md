@@ -90,7 +90,10 @@ project's own tests.
 - **Engine failures are not task failures.** A crash, a refused connection or
   a smaller context than expected is retried with backoff without charging
   the task. A reply cut at the output limit is the session's: it counts as
-  an attempt, and the next session reasons at a lower effort.
+  an attempt, and the next session reasons at a lower effort. A request
+  the engine refuses for what is in it (a 400 for a file it cannot
+  decode) is not retried as it was: a fresh session goes on, told what
+  was refused, up to the session's continuations.
 - **Watchdogs.** Loops, repeated calls, idle turns and huge outputs get a
   steering message first (fx and Pi; OpenCode and Qwen Code get none),
   then the session is stopped. A file written outside the project is
