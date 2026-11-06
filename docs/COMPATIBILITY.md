@@ -123,31 +123,48 @@ above), so a 32k context is the practical floor (`contextFloor`).
   engine's memory, is journaled as `refused-continuation` and a fresh
   session goes on with a note (ADR 0025). A refusal that the fresh
   session meets again, such as a template or tool-schema error, uses up
-  the continuations and is then retried as an engine failure, as before. Tested with unit
-  tests only, not yet in a run.
+  the continuations and is then retried as an engine failure, as before.
+  Tested with unit tests only, not yet in a run.
 - **A video file sent as a note** (ADR 0024). Qwen Code 0.26.6 sends a
   video it read as a `data:video/mp4` part, which Sushi refuses; the
-  proxy puts a note in its place. Tested with unit tests only, not yet
-  in a run.
+  proxy puts a note in its place. Seen once in the articulated-cabinet
+  run with Qwen3.8-Flash-Next on Sushi (2026-11-06): the reviewer of
+  T014 read `outputs/motion.mp4`, got no 400, and finished in 20 turns,
+  where the seven before it had each got a 400 on that video. Other agents
+  and engines are not checked.
 - **Earlier reasoning dropped by default** (ADR 0023). The proxy forwards
   only the last assistant message's reasoning; `--set
-  keepPastReasoning=true` sends it all. Not yet seen in a real run, and
-  how much longer a session lasts with it is not measured.
+  keepPastReasoning=true` sends it all. In the articulated-cabinet run
+  with Qwen Code 0.26.6 and Qwen3.8-Flash-Next on Sushi (2026-11-05),
+  two builders of T027 peaked at 45k and 51k tokens after 32 and 24
+  turns, where most builders before it reached the 98k stop after 16 to
+  56 turns.
+  That is one task, not a measurement: how much longer a session lasts,
+  and whether the model redoes work it reasoned out before, is not
+  measured.
 - **Qwen Code's compaction refused** (ADR 0022). The proxy knows Qwen
   Code's summarizing request by the opening of its prompt in 0.26.6. In
   the articulated-cabinet run (2026-11-03 and 04) it compacted 25 times
-  before this, each wasted. Tested with a fake engine and the watchdog's
-  unit tests, not yet in a run; a new Qwen Code version must be checked
-  for that prompt.
+  before this, each wasted. Seen in the same run from 2026-11-04: the
+  proxy refused Qwen Code's request 60 times, and each builder went on
+  in a fresh session. A new Qwen Code version must be checked for
+  that prompt.
 - **A blocked task reopened behind an amend** (ADR 0018). In a run with
   Qwen Code 0.26.6 and Qwen3.8-27B (2026-11-03) a replan set a blocked
   task back to `todo` behind the card that amends its conflict's check;
   Tenaz rejected it twice and the run ended BLOCKED. Tenaz now accepts
   that backlog. Tested with the scripted harness only, not yet in a run
   with a real model. In the articulated-cabinet run with Qwen3.8-Flash-Next
-  (2026-11-05) a replan reopened a task with no amending card; Tenaz now
-  tells the replan before it ends. The prompt is tested with the
-  scripted harness only, not yet with a real model.
+  (2026-11-05) a replan reopened a task with no amending card, Tenaz
+  blocked it again in silence, and the run later blocked with no task
+  ready. Tenaz now tells the replan before it ends. Seen once:
+  after `tenaz run --resume`, the next replan was told, dropped the task
+  and gave its work to a new card, which was built in one attempt. The
+  replan itself ran out of turns; its cards were kept.
+- **`--resume` after no task was ready.** A run blocked with no task
+  ready gets one more replan on `--resume`. Tested with a
+  scripted-harness scenario, and seen once in that run (2026-11-05):
+  the replan ran, hit its turn budget, and the run went on.
 - **A model per role** (`--model-for`, ADR 0011). fx is launched with each
   session's model: its `settings.json` is rewritten before the session
   starts. Run once with fx 0.0.15 and mlx-serve 26.10.3 holding two
