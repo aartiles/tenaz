@@ -48,6 +48,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A video file an agent reads reaches the engine as a note saying to
+  read it as frames. Before, Qwen Code sent the whole file, Sushi
+  refused each request, and the run blocked as "engine unavailable"
+  (ADR 0024).
 - `tenaz run --resume` on a run blocked with no task ready gets one
   more replan. Before, the run had already used its one replan for
   that, so it blocked again at once, and only an edit of

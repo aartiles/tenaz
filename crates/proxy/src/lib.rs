@@ -7,6 +7,7 @@ mod events;
 mod repair;
 mod sse;
 mod tap;
+mod video;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -235,8 +236,9 @@ fn asks_to_compact(request: &serde_json::Value, opening: &str) -> bool {
 impl Proxy {
     /// Rewrites a completion request: the earlier reasoning dropped unless
     /// kept, the lowered `reasoning_effort` when the dial is turned, the
-    /// defaults for absent fields, and `stream_options.include_usage` on a
-    /// streaming request that lacks it. `None` when nothing changed.
+    /// defaults for absent fields, `stream_options.include_usage` on a
+    /// streaming request that lacks it, and a note in place of each video
+    /// file (`video`). `None` when nothing changed.
     fn rewrite_request(&self, body: &[u8]) -> Option<Vec<u8>> {
         let mut json: serde_json::Value = serde_json::from_slice(body).ok()?;
         let object = json.as_object_mut()?;
@@ -246,7 +248,8 @@ impl Proxy {
             .is_some_and(|effort| set_effort(object, effort));
         let filled = fill_defaults(object, &self.request_defaults);
         let usage = self.include_usage && ask_for_usage(object);
-        if ![dropped, lowered, filled, usage].contains(&true) {
+        let videos = video::replace_video_files(object);
+        if ![dropped, lowered, filled, usage, videos].contains(&true) {
             return None;
         }
         serde_json::to_vec(&json).ok()
@@ -560,6 +563,22 @@ mod tests {
         assert!(proxy.rewrite_request(b"not json").is_none());
         proxy.include_usage = false;
         assert!(proxy.rewrite_request(body).is_none());
+    }
+
+    /// A request whose only change is a video file is rewritten.
+    #[test]
+    fn a_request_with_only_a_video_file_is_rewritten() {
+        let body = serde_json::to_vec(
+            &serde_json::json!({"messages": [{"role": "user", "content": [
+                {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAA"}}
+            ]}]}),
+        )
+        .unwrap();
+        let rewritten = json(&proxy().rewrite_request(&body).unwrap());
+        assert_eq!(
+            rewritten["messages"][0]["content"][0]["text"],
+            video::VIDEO_NOTE
+        );
     }
 
     /// An agent's request between two tool calls: it ends with a tool

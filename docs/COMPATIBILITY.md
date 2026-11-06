@@ -118,6 +118,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **A video file sent as a note** (ADR 0024). Qwen Code 0.26.6 sends a
+  video it read as a `data:video/mp4` part, which Sushi refuses; the
+  proxy puts a note in its place. Tested with unit tests only, not yet
+  in a run.
 - **Earlier reasoning dropped by default** (ADR 0023). The proxy forwards
   only the last assistant message's reasoning; `--set
   keepPastReasoning=true` sends it all. Not yet seen in a real run, and

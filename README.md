@@ -398,6 +398,9 @@ which makes runs on different engines comparable. The proxy forwards only the
 last assistant message's reasoning, so the model's earlier
 reasoning does not fill its window; `--set keepPastReasoning=true` sends
 it all ([ADR 0023](docs/adr/0023-send-only-the-last-reasoning.md)).
+A video file the agent read reaches the engine as a note that says to
+read it as frames, since the local engines do not decode video files
+([ADR 0024](docs/adr/0024-a-note-in-place-of-a-video-file.md)).
 
 ### Pi instead of fx
 
