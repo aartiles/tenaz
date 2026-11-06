@@ -23,7 +23,9 @@ mod reasons;
 mod record;
 mod requests;
 
-pub(crate) use harness::{HarnessRun, REFUSED_REOPENS};
+pub(crate) use harness::HarnessRun;
+#[cfg(any(test, feature = "testing"))]
+pub(crate) use harness::REFUSED_REOPENS;
 use reasons::{PromptLimit, give_up_reason, retry_notice, retry_reason};
 
 /// macOS memory pressure level `critical`: no time to raise the budget.

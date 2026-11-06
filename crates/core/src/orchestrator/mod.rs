@@ -24,6 +24,8 @@ pub use init::{InitOptions, Templates, init};
 pub(crate) use phases::CONFLICTS_TITLE;
 pub use preflight::TOOL_PROBE_FILE;
 pub use sampler::Sampler;
+/// The scripted harness knows the prompt about refused reopens by it.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) use session::REFUSED_REOPENS;
 pub use status::{TOOL_REPAIRS, status_json, status_text};
 
