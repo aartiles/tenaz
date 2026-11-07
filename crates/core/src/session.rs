@@ -121,6 +121,13 @@ pub enum SessionEvent {
         sent: Option<RequestSettings>,
     },
     TurnEnd,
+    /// Text the agent sent for its last message after that message's model
+    /// request had ended (an ACP agent may send its message chunk after the
+    /// HTTP response). It follows the prompt's last `MessageEnd` and is kept
+    /// as a text of its own.
+    LateText {
+        text: String,
+    },
     CompactionStart {
         reason: String,
     },

@@ -270,11 +270,7 @@ impl Watchdog {
                 is_error,
             } => {
                 if *is_error {
-                    self.metrics.tool_errors += 1;
-                    if self.metrics.first_tool_error.is_none() {
-                        let shown: String = result_text.chars().take(200).collect();
-                        self.metrics.first_tool_error = Some(format!("{name}: {shown}"));
-                    }
+                    self.count_tool_error(name, result_text);
                 }
                 self.tool_end(id, name, result_text, elapsed_ms, &mut actions);
             }
@@ -297,6 +293,7 @@ impl Watchdog {
                 );
             }
             SessionEvent::TurnEnd => self.turn_end(elapsed_ms, fingerprint, &mut actions),
+            SessionEvent::LateText { text } => self.push_text(text),
             SessionEvent::CompactionStart { reason } => {
                 self.compaction_started(reason, elapsed_ms, &mut actions);
             }
@@ -566,6 +563,22 @@ impl Watchdog {
         }
     }
 
+    /// Counts a failed tool call, keeping the first one's start.
+    fn count_tool_error(&mut self, name: &str, result_text: &str) {
+        self.metrics.tool_errors += 1;
+        if self.metrics.first_tool_error.is_none() {
+            let shown: String = result_text.chars().take(200).collect();
+            self.metrics.first_tool_error = Some(format!("{name}: {shown}"));
+        }
+    }
+
+    /// Keeps what the agent said, when it said anything.
+    fn push_text(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.metrics.texts.push(text.to_owned());
+        }
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "each argument is a separate field of the harness's message-end event"
@@ -594,9 +607,7 @@ impl Watchdog {
         self.metrics.reasoning_chars += thinking_chars;
         self.metrics.context_peak = self.metrics.context_peak.max(usage.context());
         self.metrics.last_stop_reason = Some(stop_reason.clone());
-        if !text.is_empty() {
-            self.metrics.texts.push(text.to_owned());
-        }
+        self.push_text(text);
         self.metrics.assistant.push(crate::session::AssistantTurn {
             stop_reason: stop_reason.clone(),
             usage: *usage,
@@ -950,6 +961,21 @@ mod tests {
         assert!(w.metrics().context_stopped());
         assert_eq!(w.metrics().reasoning_chars, 28);
         assert_eq!(w.metrics().texts.len(), 4);
+    }
+
+    #[test]
+    fn late_text_is_kept_with_the_messages_text() {
+        let mut w = watched();
+        message(&mut w, 1_000, StopReason::Stop, None);
+        let late = SessionEvent::LateText {
+            text: "marmalade-4817".into(),
+        };
+        let empty = SessionEvent::LateText {
+            text: String::new(),
+        };
+        assert!(w.handle(&late, 6, String::new).is_empty());
+        assert!(w.handle(&empty, 7, String::new).is_empty());
+        assert_eq!(w.metrics().texts, ["hi", "marmalade-4817"]);
     }
 
     /// The context stop for a reply of 80,000 input and the helper's 10

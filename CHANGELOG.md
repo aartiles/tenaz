@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- An ACP agent's message text that arrives after its model request has
+  ended is kept (a `late_text` event in the journal) instead of dropped.
+  DeepSeek Harness sends its answer so: the preflight's tool probe failed
+  with `tools=false` though the model ran the tool and answered, and a
+  review answer would have been lost the same way.
+
 ## [0.5.0] - 2026-11-07
 
 ### Added
