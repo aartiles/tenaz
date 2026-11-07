@@ -417,7 +417,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   the ledger only. No run has yet held the ceiling for twice the wait and
   raised the budget past it, with an engine that held the raise or
   overflowed it.
-- **A peak the engine held raises the cap** (ADR 0026). Seen once, in the
+- **A peak the engine held raises the cap** (ADR 0026), journaled as
+  `context-cap-overrun`. Seen once, in the
   articulated-cabinet run resumed on 6 November: from 44942 the cap rose
   session by session to 82232 within a night, with no engine error. The
   first two replans after the resume were still cut. Only seen

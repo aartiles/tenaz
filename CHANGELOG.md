@@ -52,7 +52,7 @@ uses [Semantic Versioning](https://semver.org/).
 
 - A session the engine held past a lowered context budget, with no
   engine error, now raises the budget at once to the headroom share of its
-  peak (`capacityHeadroom`, 0.8 by default), and
+  peak (0.8 by default, the share a lowering uses), and
   lifts a ceiling under that. Before, sessions that needed more than the
   cap were cut one after another while Tenaz waited for a raise, and a
   run could block. See ADR 0026.
