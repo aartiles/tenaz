@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `--harness dsh` drives DeepSeek Harness over ACP (`dsh --profile acp`,
+  `--dsh-bin` names it), with `HOME` and `DSH_HOME` of its own under
+  `.tenaz/private/dsh-home` and a patch Tenaz writes for each session's
+  model that points it at the engine proxy. Not yet tried in a full run;
+  it does not ask before tool calls (see Known gaps).
+
 ### Fixed
 
 - An ACP agent's message text that arrives after its model request has

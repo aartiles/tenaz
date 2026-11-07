@@ -33,6 +33,8 @@ pub(crate) enum HarnessArg {
     OpenCode,
     /// Qwen Code over ACP.
     Qwen,
+    /// dsh over ACP, with a patch Tenaz writes for the run.
+    Dsh,
     /// The scripted fake harness: exercises the runner without a model.
     Fake,
 }
@@ -44,6 +46,7 @@ impl HarnessArg {
             Self::Pi => HarnessKind::Pi,
             Self::OpenCode => HarnessKind::OpenCode,
             Self::Qwen => HarnessKind::Qwen,
+            Self::Dsh => HarnessKind::Dsh,
             Self::Fake => HarnessKind::Fake,
         }
     }
@@ -58,6 +61,7 @@ impl From<HarnessKind> for HarnessArg {
             HarnessKind::Pi => Self::Pi,
             HarnessKind::OpenCode => Self::OpenCode,
             HarnessKind::Qwen => Self::Qwen,
+            HarnessKind::Dsh => Self::Dsh,
             HarnessKind::Fake => Self::Fake,
         }
     }
@@ -561,9 +565,11 @@ fn pin_harness(
         HarnessKind::Pi => {
             Listed::read(tenaz_pi::models::default_models_path().as_deref(), provider)?
         }
-        HarnessKind::Fx | HarnessKind::OpenCode | HarnessKind::Qwen | HarnessKind::Fake => {
-            Listed::default()
-        }
+        HarnessKind::Fx
+        | HarnessKind::OpenCode
+        | HarnessKind::Qwen
+        | HarnessKind::Dsh
+        | HarnessKind::Fake => Listed::default(),
     };
     Ok((version, listed))
 }
@@ -782,7 +788,7 @@ mod tests {
 
     #[test]
     fn the_harness_is_fx_unless_given_and_keeps_only_its_own_binary() {
-        const BINS: [&str; 8] = [
+        const BINS: [&str; 10] = [
             "--fx-bin",
             "/opt/fx",
             "--pi-bin",
@@ -791,6 +797,8 @@ mod tests {
             "/opt/opencode",
             "--qwen-bin",
             "/opt/qwen",
+            "--dsh-bin",
+            "/opt/dsh",
         ];
         let fx = plan(&with(&BINS), None);
         assert_eq!(
@@ -801,6 +809,7 @@ mod tests {
             ("pi", HarnessKind::Pi),
             ("opencode", HarnessKind::OpenCode),
             ("qwen", HarnessKind::Qwen),
+            ("dsh", HarnessKind::Dsh),
         ] {
             let line = with(&[&["--harness", name][..], &BINS].concat());
             let got = plan(&line, None);

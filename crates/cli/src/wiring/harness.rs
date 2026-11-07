@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use tenaz_acp::agent::{self, AgentProfile};
+use tenaz_acp::dsh::{DshAgent, DshLaunch, DshPatch};
 use tenaz_acp::fx::{self, FxAgent, FxLaunch, FxSettings};
 use tenaz_acp::opencode::{OpenCodeAgent, OpenCodeConfig, OpenCodeLaunch};
 use tenaz_acp::qwen::{QwenAgent, QwenLaunch, QwenSettings};
@@ -61,12 +62,12 @@ impl HarnessInputs<'_> {
     /// engine's observations, given `meta` in `session/new`, with its
     /// configuration written for the run's model (a home that cannot be
     /// written stops the run here, not in its first session), then the
-    /// pinned skills linked into `skills_dir`.
+    /// pinned skills linked into `skills_dir`, for an agent that has one.
     fn acp_agent(
         &self,
         agent: Arc<dyn AgentProfile>,
         meta: Option<serde_json::Map<String, serde_json::Value>>,
-        skills_dir: &Path,
+        skills_dir: Option<&Path>,
     ) -> anyhow::Result<Arc<dyn Harness>> {
         let mut acp: AcpHarness =
             agent::harness(agent.clone(), self.config.harness_version.clone())
@@ -75,7 +76,13 @@ impl HarnessInputs<'_> {
             acp = acp.with_session_meta(meta);
         }
         let configured = agent::configured(agent, acp, &self.config.run_model())?;
-        link_skills(self.project, skills_dir, self.skills)?;
+        match skills_dir {
+            Some(dir) => link_skills(self.project, dir, self.skills)?,
+            None if !self.skills.is_empty() => {
+                tracing::warn!("{} is not given the pinned skills", self.config.harness);
+            }
+            None => {}
+        }
         Ok(Arc::new(configured))
     }
 }
@@ -95,6 +102,7 @@ pub(super) fn build_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dy
         HarnessKind::Fx => fx_harness(inputs),
         HarnessKind::OpenCode => opencode_harness(inputs),
         HarnessKind::Qwen => qwen_harness(inputs),
+        HarnessKind::Dsh => dsh_harness(inputs),
     }
 }
 
@@ -173,7 +181,7 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     inputs.acp_agent(
         Arc::new(FxAgent { launch, settings }),
         meta,
-        &home.join(".agents/skills"),
+        Some(&home.join(".agents/skills")),
     )
 }
 
@@ -203,7 +211,7 @@ fn opencode_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harnes
         }),
         None,
         // OpenCode finds skills in `.agents/skills` of its home, as fx does.
-        &home.join(".agents/skills"),
+        Some(&home.join(".agents/skills")),
     )
 }
 
@@ -220,8 +228,30 @@ fn qwen_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> 
     inputs.acp_agent(
         Arc::new(QwenAgent { launch, settings }),
         None,
-        &home.join(".qwen/skills"),
+        Some(&home.join(".qwen/skills")),
     )
+}
+
+/// `DeepSeek` Harness with its patch and its own `DSH_HOME` in
+/// `.tenaz/private/dsh-home`. It is given neither the media MCP server nor
+/// the pinned skills yet (see Known gaps in docs/COMPATIBILITY.md).
+fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
+    let config = inputs.config;
+    let home = inputs.home("dsh-home");
+    let patch = DshPatch {
+        base_url: inputs.base_url.clone(),
+        model: config.id.clone(),
+        context_window: config.context_window,
+        max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
+        supports_images: config.supports_images(),
+        effort: tenaz_acp::dsh::effort(config.thinking.as_deref()).map(str::to_owned),
+    };
+    if !inputs.mcp_endpoints.is_empty() {
+        tracing::warn!("dsh is not given the media tools");
+    }
+    let mut launch = DshLaunch::new(&inputs.options.bin, &home);
+    launch.wrapper = inputs.wrapper.to_vec();
+    inputs.acp_agent(Arc::new(DshAgent { launch, patch }), None, None)
 }
 
 /// The provider name the harness's configuration uses.
@@ -400,6 +430,28 @@ mod tests {
             65_536
         );
         assert!(home.join(".qwen/skills/rust").is_symlink());
+    }
+
+    #[test]
+    fn dsh_is_set_up_in_its_home_before_its_first_session() {
+        let dir = tempfile::tempdir().unwrap();
+        build(dir.path(), HarnessKind::Dsh, &[]).unwrap();
+        let home = Project::new(dir.path()).private_dir().join("dsh-home");
+        let patch = json(&home.join(".dsh/tenaz-patch.yml"));
+        let entry = |id: &str| {
+            patch
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["id"] == id)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(entry("acp")["config"]["model"], "m");
+        assert_eq!(
+            entry("llm-pi-ai")["config"]["providers"]["tenaz"]["baseURL"],
+            "http://127.0.0.1:4001/v1"
+        );
     }
 
     #[test]

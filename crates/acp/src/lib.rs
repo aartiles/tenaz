@@ -1,9 +1,11 @@
-//! The ACP harness adapter: runs an ACP agent (fx, `OpenCode` or Qwen Code)
-//! as a subprocess and turns its session updates into the runner's session
-//! events. Token usage per request comes from the engine proxy when one is
-//! wired in, because ACP reports usage only once per turn.
+//! The ACP harness adapter: runs an ACP agent (fx, `OpenCode`, Qwen Code
+//! or `dsh`) as a subprocess and turns its session updates into the
+//! runner's session events. Token usage per request comes from the engine
+//! proxy when one is wired in, because ACP reports usage only once per
+//! turn.
 
 pub mod agent;
+pub mod dsh;
 pub mod fx;
 pub mod opencode;
 pub mod qwen;

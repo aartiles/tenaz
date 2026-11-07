@@ -132,8 +132,9 @@ project's own tests.
 - macOS on Apple silicon or Linux x86_64, and `git`.
 - **A coding agent** Tenaz can drive: [fx](https://github.com/vercel-labs/fx)
   or [Pi](https://github.com/earendil-works/pi), or, newer to Tenaz,
-  [OpenCode](https://opencode.ai) or
-  [Qwen Code](https://github.com/QwenLM/qwen-code).
+  [OpenCode](https://opencode.ai),
+  [Qwen Code](https://github.com/QwenLM/qwen-code) or DeepSeek Harness
+  (`dsh`).
 - **An OpenAI-compatible engine** serving a model with tool calling:
   llama.cpp's `llama-server`, LM Studio, Ollama, vLLM, MLX's
   `mlx_lm.server`, TensorFold, Sushi or similar. A context window of 32k
@@ -427,6 +428,20 @@ a watchdog stops the session without one. On its first run OpenCode
 installs its plugin package (about 60 MB) into that `HOME`, from npm's
 cache when it is there. Each has been tried in one real run, much less
 than fx and Pi; see [Compatibility](docs/COMPATIBILITY.md).
+
+### DeepSeek Harness
+
+`--harness dsh` drives DeepSeek Harness (`@deepseek-ai/dsh`) over ACP
+(`dsh --profile acp`); `--dsh-bin` names its executable, for example
+`~/.local/dsh/node_modules/.bin/dsh`. The wizard and `tenaz doctor` do not look for it, since
+another program is called `dsh` too. It runs with `HOME` and `DSH_HOME`
+under `.tenaz/private/dsh-home`, and Tenaz writes a patch there for each
+session's model that points dsh's `acp` profile at the engine proxy
+instead of DeepSeek's own service. dsh does not ask before its tool
+calls, and the media tools and pinned skills are not offered to it yet.
+The thinking level maps to its reasoning effort (`high` is its `xhigh`).
+It has not finished a full run with Tenaz; see
+[Compatibility](docs/COMPATIBILITY.md).
 
 ### Images
 

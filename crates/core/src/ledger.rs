@@ -117,12 +117,16 @@ pub enum HarnessKind {
     OpenCode,
     /// Qwen Code over ACP.
     Qwen,
+    /// `DeepSeek` Harness (`dsh`) over ACP.
+    Dsh,
     /// The scripted harness, which needs no agent and no engine.
     Fake,
 }
 
 impl HarnessKind {
     /// The real coding agents, in the order the setup wizard offers them.
+    /// Not dsh: another program is called `dsh` too (a distributed shell),
+    /// so a `dsh` on PATH is not taken for it.
     pub const AGENTS: [Self; 4] = [Self::Fx, Self::Pi, Self::OpenCode, Self::Qwen];
 
     pub fn as_str(self) -> &'static str {
@@ -131,6 +135,7 @@ impl HarnessKind {
             Self::Pi => "pi",
             Self::OpenCode => "opencode",
             Self::Qwen => "qwen",
+            Self::Dsh => "dsh",
             Self::Fake => "fake",
         }
     }
