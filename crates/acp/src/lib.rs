@@ -3,6 +3,7 @@
 //! events. Token usage per request comes from the engine proxy when one is
 //! wired in, because ACP reports usage only once per turn.
 
+pub mod agent;
 pub mod fx;
 pub mod opencode;
 pub mod qwen;

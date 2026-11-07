@@ -3,13 +3,12 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tenaz_core::ledger::HarnessKind;
-use tenaz_core::ports::{HarnessInfo, SessionModel};
-use tenaz_core::util::wrap_command;
+use tenaz_core::ports::{SessionModel, SessionSpec};
 
-use crate::{AcpHarness, ConfiguredHarness, ProfileMcpServer, write_json};
+use crate::agent::AgentProfile;
+use crate::{ProfileMcpServer, write_json};
 
 /// What Tenaz writes into `OpenCode`'s configuration: one OpenAI-compatible
 /// provider (the engine proxy) with the session's model, and permissions
@@ -162,40 +161,43 @@ impl OpenCodeLaunch {
         }
         env
     }
+}
 
-    /// `opencode acp`, through the wrapper when there is one.
-    pub fn command(&self) -> (PathBuf, Vec<String>) {
-        wrap_command(&self.wrapper, &self.binary, vec!["acp".to_owned()])
+/// `OpenCode` as an [`AgentProfile`]: `opencode acp` with its configuration
+/// written for each session's model.
+#[derive(Clone, Debug)]
+pub struct OpenCodeAgent {
+    pub launch: OpenCodeLaunch,
+    pub config: OpenCodeConfig,
+}
+
+impl AgentProfile for OpenCodeAgent {
+    fn kind(&self) -> HarnessKind {
+        HarnessKind::OpenCode
     }
 
-    /// The agent: [`command`](Self::command) with [`env`](Self::env).
-    /// [`configured`](Self::configured) writes its configuration for each
-    /// session's model.
-    pub fn harness(&self, version: String) -> AcpHarness {
-        let info = HarnessInfo {
-            name: HarnessKind::OpenCode.as_str().to_owned(),
-            version,
-        };
-        let (command, args) = self.command();
-        AcpHarness::subprocess(info, command, args, self.env())
+    fn config_name(&self) -> &'static str {
+        "the OpenCode configuration"
     }
 
-    /// `acp` with `config` written in [`home`](Self::home) for each
-    /// session's model before `OpenCode` starts, and now for the run's
-    /// `first`.
-    pub fn configured(
-        &self,
-        acp: AcpHarness,
-        config: OpenCodeConfig,
-        first: &SessionModel,
-    ) -> io::Result<ConfiguredHarness> {
-        let home = self.home.clone();
-        ConfiguredHarness::new(
-            acp,
-            "the OpenCode configuration",
-            Arc::new(move |model| write_config(&home, &config.for_model(model))),
-            first,
-        )
+    fn program(&self) -> &Path {
+        &self.launch.binary
+    }
+
+    fn args(&self, _spec: &SessionSpec) -> Vec<String> {
+        vec!["acp".to_owned()]
+    }
+
+    fn env(&self) -> Vec<(String, String)> {
+        self.launch.env()
+    }
+
+    fn wrapper(&self) -> &[String] {
+        &self.launch.wrapper
+    }
+
+    fn write_config(&self, model: &SessionModel) -> io::Result<()> {
+        write_config(&self.launch.home, &self.config.for_model(model))
     }
 }
 
@@ -341,20 +343,30 @@ mod tests {
         assert_eq!(env(&launch)["npm_config_cache"], "/Users/me/.npm");
     }
 
+    fn spec(label: &str) -> SessionSpec {
+        SessionSpec {
+            label: label.into(),
+            cwd: "/work".into(),
+            persist_dir: None,
+            raw_log: None,
+            thinking_log: None,
+            stderr_log: None,
+            model: SessionModel {
+                name: "p/m".into(),
+                id: "m".into(),
+                context_window: 65536,
+                supports_images: false,
+            },
+        }
+    }
+
     #[test]
-    fn opencode_is_started_through_the_sandbox_launcher() {
-        let mut launch = OpenCodeLaunch::new("/opt/opencode", "/run/home");
-        assert_eq!(
-            launch.command(),
-            ("/opt/opencode".into(), vec!["acp".to_owned()])
-        );
-        launch.wrapper = vec!["/sbx".into(), "--".into()];
-        assert_eq!(
-            launch.command(),
-            (
-                "/sbx".into(),
-                vec!["--".to_owned(), "/opt/opencode".into(), "acp".into()]
-            )
-        );
+    fn opencode_starts_in_acp_mode() {
+        let agent = OpenCodeAgent {
+            launch: OpenCodeLaunch::new("/opt/opencode", "/run/home"),
+            config: config(),
+        };
+        assert_eq!(agent.program(), Path::new("/opt/opencode"));
+        assert_eq!(agent.args(&spec("001-bootstrap")), ["acp"]);
     }
 }

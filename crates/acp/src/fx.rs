@@ -3,14 +3,13 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tenaz_core::ledger::HarnessKind;
-use tenaz_core::ports::{HarnessInfo, SessionModel};
-use tenaz_core::util::wrap_command;
+use tenaz_core::ports::{SessionModel, SessionSpec};
 
-use crate::{AcpHarness, ConfiguredHarness, ProfileMcpServer, write_json};
+use crate::agent::AgentProfile;
+use crate::{ProfileMcpServer, write_json};
 
 /// `~/.fx/settings.json` as the spike used it: one OpenAI-compatible provider
 /// (the engine proxy) with the model's metadata, and `ask` permissions so
@@ -154,23 +153,6 @@ pub fn normalize_line(line: &str) -> std::borrow::Cow<'_, str> {
 }
 
 impl FxLaunch {
-    /// `acp` with its settings written in [`home`](Self::home) for each
-    /// session's model before fx starts, and now for the run's `first`.
-    pub fn configured(
-        &self,
-        acp: AcpHarness,
-        settings: FxSettings,
-        first: &SessionModel,
-    ) -> io::Result<ConfiguredHarness> {
-        let home = self.home.clone();
-        ConfiguredHarness::new(
-            acp,
-            "the fx profile",
-            Arc::new(move |model| write_settings(&home, &settings.for_model(model))),
-            first,
-        )
-    }
-
     pub fn new(binary: impl Into<PathBuf>, home: impl Into<PathBuf>) -> Self {
         Self {
             binary: binary.into(),
@@ -200,46 +182,65 @@ impl FxLaunch {
         }
         args
     }
+}
 
-    /// The harness: fx as a subprocess with `HOME` set to the profile and
-    /// its upgrade check off (no network beyond the engine). With a `shim`
-    /// (a program that runs `shim fx-shim <fx> <args>` and passes fx's
-    /// stdout through [`normalize_line`]), fx is started through it.
-    pub fn harness(&self, version: String) -> AcpHarness {
-        let info = HarnessInfo {
-            name: HarnessKind::Fx.as_str().to_owned(),
-            version,
-        };
-        let launch = self.clone();
-        let program = self.shim.clone().unwrap_or_else(|| self.binary.clone());
-        let (command, _) = wrap_command(&self.wrapper, &program, Vec::new());
-        AcpHarness::subprocess_with(
-            info,
-            command,
-            std::sync::Arc::new(move |spec| {
-                let args = launch.command_args(&spec.label);
-                let args = match &launch.shim {
-                    Some(_) => [
-                        vec![SHIM_COMMAND.to_owned(), launch.binary.display().to_string()],
-                        args,
-                    ]
-                    .concat(),
-                    None => args,
-                };
-                wrap_command(&launch.wrapper, &program, args).1
-            }),
-            vec![
-                ("HOME".to_owned(), self.home.display().to_string()),
-                ("FX_AUTO_UPGRADE".to_owned(), "0".to_owned()),
-            ],
-        )
+/// fx as an [`AgentProfile`]: its profile written for each session's model,
+/// `HOME` set to the profile and its upgrade check off (no network beyond
+/// the engine). With a `shim` (a program that runs `shim fx-shim <fx>
+/// <args>` and passes fx's stdout through [`normalize_line`]), fx is
+/// started through it.
+#[derive(Clone, Debug)]
+pub struct FxAgent {
+    pub launch: FxLaunch,
+    pub settings: FxSettings,
+}
+
+impl AgentProfile for FxAgent {
+    fn kind(&self) -> HarnessKind {
+        HarnessKind::Fx
+    }
+
+    fn config_name(&self) -> &'static str {
+        "the fx profile"
+    }
+
+    fn program(&self) -> &Path {
+        self.launch.shim.as_deref().unwrap_or(&self.launch.binary)
+    }
+
+    fn args(&self, spec: &SessionSpec) -> Vec<String> {
+        let args = self.launch.command_args(&spec.label);
+        match &self.launch.shim {
+            Some(_) => [
+                vec![
+                    SHIM_COMMAND.to_owned(),
+                    self.launch.binary.display().to_string(),
+                ],
+                args,
+            ]
+            .concat(),
+            None => args,
+        }
+    }
+
+    fn env(&self) -> Vec<(String, String)> {
+        vec![
+            ("HOME".to_owned(), self.launch.home.display().to_string()),
+            ("FX_AUTO_UPGRADE".to_owned(), "0".to_owned()),
+        ]
+    }
+
+    fn wrapper(&self) -> &[String] {
+        &self.launch.wrapper
+    }
+
+    fn write_config(&self, model: &SessionModel) -> io::Result<()> {
+        write_settings(&self.launch.home, &self.settings.for_model(model))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use tenaz_core::ports::Harness as _;
-
     use super::*;
 
     #[test]
@@ -339,6 +340,48 @@ mod tests {
                 && args[2].ends_with("rel/004-builder-T002.fx-acp.log"),
             "{args:?}"
         );
-        assert_eq!(launch.harness("0.0.14".into()).info().version, "0.0.14");
+    }
+
+    fn spec(label: &str) -> SessionSpec {
+        SessionSpec {
+            label: label.into(),
+            cwd: "/work".into(),
+            persist_dir: None,
+            raw_log: None,
+            thinking_log: None,
+            stderr_log: None,
+            model: SessionModel {
+                name: "p/m".into(),
+                id: "m".into(),
+                context_window: 65536,
+                supports_images: false,
+            },
+        }
+    }
+
+    #[test]
+    fn fx_starts_through_the_shim_when_there_is_one() {
+        let mut agent = FxAgent {
+            launch: FxLaunch::new("/opt/fx", "/run/home"),
+            settings: FxSettings {
+                provider: "p".into(),
+                base_url: "http://127.0.0.1:1/v1".into(),
+                model: "m".into(),
+                context_window: 65536,
+                max_output_tokens: 16384,
+                supports_vision: false,
+                permission_mode: "ask".into(),
+                effort: None,
+                skill_catalog: false,
+            },
+        };
+        assert_eq!(agent.program(), Path::new("/opt/fx"));
+        assert_eq!(agent.args(&spec("001-bootstrap")), ["acp"]);
+        agent.launch.shim = Some("/opt/tenaz".into());
+        assert_eq!(agent.program(), Path::new("/opt/tenaz"));
+        assert_eq!(
+            agent.args(&spec("001-bootstrap")),
+            [SHIM_COMMAND, "/opt/fx", "acp"]
+        );
     }
 }

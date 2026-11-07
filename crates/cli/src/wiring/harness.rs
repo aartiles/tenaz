@@ -7,12 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use tenaz_acp::fx::{self, FxLaunch, FxSettings};
-use tenaz_acp::opencode::{OpenCodeConfig, OpenCodeLaunch};
-use tenaz_acp::qwen::{QwenLaunch, QwenSettings};
-use tenaz_acp::{AcpHarness, ConfiguredHarness, EngineObservation, McpEndpoint, ProfileMcpServer};
+use tenaz_acp::agent::{self, AgentProfile};
+use tenaz_acp::fx::{self, FxAgent, FxLaunch, FxSettings};
+use tenaz_acp::opencode::{OpenCodeAgent, OpenCodeConfig, OpenCodeLaunch};
+use tenaz_acp::qwen::{QwenAgent, QwenLaunch, QwenSettings};
+use tenaz_acp::{AcpHarness, EngineObservation, McpEndpoint, ProfileMcpServer};
 use tenaz_core::ledger::{HarnessKind, ModelConfig, SkillPin};
-use tenaz_core::ports::{Harness, SessionModel};
+use tenaz_core::ports::Harness;
 use tenaz_core::project::Project;
 use tenaz_core::testing::ScriptedHarness;
 use tenaz_pi::PiLaunch;
@@ -56,21 +57,26 @@ impl HarnessInputs<'_> {
         self.project.private_dir().join(name)
     }
 
-    /// The steps every ACP agent ends with: feeds the engine's observations
-    /// to `acp`, writes its configuration for the run's model with
-    /// `configured` (a home that cannot be written stops the run here, not
-    /// in its first session),
-    /// then links the pinned skills into `skills_dir`.
+    /// Every ACP agent the same way: launched as `agent` says, fed the
+    /// engine's observations, given `meta` in `session/new`, with its
+    /// configuration written for the run's model (a home that cannot be
+    /// written stops the run here, not in its first session), then the
+    /// pinned skills linked into `skills_dir`.
     fn acp_agent(
         &self,
-        acp: AcpHarness,
-        configured: impl FnOnce(AcpHarness, &SessionModel) -> std::io::Result<ConfiguredHarness>,
+        agent: Arc<dyn AgentProfile>,
+        meta: Option<serde_json::Map<String, serde_json::Value>>,
         skills_dir: &Path,
     ) -> anyhow::Result<Arc<dyn Harness>> {
-        let acp = acp.with_observations(self.feed.clone());
-        let agent = configured(acp, &self.config.run_model())?;
+        let mut acp: AcpHarness =
+            agent::harness(agent.clone(), self.config.harness_version.clone())
+                .with_observations(self.feed.clone());
+        if let Some(meta) = meta {
+            acp = acp.with_session_meta(meta);
+        }
+        let configured = agent::configured(agent, acp, &self.config.run_model())?;
         link_skills(self.project, skills_dir, self.skills)?;
-        Ok(Arc::new(agent))
+        Ok(Arc::new(configured))
     }
 }
 
@@ -157,19 +163,16 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     // says outside the protocol (see tenaz_acp::fx::normalize_line).
     launch.shim = std::env::current_exe().ok();
     launch.wrapper = inputs.wrapper.to_vec();
-    let mut acp = launch.harness(config.harness_version.clone());
-    if !inputs.mcp_endpoints.is_empty() {
-        // Profile servers accept a long operation timeout; servers passed in session/new are cut at 60 s.
-        acp = acp.with_session_meta(
-            serde_json::json!({ "fx": { "profileMcpServers": true } })
-                .as_object()
-                .cloned()
-                .unwrap_or_default(),
-        );
-    }
+    // Profile servers accept a long operation timeout; servers passed in session/new are cut at 60 s.
+    let meta = (!inputs.mcp_endpoints.is_empty()).then(|| {
+        serde_json::json!({ "fx": { "profileMcpServers": true } })
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+    });
     inputs.acp_agent(
-        acp,
-        |acp, first| launch.configured(acp, settings, first),
+        Arc::new(FxAgent { launch, settings }),
+        meta,
         &home.join(".agents/skills"),
     )
 }
@@ -194,8 +197,11 @@ fn opencode_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harnes
     launch.npm_cache = std::env::home_dir().map(|h| h.join(".npm"));
     launch.wrapper = inputs.wrapper.to_vec();
     inputs.acp_agent(
-        launch.harness(config.harness_version.clone()),
-        |acp, first| launch.configured(acp, opencode, first),
+        Arc::new(OpenCodeAgent {
+            launch,
+            config: opencode,
+        }),
+        None,
         // OpenCode finds skills in `.agents/skills` of its home, as fx does.
         &home.join(".agents/skills"),
     )
@@ -212,8 +218,8 @@ fn qwen_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> 
     let mut launch = QwenLaunch::new(&inputs.options.bin, &home, inputs.base_url.clone());
     launch.wrapper = inputs.wrapper.to_vec();
     inputs.acp_agent(
-        launch.harness(inputs.config.harness_version.clone()),
-        |acp, first| launch.configured(acp, settings, first),
+        Arc::new(QwenAgent { launch, settings }),
+        None,
         &home.join(".qwen/skills"),
     )
 }

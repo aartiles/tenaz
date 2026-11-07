@@ -4,13 +4,15 @@
 
 #![cfg(unix)]
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use tenaz_acp::qwen::QwenLaunch;
+use tenaz_acp::agent::{AgentProfile, harness};
+use tenaz_acp::qwen::{QwenAgent, QwenLaunch, QwenSettings};
 use tenaz_core::ports::{Harness, SessionModel, SessionSpec};
 
 /// Qwen Code takes its model from its command line: `harness` launches
-/// `session_command` for each session's model, so each session gets
+/// the agent's arguments for each session's model, so each session gets
 /// `--model` with the id the engine lists for its model, also through a
 /// wrapper (the sandbox launcher).
 #[tokio::test]
@@ -51,9 +53,17 @@ async fn qwen_starts_each_session_on_its_model() {
                     supports_images: false,
                 },
             };
+            let agent: Arc<dyn AgentProfile> = Arc::new(QwenAgent {
+                launch: launch.clone(),
+                settings: QwenSettings {
+                    context_window: 65536,
+                    mcp: Vec::new(),
+                    discover_skills: false,
+                },
+            });
             let opened = tokio::time::timeout(
                 Duration::from_secs(10),
-                launch.harness("1".into()).open(spec),
+                harness(agent, "1".into()).open(spec),
             )
             .await
             .expect("the launch ends");
