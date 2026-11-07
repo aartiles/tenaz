@@ -8,6 +8,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `--harness acp` drives any other ACP agent: `--acp-bin` names the
+  command and `tenaz run --acp-args` its arguments. Before each session
+  Tenaz writes `.tenaz/private/acp-session.json` (the proxy's URL, the
+  session's model and limits, the reasoning effort, the media MCP
+  servers) and names it in `TENAZ_AGENT_SESSION`, so a script can
+  configure the agent. Use it instead of pointing `--fx-bin` at such a
+  script. The agent keeps the user's `HOME`.
+
 - `--harness dsh` drives DeepSeek Harness over ACP (`dsh --profile acp`,
   `--dsh-bin` names it), with `HOME` and `DSH_HOME` of its own under
   `.tenaz/private/dsh-home` and a patch Tenaz writes for each session's

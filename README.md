@@ -443,6 +443,19 @@ The thinking level maps to its reasoning effort (`high` is its `xhigh`).
 It has not finished a full run with Tenaz; see
 [Compatibility](docs/COMPATIBILITY.md).
 
+### Any other ACP agent
+
+`--harness acp --acp-bin <command>` runs any agent that speaks ACP;
+`tenaz run --acp-args "<args>"` gives the arguments that put it in ACP
+mode, and `<command> --version` must answer. Before each session Tenaz
+writes `.tenaz/private/acp-session.json` and passes its path in
+`TENAZ_AGENT_SESSION`: the engine's base URL (the proxy), the session's
+model, its context window, output limit and inputs, the reasoning effort
+and the media MCP servers. A small script reads it, configures the agent
+and starts it. Tenaz isolates nothing here: the agent keeps your `HOME`,
+your settings and its memory, so a run on it is only as reproducible as
+your script makes it ([ADR 0027](docs/adr/0027-acp-agents-behind-one-trait.md)).
+
 ### Images
 
 The agent gets an image tool from one of two kinds of image engine:
@@ -521,7 +534,8 @@ can still find and load the skills in the folders above the project; see
 skill but the pinned ones; Qwen Code loads only its user-level skills,
 which are the pinned ones. Both run in a `HOME` of their own, so with
 `agentSkills=true` they add the project's skills (and Qwen Code its
-bundled ones), not your own.
+bundled ones), not your own. dsh is offered no skills, and an agent
+under `--harness acp` keeps your `HOME`, so it may load your own.
 
 ### Sandbox
 

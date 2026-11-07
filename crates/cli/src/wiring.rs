@@ -96,6 +96,8 @@ pub struct HarnessOptions {
     pub bin: PathBuf,
     /// The arguments that put fx in ACP mode; only fx reads them.
     pub fx_args: Vec<String>,
+    /// The arguments that put the generic agent in ACP mode.
+    pub acp_args: Vec<String>,
 }
 
 pub struct MediaOptions {

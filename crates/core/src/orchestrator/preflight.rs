@@ -393,6 +393,7 @@ fn details(harness: HarnessKind) -> &'static str {
         | HarnessKind::OpenCode
         | HarnessKind::Qwen
         | HarnessKind::Dsh
+        | HarnessKind::Acp
         | HarnessKind::Fake => ".tenaz/run.json \"preflight\"",
     }
 }
@@ -941,6 +942,7 @@ mod tests {
             HarnessKind::OpenCode,
             HarnessKind::Qwen,
             HarnessKind::Dsh,
+            HarnessKind::Acp,
             HarnessKind::Fake,
         ] {
             let text = stop_with(harness);

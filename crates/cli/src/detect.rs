@@ -50,7 +50,8 @@ pub fn agent_version(harness: HarnessKind, bin: &Path) -> std::io::Result<String
         | HarnessKind::Fx
         | HarnessKind::OpenCode
         | HarnessKind::Qwen
-        | HarnessKind::Dsh => tenaz_acp::agent_version(bin),
+        | HarnessKind::Dsh
+        | HarnessKind::Acp => tenaz_acp::agent_version(bin),
     }
 }
 

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use tenaz_core::ledger::HarnessKind;
 
-/// `--fx-bin`, `--pi-bin`, `--opencode-bin`, `--qwen-bin` and
-/// `--dsh-bin`. `run` uses
+/// `--fx-bin`, `--pi-bin`, `--opencode-bin`, `--qwen-bin`, `--dsh-bin`
+/// and `--acp-bin`. `run` uses
 /// the one pinned at `init` when its flag is not given.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct HarnessBins {
@@ -30,6 +30,10 @@ pub(crate) struct HarnessBins {
     /// the pinned one unless this is given.
     #[arg(long = "dsh-bin", value_name = "DSH_BIN")]
     pub(crate) dsh: Option<PathBuf>,
+    /// The command of a generic ACP agent (--harness acp); init pins it, and
+    /// run uses the pinned one unless this is given.
+    #[arg(long = "acp-bin", value_name = "ACP_BIN")]
+    pub(crate) acp: Option<PathBuf>,
 }
 
 impl HarnessBins {
@@ -41,12 +45,13 @@ impl HarnessBins {
             HarnessKind::OpenCode => self.opencode.as_deref(),
             HarnessKind::Qwen => self.qwen.as_deref(),
             HarnessKind::Dsh => self.dsh.as_deref(),
+            HarnessKind::Acp => self.acp.as_deref(),
             HarnessKind::Fake => None,
         }
     }
 
     /// Each flag's name and the path it was given, for a command line.
-    pub(crate) fn flags(&self) -> [(&'static str, Option<String>); 5] {
+    pub(crate) fn flags(&self) -> [(&'static str, Option<String>); 6] {
         let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
         [
             ("fx-bin", path(&self.fx)),
@@ -54,6 +59,7 @@ impl HarnessBins {
             ("opencode-bin", path(&self.opencode)),
             ("qwen-bin", path(&self.qwen)),
             ("dsh-bin", path(&self.dsh)),
+            ("acp-bin", path(&self.acp)),
         ]
     }
 }

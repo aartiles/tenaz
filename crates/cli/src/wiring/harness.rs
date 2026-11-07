@@ -10,6 +10,7 @@ use anyhow::Context as _;
 use tenaz_acp::agent::{self, AgentProfile};
 use tenaz_acp::dsh::{DshAgent, DshLaunch, DshPatch};
 use tenaz_acp::fx::{self, FxAgent, FxLaunch, FxSettings};
+use tenaz_acp::generic::{GenericAgent, SessionFacts};
 use tenaz_acp::opencode::{OpenCodeAgent, OpenCodeConfig, OpenCodeLaunch};
 use tenaz_acp::qwen::{QwenAgent, QwenLaunch, QwenSettings};
 use tenaz_acp::{AcpHarness, EngineObservation, McpEndpoint, ProfileMcpServer};
@@ -103,6 +104,7 @@ pub(super) fn build_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dy
         HarnessKind::OpenCode => opencode_harness(inputs),
         HarnessKind::Qwen => qwen_harness(inputs),
         HarnessKind::Dsh => dsh_harness(inputs),
+        HarnessKind::Acp => generic_harness(inputs),
     }
 }
 
@@ -254,6 +256,25 @@ fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     inputs.acp_agent(Arc::new(DshAgent { launch, patch }), None, None)
 }
 
+/// The user's ACP command, told about each session in
+/// `.tenaz/private/acp-session.json`; it keeps the user's `HOME`.
+fn generic_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
+    let config = inputs.config;
+    let agent = GenericAgent {
+        binary: inputs.options.bin.clone(),
+        args: inputs.options.acp_args.clone(),
+        session_file: inputs.project.private_dir().join("acp-session.json"),
+        facts: SessionFacts {
+            base_url: inputs.base_url.clone(),
+            max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
+            reasoning_effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
+            mcp_servers: inputs.mcp_endpoints.to_vec(),
+        },
+        wrapper: inputs.wrapper.to_vec(),
+    };
+    inputs.acp_agent(Arc::new(agent), None, None)
+}
+
 /// The provider name the harness's configuration uses.
 fn provider(config: &ModelConfig) -> String {
     config
@@ -375,6 +396,7 @@ mod tests {
         let options = HarnessOptions {
             bin: "agent".into(),
             fx_args: Vec::new(),
+            acp_args: Vec::new(),
         };
         let (feed, _) = tokio::sync::broadcast::channel(1);
         build_harness(&HarnessInputs {
@@ -452,6 +474,18 @@ mod tests {
             entry("llm-pi-ai")["config"]["providers"]["tenaz"]["baseURL"],
             "http://127.0.0.1:4001/v1"
         );
+    }
+
+    #[test]
+    fn the_generic_agent_is_told_its_first_session_before_it_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        build(dir.path(), HarnessKind::Acp, &[]).unwrap();
+        let file = Project::new(dir.path())
+            .private_dir()
+            .join("acp-session.json");
+        let session = json(&file);
+        assert_eq!(session["model"], "m");
+        assert_eq!(session["baseUrl"], "http://127.0.0.1:4001/v1");
     }
 
     #[test]

@@ -119,6 +119,8 @@ pub enum HarnessKind {
     Qwen,
     /// `DeepSeek` Harness (`dsh`) over ACP.
     Dsh,
+    /// Any other ACP agent: the user's command (`--acp-bin`, `--acp-args`).
+    Acp,
     /// The scripted harness, which needs no agent and no engine.
     Fake,
 }
@@ -136,6 +138,7 @@ impl HarnessKind {
             Self::OpenCode => "opencode",
             Self::Qwen => "qwen",
             Self::Dsh => "dsh",
+            Self::Acp => "acp",
             Self::Fake => "fake",
         }
     }
@@ -185,6 +188,9 @@ pub struct Launch {
     /// Arguments that put fx in ACP mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fx_args: Option<Vec<String>>,
+    /// Arguments that put the generic agent (`--harness acp`) in ACP mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acp_args: Option<Vec<String>>,
     /// `ComfyUI` base URL; enables the image tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comfyui: Option<String>,
@@ -861,6 +867,8 @@ mod tests {
             (HarnessKind::Pi, "pi"),
             (HarnessKind::OpenCode, "opencode"),
             (HarnessKind::Qwen, "qwen"),
+            (HarnessKind::Dsh, "dsh"),
+            (HarnessKind::Acp, "acp"),
             (HarnessKind::Fake, "fake"),
         ] {
             assert_eq!(serde_json::json!(kind), name);

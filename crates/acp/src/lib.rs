@@ -7,6 +7,7 @@
 pub mod agent;
 pub mod dsh;
 pub mod fx;
+pub mod generic;
 pub mod opencode;
 pub mod qwen;
 mod session;

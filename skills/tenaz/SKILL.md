@@ -82,6 +82,12 @@ mlx-serve), and Tenaz loads one at a time, swapping before each session.
 With `--harness pi`, a role's window and inputs are read from the user's
 `~/.pi/agent/models.json` when it lists the model.
 
+Doctor finds Pi, fx, OpenCode and Qwen Code on PATH. For DeepSeek
+Harness pass `--harness dsh --dsh-bin <path>`. Any other ACP agent runs
+with `--harness acp --acp-bin <command>` and `tenaz run --acp-args
+"<args>"`; the command reads the session file `TENAZ_AGENT_SESSION`
+names (README, "Any other ACP agent").
+
 ## Write the brief
 
 The brief is all the local model gets besides the code, and it is smaller
