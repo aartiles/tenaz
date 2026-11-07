@@ -182,8 +182,18 @@ pub const OUT_OF_MEMORY: &str = "## The engine ran out of memory\n\nAn earlier s
 /// The note a fresh session gets when it continues work stopped at the turn budget.
 pub const TURN_CONTINUATION: &str = "## Continuation\n\nAn earlier session on this same work was stopped because it used up its turn budget. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then finish from there in few turns: do not explore again what it already read. The repository map is `.tenaz/map.md`, if you need it.";
 
-/// The note after the engine refused an image the earlier session read.
-pub fn image_continuation(refusal: &str) -> String {
+/// What the engine refused that a fresh session is told about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// An image the earlier session read.
+    Image,
+    /// A request refused for what it held, other than an image.
+    Request,
+}
+
+/// The note after the engine refused what `refused` says, quoting its
+/// `refusal` on one line, clipped.
+pub fn refusal_continuation(refused: Refused, refusal: &str) -> String {
     let quoted: String = refusal
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -191,9 +201,14 @@ pub fn image_continuation(refusal: &str) -> String {
         .chars()
         .take(300)
         .collect();
-    format!(
-        "## Continuation\n\nAn earlier session on this same work was stopped because the engine refused an image it had read: \"{quoted}\". Every image you read stays in the conversation. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Read only PNG or JPEG images; convert any other format with ffmpeg into `.tenaz/private/` first. Read few images: combine several stills into one small contact sheet (for example with ffmpeg's `tile` filter) and read that, and do not read the same image twice."
-    )
+    match refused {
+        Refused::Image => format!(
+            "## Continuation\n\nAn earlier session on this same work was stopped because the engine refused an image it had read: \"{quoted}\". Every image you read stays in the conversation. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Read only PNG or JPEG images; convert any other format with ffmpeg into `.tenaz/private/` first. Read few images: combine several stills into one small contact sheet (for example with ffmpeg's `tile` filter) and read that, and do not read the same image twice."
+        ),
+        Refused::Request => format!(
+            "## Continuation\n\nAn earlier session on this same work was stopped because the engine refused one of its requests for what was in it: \"{quoted}\". What a session reads stays in its conversation, so a fresh session goes on instead. Its file changes are kept in the working tree. Start with `git status`, `git diff --stat` and the task's notes file to see what it did, then continue from there. Do not read again, the same way, what the engine refused: if it was a file, read it another way (convert media to PNG or JPEG images with ffmpeg into `.tenaz/private/` first, or read text in parts)."
+        ),
+    }
 }
 
 /// Notes from `BOOTSTRAP`, the dependencies and their split children, each
@@ -363,9 +378,16 @@ diff --git a/assets/card 1.webp b/assets/card 1.webp\nindex 3..4 100644\nBinary 
     }
 
     #[test]
+    fn refused_continuation_quotes_a_flattened_refusal() {
+        let note = refusal_continuation(Refused::Request, "400: video\n  could not be decoded");
+        assert!(note.contains("\"400: video could not be decoded\""));
+        assert!(note.starts_with("## Continuation"));
+    }
+
+    #[test]
     fn image_continuation_quotes_a_flattened_refusal() {
-        let note = image_continuation("too   many\nimages");
+        let note = refusal_continuation(Refused::Image, "too   many\nimages");
         assert!(note.contains("\"too many images\""));
-        assert!(CONTINUATION.starts_with("## Continuation"));
+        assert!(note.starts_with("## Continuation"));
     }
 }

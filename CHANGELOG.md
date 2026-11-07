@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-07
+
 ### Added
 
 - `--harness opencode` and `--harness qwen` drive OpenCode and Qwen Code
@@ -26,8 +28,72 @@ uses [Semantic Versioning](https://semver.org/).
   like an image and is limited by `--media-timeout`. `tenaz doctor` has an
   optional `3d` line that offers a 3D model an engine lists. See ADR 0020.
 
+### Changed
+
+- The engine proxy now forwards only the last assistant message's
+  reasoning: a harness that sends all of it back filled the window with
+  the model's earlier reasoning. `--set
+  keepPastReasoning=true` sends it all. See ADR 0023.
+- When an ACP agent reports an edit as a diff, Tenaz records the edited
+  file's path as the call's result, not the agent's raw output. Qwen Code
+  sends the whole file before and after each edit in the diff, so every edit to
+  a large file raised a false big-output steer.
+- With `--harness qwen`, the engine proxy refuses Qwen Code's own request
+  to summarize its conversation, and Tenaz ends the session there as one
+  out of context; a fresh session continues. Before, each summary took
+  minutes, showed as an empty reply, and the session was stopped right
+  after it anyway. See ADR 0022.
+- A reviewer stopped (for example at its turn budget) after writing its
+  review now says so in the log, as in
+  `turn budget exceeded (38/25) after writing its review; its verdict (CHANGES) is used`.
+  Before, it read only as a failed session, though its verdict was taken.
+
 ### Fixed
 
+- A session the engine held past a lowered context budget, with no
+  engine error, now raises the budget at once to the headroom share of its
+  peak (0.8 by default, the share a lowering uses), and
+  lifts a ceiling under that. Before, sessions that needed more than the
+  cap were cut one after another while Tenaz waited for a raise, and a
+  run could block. See ADR 0026.
+- A request the engine refuses for what is in it (400, 413, 415 or 422,
+  other than an image, a prompt too long or the engine's memory) is no
+  longer retried as it was. A fresh session continues the work with a
+  note that quotes the refusal and says to read that input another way;
+  the journal records it as `refused-continuation`. Before, Tenaz
+  retried the same session six times with growing waits and then
+  blocked the run as "engine unavailable"; it still does once the
+  session's continuations are spent (ADR 0025).
+- A video file an agent reads reaches the engine as a note saying to
+  read it as frames. Before, Qwen Code sent the whole file, Sushi
+  refused each request, and the run blocked as "engine unavailable"
+  (ADR 0024).
+- `tenaz run --resume` on a run blocked with no task ready gets one
+  more replan. Before, the run had already used its one replan for
+  that, so it blocked again at once, and only an edit of
+  `.tenaz/run.json` let it go on.
+- A replan that sets a blocked task back to `todo` while no card still to
+  build amends a check of its conflict gets one more prompt before it
+  ends, once per session, saying that Tenaz will block the task again.
+  It may then add the `amends` or route around the task. Before, Tenaz set
+  the task back to `blocked` when the replan ended and said nothing, and
+  the run found no task ready and started another replan, or blocked.
+  The log says when Tenaz asks and when it blocks the task again (ADR
+  0018).
+- The watchdog sees Qwen Code's reads and writes (`ReadFile`,
+  `WriteFile`, `Edit`), so it no longer stops a Qwen Code session that is
+  reading new files as idle, and the journal counts its writes. For an
+  ACP agent (fx, OpenCode, Qwen Code) it now goes by the tool call's
+  `kind` first (`read` or `edit`) and by the name only when the kind says
+  nothing about files. See ADR 0021.
+- After a `generate_3d` or `--images` job, Tenaz frees the media model
+  through the server's `POST /v1/unload-model`, as for ComfyUI. mlx-serve
+  keeps a 3D or image model loaded after its job; in the first real 3D run
+  TRELLIS.2 stayed resident for hours next to the LLM and the Mac swapped.
+  This is done also when the server is the LLM's own. A server without
+  that route is left as it is. A failed media unload is journaled
+  (`media:<engine> failed unload: …`) and no longer fails the job, which has
+  already written its file.
 - An ACP agent's tool call is reported with the input it runs with.
   OpenCode and Qwen Code announce a call before its input is complete
   (`bash` with only its folder, a read with no file) and send the input

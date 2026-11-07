@@ -5,8 +5,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::params::RunParams;
 use crate::session::{
-    PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics, StopReason, WatchdogEvent,
-    capacity_limit, is_image_refusal, is_out_of_memory, is_read_tool, is_write_tool,
+    HARNESS_COMPACTION, PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics,
+    StopReason, ToolEffect, WatchdogEvent, capacity_limit, is_image_refusal, is_out_of_memory,
+    is_request_refusal, tool_effect,
 };
 use crate::util::{approx_tokens, sha256_hex};
 use crate::write_scope::WriteScope;
@@ -259,8 +260,8 @@ impl Watchdog {
                 elapsed_ms,
                 &mut actions,
             ),
-            SessionEvent::ToolCallStart { id, name, args } => {
-                self.tool_start(id, name, args, elapsed_ms, &mut actions);
+            call @ SessionEvent::ToolCallStart { .. } => {
+                self.tool_call(call, elapsed_ms, &mut actions);
             }
             SessionEvent::ToolCallEnd {
                 id,
@@ -297,19 +298,9 @@ impl Watchdog {
             }
             SessionEvent::TurnEnd => self.turn_end(elapsed_ms, fingerprint, &mut actions),
             SessionEvent::CompactionStart { reason } => {
-                self.metrics.compactions += 1;
-                self.event("compaction", Some(reason), elapsed_ms);
-                if self.watch.is_some() {
-                    if self.metrics.compactions >= 2 {
-                        self.abort(SECOND_COMPACTION, elapsed_ms, &mut actions);
-                    } else {
-                        let wrap_up = self.watch.map_or("", |w| w.wrap_up);
-                        let message =
-                            format!("Context is being compacted, which loses detail. {wrap_up}");
-                        self.steer("compaction", &message, elapsed_ms, &mut actions);
-                    }
-                }
+                self.compaction_started(reason, elapsed_ms, &mut actions);
             }
+            SessionEvent::CompactionRefused => self.compaction_refused(elapsed_ms, &mut actions),
             SessionEvent::Settled { aborted } => {
                 self.call_started.clear();
                 let interrupted = std::mem::take(&mut self.interrupting);
@@ -356,6 +347,33 @@ impl Watchdog {
         }
     }
 
+    /// The harness compacted its context: a watched session is steered to
+    /// wrap up at the first and stopped at the second.
+    fn compaction_started(&mut self, reason: &str, elapsed_ms: u64, actions: &mut Vec<Action>) {
+        self.metrics.compactions += 1;
+        self.event("compaction", Some(reason), elapsed_ms);
+        let Some(watch) = self.watch else { return };
+        if self.metrics.compactions >= 2 {
+            self.abort(SECOND_COMPACTION, elapsed_ms, actions);
+        } else {
+            let message = format!(
+                "Context is being compacted, which loses detail. {}",
+                watch.wrap_up
+            );
+            self.steer("compaction", &message, elapsed_ms, actions);
+        }
+    }
+
+    /// The proxy refused the harness's request to compact: a watched
+    /// session ends there, as one out of context (ADR 0022).
+    fn compaction_refused(&mut self, elapsed_ms: u64, actions: &mut Vec<Action>) {
+        self.metrics.compactions += 1;
+        self.event("compaction", Some("refused by the proxy"), elapsed_ms);
+        if self.watch.is_some() {
+            self.abort(HARNESS_COMPACTION, elapsed_ms, actions);
+        }
+    }
+
     fn event(&mut self, kind: &str, detail: Option<&str>, elapsed_ms: u64) {
         self.metrics.events.push(WatchdogEvent {
             kind: kind.to_owned(),
@@ -386,6 +404,33 @@ impl Watchdog {
         actions.push(Action::Abort {
             reason: reason.to_owned(),
         });
+    }
+
+    /// A tool call starting: the loop rules, then its effect on files. A
+    /// write, or a read of something not read before, is progress for the
+    /// idle rule; a write is also counted and its path checked.
+    fn tool_call(&mut self, call: &SessionEvent, elapsed_ms: u64, actions: &mut Vec<Action>) {
+        let SessionEvent::ToolCallStart {
+            id,
+            name,
+            args,
+            effect,
+        } = call
+        else {
+            return;
+        };
+        self.tool_start(id, name, args, elapsed_ms, actions);
+        match tool_effect(name, *effect) {
+            Some(ToolEffect::Write) => {
+                self.metrics.writes += 1;
+                self.idle_turns = -1;
+                self.check_write_target(args, elapsed_ms, actions);
+            }
+            Some(ToolEffect::Read) if self.reads.insert(args.to_string()) => {
+                self.idle_turns = -1;
+            }
+            _ => {}
+        }
     }
 
     fn tool_start(
@@ -426,13 +471,6 @@ impl Watchdog {
                     actions,
                 );
             }
-        }
-        if is_write_tool(name) {
-            self.metrics.writes += 1;
-            self.idle_turns = -1;
-            self.check_write_target(args, elapsed_ms, actions);
-        } else if is_read_tool(name) && self.reads.insert(args.to_string()) {
-            self.idle_turns = -1;
         }
     }
 
@@ -569,6 +607,7 @@ impl Watchdog {
         } else {
             // A reply after the error: it no longer says how the session ends.
             self.metrics.engine_out_of_memory = false;
+            self.metrics.request_refusal = None;
         }
         self.context_rules(stop_reason, elapsed_ms, actions);
     }
@@ -585,6 +624,9 @@ impl Watchdog {
         if is_image_refusal(message) {
             self.metrics.image_refusal = Some(message.to_owned());
         }
+        // The last error says how the session ends, as for memory.
+        self.metrics.request_refusal =
+            (!is_image_refusal(message) && is_request_refusal(message)).then(|| message.to_owned());
         self.metrics.engine_out_of_memory = is_out_of_memory(message);
         if self.watch.is_some() && self.metrics.provider_errors >= self.params.provider_error_abort
         {
@@ -751,6 +793,7 @@ mod tests {
                 id: id.clone(),
                 name: name.into(),
                 args: args.clone(),
+                effect: None,
             },
             0,
             String::new,
@@ -972,6 +1015,7 @@ mod tests {
             id: "call_10".into(),
             name: "write".into(),
             args: serde_json::json!({ "path": "src/core/render.ts" }),
+            effect: None,
         };
         assert!(w.handle(&second, 6, String::new).is_empty());
         assert!(
@@ -1078,6 +1122,26 @@ mod tests {
         assert!(!m.engine_out_of_memory);
     }
 
+    /// A request refused for what was in it is recorded as such, apart
+    /// from an image refusal.
+    #[test]
+    fn a_refused_request_is_recorded() {
+        let mut w = watched();
+        let refusal = "400: messages[26]: video could not be decoded";
+        message(&mut w, 0, StopReason::Error, Some(refusal));
+        let m = w.metrics();
+        assert_eq!(m.request_refusal.as_deref(), Some(refusal));
+        assert!(m.image_refusal.is_none());
+        assert!(m.engine_failed());
+        // A reply after it: the harness got past the refused request.
+        message(&mut w, 0, StopReason::Stop, None);
+        assert!(w.metrics().request_refusal.is_none());
+        // Another error after it says how the session ends.
+        message(&mut w, 0, StopReason::Error, Some(refusal));
+        message(&mut w, 0, StopReason::Error, Some("503: busy"));
+        assert!(w.metrics().request_refusal.is_none());
+    }
+
     /// Sushi's error when Metal cannot get the memory, often because a
     /// render shares the GPU: an engine failure, marked as such.
     #[test]
@@ -1128,6 +1192,7 @@ mod tests {
                     id: id.into(),
                     name: "bash".into(),
                     args: serde_json::json!({ "command": "./verify --all" }),
+                    effect: None,
                 },
                 at,
                 String::new,
@@ -1209,26 +1274,14 @@ mod tests {
             "idle"
         ));
         // A write tool call resets the count even before the next fingerprint.
-        w.handle(
-            &SessionEvent::ToolCallStart {
-                id: "c".into(),
-                name: "edit".into(),
-                args: serde_json::Value::Null,
-            },
-            0,
-            String::new,
-        );
+        w.handle(&tool_call("edit", serde_json::Value::Null), 0, String::new);
         assert!(
             w.handle(&SessionEvent::TurnEnd, 0, || "b".into())
                 .is_empty()
         );
         assert_eq!(w.metrics().writes, 1);
         // So does a read of something not read before, but not a repeat.
-        let read = |path: &str| SessionEvent::ToolCallStart {
-            id: "r".into(),
-            name: "read".into(),
-            args: serde_json::json!({ "path": path }),
-        };
+        let read = |path: &str| tool_call("read", serde_json::json!({ "path": path }));
         w.handle(&read("src/lib.rs"), 0, String::new);
         assert!(
             w.handle(&SessionEvent::TurnEnd, 0, || "b".into())
@@ -1250,6 +1303,85 @@ mod tests {
             vec![Action::Abort {
                 reason: "3 turns without changing or reading anything new".into()
             }]
+        );
+    }
+
+    /// A tool call that declares no effect.
+    fn tool_call(name: &str, args: serde_json::Value) -> SessionEvent {
+        SessionEvent::ToolCallStart {
+            id: "c".into(),
+            name: name.into(),
+            args,
+            effect: None,
+        }
+    }
+
+    #[test]
+    fn qwen_code_reads_of_new_files_are_not_idle() {
+        // Session 043-builder-T007 (Qwen Code 0.26.6) read 20 files with
+        // `ReadFile` and was aborted as idle.
+        let mut p = RunParams::default();
+        p.idle_steer = 2;
+        p.idle_abort = 3;
+        let mut w = Watchdog::new(
+            p,
+            Some(WatchConfig {
+                turns: 40,
+                context_tokens: 60_000,
+                idle: true,
+                wrap_up: Role::Builder.wrap_up(),
+            }),
+        );
+        w.set_fingerprint(Some("a".into()));
+        for n in 0..20 {
+            let path = format!("src/{n}.rs");
+            let read = tool_call("ReadFile", serde_json::json!({ "file_path": path }));
+            w.handle(&read, 0, String::new);
+            assert!(
+                w.handle(&SessionEvent::TurnEnd, 0, || "a".into())
+                    .is_empty(),
+                "read {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_write_counts_whatever_its_name() {
+        // Qwen Code titles a call it cannot describe yet `ToolCall`.
+        let mut w = Watchdog::new(RunParams::default(), None);
+        let write = SessionEvent::ToolCallStart {
+            id: "w".into(),
+            name: "ToolCall".into(),
+            args: serde_json::json!({ "file_path": "src/new.rs" }),
+            effect: Some(ToolEffect::Write),
+        };
+        w.handle(&write, 0, String::new);
+        assert_eq!(w.metrics().writes, 1);
+    }
+
+    #[test]
+    fn a_declared_read_of_a_new_file_is_progress_whatever_its_name() {
+        let mut p = RunParams::default();
+        p.idle_steer = 1;
+        p.idle_abort = 2;
+        let config = WatchConfig {
+            turns: 40,
+            context_tokens: 60_000,
+            idle: true,
+            wrap_up: Role::Builder.wrap_up(),
+        };
+        let mut w = Watchdog::new(p, Some(config));
+        w.set_fingerprint(Some("a".into()));
+        let read = SessionEvent::ToolCallStart {
+            id: "r".into(),
+            name: "ToolCall".into(),
+            args: serde_json::json!({ "file_path": "src/new.rs" }),
+            effect: Some(ToolEffect::Read),
+        };
+        w.handle(&read, 0, String::new);
+        assert!(
+            w.handle(&SessionEvent::TurnEnd, 0, || "a".into())
+                .is_empty()
         );
     }
 
@@ -1315,6 +1447,37 @@ mod tests {
         assert_eq!(m.duration_ms, 1234);
     }
 
+    /// A compaction the proxy refused ends the session at once, as one out
+    /// of context, so a fresh session continues the work.
+    #[test]
+    fn a_refused_compaction_stops_the_session_out_of_context() {
+        let mut w = watched();
+        assert_eq!(
+            w.handle(&SessionEvent::CompactionRefused, 0, String::new),
+            vec![Action::Abort {
+                reason: HARNESS_COMPACTION.into()
+            }]
+        );
+        w.handle(&SessionEvent::Settled { aborted: true }, 0, String::new);
+        w.finish(Some(0), 1);
+        let m = w.into_metrics();
+        assert!(m.aborted && m.context_stopped() && !m.compaction_stopped());
+        assert_eq!(m.compactions, 1);
+    }
+
+    /// A session nobody watches (the preflight) is only measured: the
+    /// refusal counts as a compaction and stops nothing.
+    #[test]
+    fn an_unwatched_session_is_not_stopped_by_a_refused_compaction() {
+        let mut w = Watchdog::new(RunParams::default(), None);
+        assert!(
+            w.handle(&SessionEvent::CompactionRefused, 0, String::new)
+                .is_empty()
+        );
+        assert_eq!(w.metrics().compactions, 1);
+        assert!(w.metrics().abort_reason.is_none());
+    }
+
     /// A session answers its first prompt and is sent another: until that
     /// one is answered it has not settled, and a reply cut at the output
     /// limit in the first does not explain an exit in the second.
@@ -1362,6 +1525,7 @@ mod tests {
                 id: "c9".into(),
                 name: "shell".into(),
                 args: serde_json::json!({"command": "head -c 400 x.json"}),
+                effect: None,
             },
             0,
             String::new,

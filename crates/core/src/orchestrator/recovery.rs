@@ -3,7 +3,9 @@
 //! accept the result, or give up. None of these charge an attempt. The
 //! runner journals, logs and waits; this module only decides.
 
-use crate::briefing::{CONTINUATION, OUT_OF_MEMORY, TURN_CONTINUATION, image_continuation};
+use crate::briefing::{
+    CONTINUATION, OUT_OF_MEMORY, Refused, TURN_CONTINUATION, refusal_continuation,
+};
 use crate::params::RunParams;
 use crate::role::Role;
 use crate::session::{SessionMetrics, StopReason};
@@ -15,6 +17,8 @@ pub(crate) enum Continuation {
     Context,
     /// The engine refused an image the session read.
     Image(String),
+    /// The engine refused a request for what was in it, other than an image.
+    Refused(String),
     /// A session that edits code stopped at its turn budget.
     Turns,
 }
@@ -80,6 +84,7 @@ enum Note {
     #[default]
     Plain,
     Image(String),
+    Refused(String),
     Turns,
 }
 
@@ -116,7 +121,8 @@ impl Recovery {
     /// The note added to the prompt of a session that continues earlier work.
     pub fn note(&self) -> String {
         match &self.note {
-            Note::Image(refusal) => image_continuation(refusal),
+            Note::Image(refusal) => refusal_continuation(Refused::Image, refusal),
+            Note::Refused(refusal) => refusal_continuation(Refused::Request, refusal),
             Note::Turns => TURN_CONTINUATION.to_owned(),
             Note::Plain => CONTINUATION.to_owned(),
         }
@@ -136,7 +142,7 @@ impl Recovery {
         {
             return self.continue_with(kind);
         }
-        self.note = std::mem::take(&mut self.note).without_image();
+        self.note = std::mem::take(&mut self.note).without_refusal();
         if !metrics.engine_failed() {
             return Step::Done;
         }
@@ -215,15 +221,16 @@ impl Note {
                 kept => kept,
             },
             Continuation::Image(refusal) => Self::Image(refusal.clone()),
+            Continuation::Refused(refusal) => Self::Refused(refusal.clone()),
             Continuation::Turns => Self::Turns,
         }
     }
 
-    /// The note once a session ends without a continuation: an image note
-    /// is dropped, a turn note stays for the rerun of the same session.
-    fn without_image(self) -> Self {
+    /// The note once a session ends without a continuation: a refusal
+    /// note is dropped, a turn note stays for the rerun of the same session.
+    fn without_refusal(self) -> Self {
         match self {
-            Self::Image(_) => Self::Plain,
+            Self::Image(_) | Self::Refused(_) => Self::Plain,
             kept => kept,
         }
     }
@@ -240,6 +247,9 @@ fn continuation(metrics: &SessionMetrics, role: Role) -> Option<Continuation> {
     }
     if let Some(refusal) = &metrics.image_refusal {
         return Some(Continuation::Image(refusal.clone()));
+    }
+    if let Some(refusal) = &metrics.request_refusal {
+        return Some(Continuation::Refused(refusal.clone()));
     }
     (metrics.turns_stopped() && role.edits_code()).then_some(Continuation::Turns)
 }
@@ -316,6 +326,10 @@ mod tests {
 
     fn continued(kind: Continuation, count: u32) -> Step {
         Step::Continue { kind, count }
+    }
+
+    fn image_note() -> String {
+        refusal_continuation(Refused::Image, REFUSAL)
     }
 
     fn image() -> Continuation {
@@ -413,11 +427,42 @@ mod tests {
         );
     }
 
+    const REFUSED: &str = "400: video could not be decoded";
+
+    fn request_refused() -> SessionMetrics {
+        SessionMetrics {
+            request_refusal: Some(REFUSED.to_owned()),
+            ..engine_error()
+        }
+    }
+
+    /// Past the continuation budget a refused request is retried as an
+    /// engine error, as before.
     #[test]
-    fn an_image_refusal_continues_with_the_refusal_in_the_note() {
-        let (recovery, steps) = steps(Role::Builder, &[image_refused()]);
-        assert_eq!(steps, [continued(image(), 1)]);
-        assert_eq!(recovery.note(), image_continuation(REFUSAL));
+    fn a_refused_request_past_the_budget_is_retried_as_an_engine_error() {
+        let budget = params().context_continuations as usize;
+        let (_, steps) = steps(Role::Builder, &vec![request_refused(); budget + 1]);
+        assert_eq!(steps.last(), Some(&engine_retry(0)));
+    }
+
+    /// A refused image or request is not retried as it was: a fresh
+    /// session goes on, told what was refused.
+    #[test]
+    fn a_refusal_continues_with_the_refusal_in_the_note() {
+        let request = Continuation::Refused(REFUSED.to_owned());
+        let cases = [
+            (image_refused(), image(), Refused::Image, REFUSAL),
+            (request_refused(), request, Refused::Request, REFUSED),
+        ];
+        for (metrics, continuation, refused, refusal) in cases {
+            let (recovery, steps) = steps(Role::Builder, &[metrics]);
+            assert_eq!(steps, [continued(continuation, 1)], "{refused:?}");
+            assert_eq!(
+                recovery.note(),
+                refusal_continuation(refused, refusal),
+                "{refused:?}"
+            );
+        }
     }
 
     #[test]
@@ -455,7 +500,7 @@ mod tests {
             steps,
             [continued(image(), 1), continued(Continuation::Context, 2)]
         );
-        assert_eq!(recovery.note(), image_continuation(REFUSAL));
+        assert_eq!(recovery.note(), image_note());
     }
 
     #[test]
@@ -508,7 +553,7 @@ mod tests {
             steps,
             [continued(Continuation::Turns, 1), continued(image(), 2)]
         );
-        assert_eq!(recovery.note(), image_continuation(REFUSAL));
+        assert_eq!(recovery.note(), image_note());
     }
 
     #[test]

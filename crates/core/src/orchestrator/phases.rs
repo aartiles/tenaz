@@ -23,6 +23,8 @@ mod review;
 mod task;
 mod task_loop;
 
+pub(crate) use planner::refused_reopens_of;
+
 /// What a session's prompt adds to the role prompt, spec and map.
 #[derive(Default)]
 struct PromptParts<'a> {

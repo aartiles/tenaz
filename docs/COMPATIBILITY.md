@@ -20,8 +20,8 @@ below; this page is about the real ones.
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
 | Model | Any model the engine serves, with tool calling | Tested with `Qwen3.8-Flash-Next-Sushi-2.6bpw`. |
 | Media | ComfyUI images (`generate_image` over MCP) | Tested against a mock, and in real runs with FLUX models next to TensorFold and Sushi (8 and 10 images). Needs an API-format workflow with `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}` and `{{height}}` placeholders. |
-| | OpenAI Images API (`--images`, `POST /v1/images/generations`): mlx-serve, Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock, and by hand against mlx-serve 26.10.3 (see Known gaps). Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Does not unload the image model after a job. On the LLM's own origin the LLM stays loaded. |
-| | Image-to-3D API (`--meshes`, `POST /v1/3d/generations`): mlx-serve 26.11.1 | Tested against a mock, and by hand through the adapter against mlx-serve 26.11.1 with Idol and TRELLIS.2 at 512 (see Known gaps). Sends `model`, the picture as base64 `image`, and `resolution`, `seed`, `steps` and `mode` when given. Does not unload the 3D model after a job. |
+| | OpenAI Images API (`--images`, `POST /v1/images/generations`): mlx-serve, Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock, and by hand against mlx-serve 26.10.3 (see Known gaps). Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Frees the image model after a job through `POST /v1/unload-model` where the server has it (mlx-serve), also on the LLM's own origin, where the LLM stays loaded. |
+| | Image-to-3D API (`--meshes`, `POST /v1/3d/generations`): mlx-serve 26.11.1 | Tested against a mock, and by hand through the adapter against mlx-serve 26.11.1 with Idol and TRELLIS.2 at 512 (see Known gaps). Sends `model`, the picture as base64 `image`, and `resolution`, `seed`, `steps` and `mode` when given. Frees the 3D model after each job through `POST /v1/unload-model`. |
 | | TTS, STT, video | Not built. |
 
 ## What the model needs
@@ -118,12 +118,53 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **A refused request continues in a fresh session.** A 400, 413, 415
+  or 422 from the engine, other than an image, a prompt too long or the
+  engine's memory, is journaled as `refused-continuation` and a fresh
+  session goes on with a note (ADR 0025). A refusal that the fresh
+  session meets again, such as a template or tool-schema error, uses up
+  the continuations and is then retried as an engine failure, as before.
+  Tested with unit tests only, not yet in a run.
+- **A video file sent as a note** (ADR 0024). Qwen Code 0.26.6 sends a
+  video it read as a `data:video/mp4` part, which Sushi refuses; the
+  proxy puts a note in its place. Seen once in the articulated-cabinet
+  run with Qwen3.8-Flash-Next on Sushi (2026-11-06): the reviewer of
+  T014 read `outputs/motion.mp4`, got no 400, and finished in 20 turns,
+  where the seven before it had each got a 400 on that video. Other agents
+  and engines are not checked.
+- **Earlier reasoning dropped by default** (ADR 0023). The proxy forwards
+  only the last assistant message's reasoning; `--set
+  keepPastReasoning=true` sends it all. In the articulated-cabinet run
+  with Qwen Code 0.26.6 and Qwen3.8-Flash-Next on Sushi (2026-11-05),
+  two builders of T027 peaked at 45k and 51k tokens after 32 and 24
+  turns, where most builders before it reached the 98k stop after 16 to
+  56 turns.
+  That is one task, not a measurement: how much longer a session lasts,
+  and whether the model redoes work it reasoned out before, is not
+  measured.
+- **Qwen Code's compaction refused** (ADR 0022). The proxy knows Qwen
+  Code's summarizing request by the opening of its prompt in 0.26.6. In
+  the articulated-cabinet run (2026-11-03 and 04) it compacted 25 times
+  before this, each wasted. Seen in the same run from 2026-11-04: the
+  proxy refused Qwen Code's request 60 times, and each builder went on
+  in a fresh session. A new Qwen Code version must be checked for
+  that prompt.
 - **A blocked task reopened behind an amend** (ADR 0018). In a run with
   Qwen Code 0.26.6 and Qwen3.8-27B (2026-11-03) a replan set a blocked
   task back to `todo` behind the card that amends its conflict's check;
   Tenaz rejected it twice and the run ended BLOCKED. Tenaz now accepts
   that backlog. Tested with the scripted harness only, not yet in a run
-  with a real model.
+  with a real model. In the articulated-cabinet run with Qwen3.8-Flash-Next
+  (2026-11-05) a replan reopened a task with no amending card, Tenaz
+  blocked it again in silence, and the run later blocked with no task
+  ready. Tenaz now tells the replan before it ends. Seen once:
+  after `tenaz run --resume`, the next replan was told, dropped the task
+  and gave its work to a new card, which was built in one attempt. The
+  replan itself ran out of turns; its cards were kept.
+- **`--resume` after no task was ready.** A run blocked with no task
+  ready gets one more replan on `--resume`. Tested with a
+  scripted-harness scenario, and seen once in that run (2026-11-05):
+  the replan ran, hit its turn budget, and the run went on.
 - **A model per role** (`--model-for`, ADR 0011). fx is launched with each
   session's model: its `settings.json` is rewritten before the session
   starts. Run once with fx 0.0.15 and mlx-serve 26.10.3 holding two
@@ -351,10 +392,20 @@ above), so a 32k context is the practical floor (`contextFloor`).
   magic. mlx-serve keeps a 3D model loaded after its job: with Idol still
   resident (4 GB), TRELLIS.2 was refused with `503 … out_of_memory`,
   since its free-memory check asks for about 26 GB even at 512, and
-  worked once Idol was unloaded (`POST /v1/unload-model`). Tenaz does
-  not unload the 3D model after a call, so a run that uses one 3D model
-  is not affected, but other models loaded in the same server are. Not
-  verified: a `generate_3d` call from an agent in a real run (the MCP
+  worked once Idol was unloaded (`POST /v1/unload-model`). In the first
+  real run TRELLIS.2 stayed loaded for hours after its job, next to the
+  LLM, so Tenaz now unloads the 3D model (and an `--images` model) after
+  each job. Checked by hand on 2026-11-04 through the adapters against
+  mlx-serve 26.11.1 on a spare port with no model loaded:
+  `/v1/unload-model` answers 200 `state: unloaded` for a known model and
+  404 `model_not_found` for an unknown one, which Tenaz journals as a
+  failed unload. Freeing a loaded TRELLIS.2 through it was seen by the
+  operator (HTTP 200), not through Tenaz: a run was using the memory.
+  The unload is not checked against `--images` servers other than
+  mlx-serve: one that answers an unknown route with something other than
+  404, 405 or 501 gets a `failed unload` in the journal after each job
+  (the job is kept).
+  Not verified: a `generate_3d` call from an agent in a real run (the MCP
   tool is tested only against fakes), TRELLIS.2 at 1024 or 1536 (about
   6.7 minutes at 1024 measured outside Tenaz), Hunyuan3D and Pixal3D,
   and a run whose LLM is on the same mlx-serve. The tool refuses a picture
@@ -366,6 +417,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
   the ledger only. No run has yet held the ceiling for twice the wait and
   raised the budget past it, with an engine that held the raise or
   overflowed it.
+- **A peak the engine held raises the cap** (ADR 0026), journaled as
+  `context-cap-overrun`. Seen once, in the
+  articulated-cabinet run resumed on 6 November: from 44942 the cap rose
+  session by session to 82232 within a night, with no engine error. The
+  first two replans after the resume were still cut. Only seen
+  with Qwen Code on Sushi.
 - **Release attestations.** The release workflow attests each archive
   (`actions/attest`, generated by cargo-dist 0.32); `gh attestation
   verify` passed for both archives of v0.3.0. Only the archives for each
@@ -463,6 +520,14 @@ above), so a 32k context is the practical floor (`contextFloor`).
   again; Qwen Code's last replan reached the output limit. After the
   runs, Qwen Code's `HOME` held a process registry and undo copies of
   edited files, but no conversations or memories.
+- **Qwen Code: reads and writes.** A run with Qwen3.8 Flash on Sushi
+  (2026-11-03) stopped a session that had read 20 new files with
+  `ReadFile` as idle, and journaled `writes: 0` for every session: the
+  watchdog knew only Pi's and fx's tool names. It now takes the effect
+  from ACP's `kind` and knows Qwen Code's names (ADR 0021). Checked
+  against Qwen Code 0.26.6's sources (its tool names and that it sends
+  `kind`) and unit tests; no run has used it yet. OpenCode's `kind` was
+  not checked: no OpenCode session recorded it.
 - **OpenCode and Qwen Code: not checked.** Media tools over MCP and their
   time limit (OpenCode's MCP `timeout` may only bound listing the tools),
   pinned skills, `--model-for`, pause and resume, a run in the OS sandbox,

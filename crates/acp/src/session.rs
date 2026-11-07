@@ -35,6 +35,8 @@ pub enum EngineObservation {
     Error {
         message: String,
     },
+    /// The proxy refused the agent's request to summarize its conversation.
+    CompactionRefused,
 }
 
 /// The runner's stop reason for an OpenAI-style `finish_reason`. Without
@@ -347,6 +349,11 @@ impl Running {
                     .end_request(&format!("{stop_reason:?}, {} output tokens", usage.output));
                 self.translator
                     .request_end(usage, stop_reason, None, server, sent.map(|s| *s))
+            }
+            EngineObservation::CompactionRefused => {
+                self.thinking.end_request("compaction refused");
+                self.emit(SessionEvent::CompactionRefused);
+                return;
             }
             EngineObservation::Error { message } => {
                 self.thinking.end_request("error");

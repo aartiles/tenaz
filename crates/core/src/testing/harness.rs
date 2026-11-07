@@ -111,6 +111,10 @@ pub struct ScriptedHarness {
     pub outgrow_review: Option<String>,
     /// The first review of this task asks for changes with a MINOR finding.
     pub minor_review: Option<String>,
+    /// The first review of this task writes its verdict, then keeps
+    /// working until it is stopped at its turn budget. With
+    /// `rejected_review` on the same task, that verdict is CHANGES.
+    pub long_review: Option<String>,
     /// The builder of this task also writes an image, `assets/<task>.png`.
     pub image_task: Option<String>,
     /// The first attempt of this task deletes T001's check (any task but
@@ -323,6 +327,9 @@ pub enum Routing {
     ReopenAmenderMarkedDone,
     /// Sets it back to `todo` and writes no `T005`.
     ReopenWithoutAmend,
+    /// As `ReopenWithoutAmend`, then drops it when told it would be
+    /// blocked again.
+    ReopenWithoutAmendThenDrop,
     /// Sets it to `done`, which a planner may not.
     MarkDone,
 }

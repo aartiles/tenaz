@@ -63,6 +63,8 @@ without changing a check of a done task says so in
 may add a card that amends those checks, judged against the spec (ADR
 0009). The replan may also set the blocked task back to `todo`: it waits
 until that card is built, then starts again with no attempts (ADR 0018).
+A replan that reopens it with no such card is told, before it ends, that
+Tenaz will block it again.
 Work too heavy for a session, such as a long render, is declared
 by the builder in `.tenaz/jobs/<TASK>.json`; Tenaz runs it between
 sessions, with the engine's memory freed where it can, for at most
@@ -88,7 +90,10 @@ project's own tests.
 - **Engine failures are not task failures.** A crash, a refused connection or
   a smaller context than expected is retried with backoff without charging
   the task. A reply cut at the output limit is the session's: it counts as
-  an attempt, and the next session reasons at a lower effort.
+  an attempt, and the next session reasons at a lower effort. A request
+  the engine refuses for what is in it (a 400 for a file it cannot
+  decode) is not retried as it was: a fresh session goes on, told what
+  was refused, up to the session's continuations.
 - **Watchdogs.** Loops, repeated calls, idle turns and huge outputs get a
   steering message first (fx and Pi; OpenCode and Qwen Code get none),
   then the session is stopped. A file written outside the project is
@@ -320,8 +325,8 @@ interface the skill relies on:
 - `run` reads all of that from `run.json`. A launch flag given to `run`
   (`--comfyui`, `--engine-start`, ...) replaces the pinned value and is
   saved. `--resume` continues a blocked run after you have fixed what
-  blocked it. A second `run` on a project that is already running is
-  refused.
+  blocked it; a run blocked with no task ready gets a replan again. A
+  second `run` on a project that is already running is refused.
 - `status` reads files only and is safe while a run works.
 - `watch` follows the run as it works, session by session: with
   `--level summary` the run log only, with `actions` (the default) also each
@@ -392,7 +397,13 @@ is over the budget of the role's model; see
 [ADR 0012](docs/adr/0012-prompts-that-fit-their-model.md). Tenaz
 does not set the sampling temperature, so each engine uses its own
 default; `--set temperature=0` pins it for the run (through the proxy),
-which makes runs on different engines comparable.
+which makes runs on different engines comparable. The proxy forwards only the
+last assistant message's reasoning, so the model's earlier
+reasoning does not fill its window; `--set keepPastReasoning=true` sends
+it all ([ADR 0023](docs/adr/0023-send-only-the-last-reasoning.md)).
+A video file the agent read reaches the engine as a note that says to
+read it as frames, since the local engines do not decode video files
+([ADR 0024](docs/adr/0024-a-note-in-place-of-a-video-file.md)).
 
 ### Pi instead of fx
 
@@ -465,7 +476,8 @@ or TRELLIS.2 ([ADR 0020](docs/adr/0020-a-3d-tool.md)). The agent names a
 PNG or JPEG inside the project and where to write the `.glb`, also inside
 the project, and may set `resolution`, `seed`, `steps` and `mode`.
 TRELLIS.2 needs a cutout whose alpha is the object; Idol cuts the object
-out itself. A call frees the LLM first, as an image does, and is limited
+out itself. A call frees the LLM first, as an image does, frees the 3D
+model after it (`/v1/unload-model`), and is limited
 by `--media-timeout` (1800 s by default): TRELLIS.2 at 1024 took about
 7 minutes on an M5 Mac. A run may have an image engine, a 3D engine or
 both, on the same server or not. Pi gets no media tools.

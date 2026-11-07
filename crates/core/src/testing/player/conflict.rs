@@ -44,7 +44,10 @@ impl Player {
         if !prompt.contains(&shown) || self.cwd.join(".tenaz/tasks/T005.md").exists() {
             return false;
         }
-        if !matches!(routing, Routing::ReopenWithoutAmend) {
+        if !matches!(
+            routing,
+            Routing::ReopenWithoutAmend | Routing::ReopenWithoutAmendThenDrop
+        ) {
             self.write_amending(&check, routing).await;
         }
         let path = format!(".tenaz/tasks/{task}.md");
@@ -53,6 +56,28 @@ impl Player {
             .await;
         self.finish("Amended.");
         true
+    }
+
+    /// Told that the task it reopened would be blocked again, a replan
+    /// whose routing says so gives its work to a new `T005` and drops it;
+    /// any other ignores the prompt.
+    pub(super) async fn drop_refused_reopen(&mut self) {
+        let Some(ScriptedConflict {
+            task,
+            routing: Routing::ReopenWithoutAmendThenDrop,
+            ..
+        }) = self.script.conflict.clone()
+        else {
+            return self.finish("Left as it is.");
+        };
+        let routed_to = card("T005", &["R3"], &["T001"], None);
+        self.write_tool(".tenaz/tasks/T005.md", &routed_to, false)
+            .await;
+        let path = format!(".tenaz/tasks/{task}.md");
+        let card = std::fs::read_to_string(self.cwd.join(&path)).unwrap_or_default();
+        let dropped = set_card_fields(&card, &[("status", "dropped".to_owned())]);
+        self.write_tool(&path, &dropped, false).await;
+        self.finish("Dropped.");
     }
 
     /// Writes `T005`, which amends `check`, as `routing` says.
@@ -76,7 +101,9 @@ impl Player {
 fn routed(task: &str, blocked: &str, routing: Routing) -> String {
     match routing {
         Routing::Drop => set_card_fields(blocked, &[("status", "dropped".to_owned())]),
-        Routing::ReopenUnlinked | Routing::ReopenWithoutAmend => {
+        Routing::ReopenUnlinked
+        | Routing::ReopenWithoutAmend
+        | Routing::ReopenWithoutAmendThenDrop => {
             set_card_fields(blocked, &[("status", "todo".to_owned())])
         }
         Routing::MarkDone => set_card_fields(blocked, &[("status", "done".to_owned())]),

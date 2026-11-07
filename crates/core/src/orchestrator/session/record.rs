@@ -53,6 +53,7 @@ impl Runner {
                     .task
                     .as_ref()
                     .filter(|_| started.role == Role::Builder),
+                replan_before: started.ctx.replan_before.as_ref(),
             })
             .await?;
         let left = self.after_harness(&started, requests).await?;
@@ -223,6 +224,7 @@ fn session_record(started: &Started<'_>, metrics: &SessionMetrics, left: Left) -
         provider_errors: metrics.provider_errors,
         capacity_limits: metrics.capacity_limits.clone(),
         image_refusal: metrics.image_refusal.clone(),
+        request_refusal: metrics.request_refusal.clone(),
         big_outputs: metrics.big_outputs,
         watchdog: metrics.events.clone(),
         reverted: left.reverted,

@@ -171,6 +171,7 @@ impl EngineAdapter for FakeLlm {
 struct FakeComfy {
     log: Arc<Log>,
     fail_job: bool,
+    fail_unload: bool,
     gate: Gate,
     shares_engine: bool,
 }
@@ -205,6 +206,9 @@ impl MediaAdapter for FakeComfy {
 
     async fn unload(&self) -> Result<(), MediaError> {
         self.log.push("comfy unload");
+        if self.fail_unload {
+            return Err(MediaError::Unreachable("connection refused".into()));
+        }
         Ok(())
     }
 
@@ -263,6 +267,34 @@ pub(super) fn setup_run(
     fail_job: bool,
     shares: bool,
 ) -> Setup {
+    let media = MediaBehaviour {
+        fail_job,
+        fail_unload: false,
+        shares,
+    };
+    build(llm, models, &media)
+}
+
+/// A lease over `m`, loaded, whose media engine fails to unload.
+pub(super) fn setup_failing_media_unload() -> Setup {
+    let llm = Arc::new(FakeLlm::new(&["m"], &["m"], Unload::Works));
+    let models = llm.listed.clone();
+    let media = MediaBehaviour {
+        fail_job: false,
+        fail_unload: true,
+        shares: false,
+    };
+    build(llm, models, &media)
+}
+
+/// How the fake media engine behaves.
+struct MediaBehaviour {
+    fail_job: bool,
+    fail_unload: bool,
+    shares: bool,
+}
+
+fn build(llm: Arc<FakeLlm>, models: Vec<String>, fake: &MediaBehaviour) -> Setup {
     let log = llm.log.clone();
     let transitions = Arc::new(StdMutex::new(Vec::new()));
     let seen = transitions.clone();
@@ -270,9 +302,10 @@ pub(super) fn setup_run(
     let gate = Gate::new();
     let media = FakeComfy {
         log: log.clone(),
-        fail_job,
+        fail_job: fake.fail_job,
+        fail_unload: fake.fail_unload,
         gate: gate.clone(),
-        shares_engine: shares,
+        shares_engine: fake.shares,
     };
     let manager = LeaseManager::new(llm, models, gate, observer).with_media(Arc::new(media));
     (manager, log, transitions)

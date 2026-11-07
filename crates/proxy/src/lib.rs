@@ -7,6 +7,7 @@ mod events;
 mod repair;
 mod sse;
 mod tap;
+mod video;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -52,6 +53,16 @@ pub struct Proxy {
     /// The harness's output limit, for requests that do not carry one: a
     /// reply that reaches it is reported with `finish_reason: length`.
     pub max_output_tokens: Option<u64>,
+    /// The text that opens the harness's own request to summarize its
+    /// conversation, for a harness that cannot be told not to send one.
+    /// Such a request is answered with an error and never reaches the
+    /// engine: the runner ends the session there instead, and a fresh one
+    /// continues (ADR 0022).
+    pub compaction_prompt_opening: Option<String>,
+    /// Send the engine the reasoning of every earlier assistant message.
+    /// Off, only the last one keeps it: a harness that sends it all back
+    /// fills the window with reasoning the model no longer needs (ADR 0023).
+    pub keep_past_reasoning: bool,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -81,6 +92,9 @@ impl ProxyHandle {
         let _ = self.task.await;
     }
 }
+
+/// The error message a refused compaction request is answered with.
+const COMPACTION_REFUSED: &str = "Tenaz ends this session instead of compacting its context";
 
 /// Headers that belong to one hop and are never forwarded.
 const HOP_BY_HOP: [&str; 8] = [
@@ -116,6 +130,8 @@ impl Proxy {
             repair_tool_args: true,
             effort: None,
             max_output_tokens: None,
+            compaction_prompt_opening: None,
+            keep_past_reasoning: false,
         }
     }
 
@@ -136,6 +152,30 @@ impl Proxy {
             shutdown,
             task,
         })
+    }
+
+    /// The answer to the harness's request to summarize its conversation,
+    /// which is refused (see [`Proxy::compaction_prompt_opening`]); `None` for any
+    /// other request.
+    fn refuse_if_compaction(
+        &self,
+        id: u64,
+        request: Option<&serde_json::Value>,
+    ) -> Option<Response> {
+        let opening = self.compaction_prompt_opening.as_deref()?;
+        if !asks_to_compact(request?, opening) {
+            return None;
+        }
+        self.observe(ProxyEvent::CompactionRefused { request: id });
+        Some(
+            (
+                StatusCode::BAD_REQUEST,
+                axum::Json(
+                    serde_json::json!({ "error": { "message": COMPACTION_REFUSED, "type": "proxy_error" } }),
+                ),
+            )
+                .into_response(),
+        )
     }
 
     fn observe(&self, event: ProxyEvent) {
@@ -168,45 +208,122 @@ fn is_completion(method: &axum::http::Method, path: &str) -> bool {
             || path.ends_with("/responses"))
 }
 
-/// Rewrites a completion request: `stream_options.include_usage` on a
-/// streaming request that lacks it, the defaults for absent fields, and
-/// `effort` as the `reasoning_effort` when given. `None` when nothing changed.
-fn rewrite_request(
-    body: &[u8],
-    include_usage: bool,
-    defaults: &serde_json::Map<String, serde_json::Value>,
-    effort: Option<&str>,
-) -> Option<Vec<u8>> {
-    let mut json: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let object = json.as_object_mut()?;
-    let mut changed = false;
-    if let Some(effort) = effort
-        && object
-            .get("reasoning_effort")
-            .and_then(serde_json::Value::as_str)
-            != Some(effort)
-    {
-        object.insert("reasoning_effort".to_owned(), effort.into());
-        changed = true;
+/// Is a chat request the harness's own request to summarize its
+/// conversation? Qwen Code 0.26.6 sends it as the last message, from the
+/// user, opening with `opening` (its system prompt is the agent's own).
+fn asks_to_compact(request: &serde_json::Value, opening: &str) -> bool {
+    let Some(last) = request
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|m| m.last())
+    else {
+        return false;
+    };
+    if last.get("role").and_then(serde_json::Value::as_str) != Some("user") {
+        return false;
     }
+    let text = match last.get("content") {
+        Some(serde_json::Value::String(text)) => Some(text.as_str()),
+        Some(serde_json::Value::Array(parts)) => parts
+            .first()
+            .and_then(|p| p.get("text"))
+            .and_then(serde_json::Value::as_str),
+        _ => None,
+    };
+    text.is_some_and(|t| t.trim_start().starts_with(opening))
+}
+
+impl Proxy {
+    /// Rewrites a completion request: the earlier reasoning dropped unless
+    /// kept, the lowered `reasoning_effort` when the dial is turned, the
+    /// defaults for absent fields, `stream_options.include_usage` on a
+    /// streaming request that lacks it, and a note in place of each video
+    /// file (`video`). `None` when nothing changed.
+    fn rewrite_request(&self, body: &[u8]) -> Option<Vec<u8>> {
+        let mut json: serde_json::Value = serde_json::from_slice(body).ok()?;
+        let object = json.as_object_mut()?;
+        let dropped = !self.keep_past_reasoning && drop_past_reasoning(object);
+        let lowered = self
+            .lowered_effort()
+            .is_some_and(|effort| set_effort(object, effort));
+        let filled = fill_defaults(object, &self.request_defaults);
+        let usage = self.include_usage && ask_for_usage(object);
+        let videos = video::replace_video_files(object);
+        if ![dropped, lowered, filled, usage, videos].contains(&true) {
+            return None;
+        }
+        serde_json::to_vec(&json).ok()
+    }
+}
+
+type JsonObject = serde_json::Map<String, serde_json::Value>;
+
+/// Sets `reasoning_effort`; true when it was different.
+fn set_effort(request: &mut JsonObject, effort: &str) -> bool {
+    let current = request
+        .get("reasoning_effort")
+        .and_then(serde_json::Value::as_str);
+    if current == Some(effort) {
+        return false;
+    }
+    request.insert("reasoning_effort".to_owned(), effort.into());
+    true
+}
+
+/// Adds each default the request lacks; true when any was added.
+fn fill_defaults(request: &mut JsonObject, defaults: &JsonObject) -> bool {
+    let mut filled = false;
     for (key, value) in defaults {
-        if !object.contains_key(key) {
-            object.insert(key.clone(), value.clone());
-            changed = true;
+        if !request.contains_key(key) {
+            request.insert(key.clone(), value.clone());
+            filled = true;
         }
     }
-    if include_usage && object.get("stream").and_then(serde_json::Value::as_bool) == Some(true) {
-        let options = object
-            .entry("stream_options")
-            .or_insert_with(|| serde_json::json!({}));
-        if let Some(options) = options.as_object_mut()
-            && !options.contains_key("include_usage")
-        {
+    filled
+}
+
+/// Asks a streaming request for the usage in its last chunk; true when it
+/// had not asked.
+fn ask_for_usage(request: &mut JsonObject) -> bool {
+    if request.get("stream").and_then(serde_json::Value::as_bool) != Some(true) {
+        return false;
+    }
+    let options = request
+        .entry("stream_options")
+        .or_insert_with(|| serde_json::json!({}));
+    match options.as_object_mut() {
+        Some(options) if !options.contains_key("include_usage") => {
             options.insert("include_usage".to_owned(), serde_json::Value::Bool(true));
-            changed = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The fields in which harnesses send an assistant message's reasoning.
+const REASONING_FIELDS: [&str; 2] = ["reasoning_content", "reasoning"];
+
+/// Removes the reasoning of every assistant message but the last; true when
+/// any was removed. Only the turn before the newest changes from one request
+/// to the next, so the prefix the engine has cached stays valid up to it;
+/// from there on the engine reads the request again.
+fn drop_past_reasoning(request: &mut JsonObject) -> bool {
+    let Some(messages) = request.get_mut("messages").and_then(|m| m.as_array_mut()) else {
+        return false;
+    };
+    let mut assistants = messages
+        .iter_mut()
+        .filter_map(|m| m.as_object_mut())
+        .filter(|m| m.get("role").and_then(serde_json::Value::as_str) == Some("assistant"))
+        .collect::<Vec<_>>();
+    assistants.pop();
+    let mut dropped = false;
+    for message in assistants {
+        for field in REASONING_FIELDS {
+            dropped |= message.remove(field).is_some();
         }
     }
-    changed.then(|| serde_json::to_vec(&json).ok()).flatten()
+    dropped
 }
 
 async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
@@ -225,25 +342,14 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
             return (StatusCode::BAD_REQUEST, format!("request body: {error}")).into_response();
         }
     };
-    let rewritten = if completion {
-        rewrite_request(
-            &body,
-            proxy.include_usage,
-            &proxy.request_defaults,
-            proxy.lowered_effort(),
-        )
-    } else {
-        None
-    };
-    let body = match rewritten {
-        Some(rewritten) => bytes::Bytes::from(rewritten),
-        None => body,
-    };
-    let request_json = if completion {
-        serde_json::from_slice::<serde_json::Value>(&body).ok()
-    } else {
-        None
-    };
+    let rewritten = completion.then(|| proxy.rewrite_request(&body)).flatten();
+    let body = rewritten.map_or(body, bytes::Bytes::from);
+    let request_json = completion
+        .then(|| serde_json::from_slice::<serde_json::Value>(&body).ok())
+        .flatten();
+    if let Some(refused) = proxy.refuse_if_compaction(id, request_json.as_ref()) {
+        return refused;
+    }
     let stream = request_json
         .as_ref()
         .and_then(|j| j.get("stream").and_then(serde_json::Value::as_bool))
@@ -435,46 +541,106 @@ fn elapsed_ms(since: Instant) -> u64 {
 mod tests {
     use super::*;
 
+    /// A proxy with its defaults, for the rewrite.
+    fn proxy() -> Proxy {
+        Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}))
+    }
+
+    fn json(bytes: &[u8]) -> serde_json::Value {
+        serde_json::from_slice(bytes).unwrap()
+    }
+
     #[test]
     fn streaming_requests_get_the_usage_option() {
-        let none = serde_json::Map::new();
+        let mut proxy = proxy();
         let body = br#"{"model":"m","stream":true,"messages":[]}"#;
-        let rewritten = rewrite_request(body, true, &none, None).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
-        assert_eq!(json["stream_options"]["include_usage"], true);
-        assert_eq!(json["messages"], serde_json::json!([]));
-        assert!(rewrite_request(br#"{"stream":false}"#, true, &none, None).is_none());
-        assert!(
-            rewrite_request(
-                br#"{"stream":true,"stream_options":{"include_usage":false}}"#,
-                true,
-                &none,
-                None
-            )
-            .is_none()
+        let rewritten = json(&proxy.rewrite_request(body).unwrap());
+        assert_eq!(rewritten["stream_options"]["include_usage"], true);
+        assert_eq!(rewritten["messages"], serde_json::json!([]));
+        assert!(proxy.rewrite_request(br#"{"stream":false}"#).is_none());
+        let asked = br#"{"stream":true,"stream_options":{"include_usage":false}}"#;
+        assert!(proxy.rewrite_request(asked).is_none());
+        assert!(proxy.rewrite_request(b"not json").is_none());
+        proxy.include_usage = false;
+        assert!(proxy.rewrite_request(body).is_none());
+    }
+
+    /// A request whose only change is a video file is rewritten.
+    #[test]
+    fn a_request_with_only_a_video_file_is_rewritten() {
+        let body = serde_json::to_vec(
+            &serde_json::json!({"messages": [{"role": "user", "content": [
+                {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAA"}}
+            ]}]}),
+        )
+        .unwrap();
+        let rewritten = json(&proxy().rewrite_request(&body).unwrap());
+        assert_eq!(
+            rewritten["messages"][0]["content"][0]["text"],
+            video::VIDEO_NOTE
         );
-        assert!(rewrite_request(body, false, &none, None).is_none());
-        assert!(rewrite_request(b"not json", true, &none, None).is_none());
+    }
+
+    /// An agent's request between two tool calls: it ends with a tool
+    /// result, and holds items that are not messages.
+    fn agent_request() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({"messages": [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": "", "reasoning_content": "old", "reasoning": "old",
+             "tool_calls": [{"id": "1"}]},
+            1,
+            {"content": "no role", "reasoning_content": "kept"},
+            {"role": "tool", "tool_call_id": "1", "content": "a.txt"},
+            {"role": "assistant", "content": "", "reasoning_content": "new",
+             "tool_calls": [{"id": "2"}]},
+            {"role": "tool", "tool_call_id": "2", "content": "b.txt"},
+        ]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_the_last_assistant_message_keeps_its_reasoning() {
+        let rewritten = json(&proxy().rewrite_request(&agent_request()).unwrap());
+        let messages = &rewritten["messages"];
+        assert_eq!(
+            messages[1],
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]})
+        );
+        assert_eq!(messages[2], 1);
+        assert_eq!(messages[3]["reasoning_content"], "kept");
+        assert_eq!(messages[5]["reasoning_content"], "new");
+    }
+
+    #[test]
+    fn a_single_assistant_message_keeps_its_reasoning() {
+        let one = br#"{"messages":[{"role":"assistant","reasoning_content":"r"}]}"#;
+        assert!(proxy().rewrite_request(one).is_none());
+    }
+
+    #[test]
+    fn keep_past_reasoning_sends_all_of_it() {
+        let mut proxy = proxy();
+        proxy.keep_past_reasoning = true;
+        assert!(proxy.rewrite_request(&agent_request()).is_none());
     }
 
     #[test]
     fn request_defaults_fill_only_absent_fields() {
-        let defaults = serde_json::json!({"reasoning_effort": "medium"})
-            .as_object()
-            .cloned()
-            .unwrap();
+        let mut proxy = proxy();
+        proxy
+            .request_defaults
+            .insert("reasoning_effort".to_owned(), "medium".into());
         let body = br#"{"model":"m","stream":false,"messages":[]}"#;
-        let rewritten = rewrite_request(body, true, &defaults, None).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
-        assert_eq!(json["reasoning_effort"], "medium");
-        assert!(json.get("stream_options").is_none());
+        let rewritten = json(&proxy.rewrite_request(body).unwrap());
+        assert_eq!(rewritten["reasoning_effort"], "medium");
+        assert!(rewritten.get("stream_options").is_none());
         let explicit = br#"{"model":"m","reasoning_effort":"low","stream":true,"stream_options":{"include_usage":true}}"#;
-        assert!(rewrite_request(explicit, true, &defaults, None).is_none());
+        assert!(proxy.rewrite_request(explicit).is_none());
     }
 
     #[test]
     fn a_turned_dial_asks_for_less_effort_than_the_default_or_the_harness() {
-        let mut proxy = Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
+        let mut proxy = proxy();
         proxy
             .request_defaults
             .insert("reasoning_effort".to_owned(), "medium".into());
@@ -484,16 +650,15 @@ mod tests {
         assert_eq!(proxy.lowered_effort(), None, "not turned");
         dial.set_lowered(true);
         assert_eq!(proxy.lowered_effort(), Some("low"));
-        let defaults = proxy.request_defaults.clone();
         let sent = br#"{"model":"m","reasoning_effort":"medium","stream":false}"#;
-        let rewritten = rewrite_request(sent, true, &defaults, Some("low")).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
-        assert_eq!(json["reasoning_effort"], "low");
-        let absent = br#"{"model":"m","stream":false}"#;
-        let rewritten = rewrite_request(absent, true, &defaults, Some("low")).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
         assert_eq!(
-            json["reasoning_effort"], "low",
+            json(&proxy.rewrite_request(sent).unwrap())["reasoning_effort"],
+            "low"
+        );
+        let absent = br#"{"model":"m","stream":false}"#;
+        assert_eq!(
+            json(&proxy.rewrite_request(absent).unwrap())["reasoning_effort"],
+            "low",
             "the override wins over the default"
         );
     }

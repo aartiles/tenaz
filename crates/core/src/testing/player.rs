@@ -182,6 +182,7 @@ impl Player {
             id: id.clone(),
             name: tool.to_owned(),
             args: args.clone(),
+            effect: None,
         });
         effect(self);
         self.emit(SessionEvent::ToolCallEnd {
@@ -279,6 +280,9 @@ impl Player {
             self.write_check(task).await;
             return self.finish("Added the check.");
         }
+        if prompt.contains(crate::orchestrator::REFUSED_REOPENS) {
+            return self.drop_refused_reopen().await;
+        }
         let Some(role) = field(prompt, "Role").map(str::to_owned) else {
             return self.preflight(prompt);
         };
@@ -338,7 +342,12 @@ impl Player {
         }
         let verdict = verdict(&self.script, first_of);
         self.write_tool(&file, verdict, false).await;
-        self.finish("Done.");
+        if first_of(&self.script.long_review) {
+            self.write_until_stopped(|n| format!(".tenaz/private/{task}-check{n}.txt"))
+                .await;
+        } else {
+            self.finish("Done.");
+        }
     }
 
     /// Splits `task` into two cards, the second depending on the first.
@@ -387,6 +396,7 @@ impl Player {
                 id: format!("call_{}", self.call),
                 name: "shell".to_owned(),
                 args: serde_json::json!({ "command": "head -c 400 checks/result.json" }),
+                effect: None,
             });
             "Error: stream did not contain valid UTF-8\n"
         } else {
@@ -453,6 +463,7 @@ impl Player {
             id: id.clone(),
             name: "bash".to_owned(),
             args: serde_json::json!({ "command": "./verify --all" }),
+            effect: None,
         });
         self.until_no_more_read().await;
         self.emit(SessionEvent::ToolCallEnd {
@@ -493,6 +504,7 @@ impl Player {
             id: id.clone(),
             name: "write".to_owned(),
             args: serde_json::json!({ "path": path }),
+            effect: None,
         });
         let (result_text, is_error) = if self.reads_no_more() {
             ("Operation aborted", true)
@@ -818,7 +830,8 @@ impl Player {
         } else if self.first(self.script.big_write_task.as_deref(), "big-write", task) {
             self.big_write(task).await;
         } else if self.first(self.script.long_task.as_deref(), "long", task) {
-            self.long_session(task).await;
+            self.write_until_stopped(|n| format!("src/{task}-part{n}.txt"))
+                .await;
         } else if self.first(self.script.compact_task.as_deref(), "compact", task) {
             self.compact_twice(task).await;
         } else {
@@ -855,13 +868,13 @@ impl Player {
         self.finish("Done.");
     }
 
-    /// New files until the session is stopped at its turn budget.
-    async fn long_session(&mut self, task: &str) {
+    /// New files, named by `path`, until the session is stopped at its
+    /// turn budget.
+    async fn write_until_stopped(&mut self, path: impl Fn(u32) -> String) {
         let mut n = 0;
         while !self.reads_no_more() && n < 200 {
             n += 1;
-            self.write_tool(&format!("src/{task}-part{n}.txt"), "part\n", false)
-                .await;
+            self.write_tool(&path(n), "part\n", false).await;
         }
         self.finish("Done.");
     }

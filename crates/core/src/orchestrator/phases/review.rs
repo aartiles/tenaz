@@ -1,7 +1,7 @@
 //! The fresh-context review of a task that passed `verify`.
 
 use crate::briefing;
-use crate::ledger::{JournalRecord, Verdict};
+use crate::ledger::{JournalRecord, SessionRecord, Verdict};
 use crate::orchestrator::session::SessionCtx;
 use crate::orchestrator::{RunError, Runner};
 use crate::project::{only_minor_findings, verdict_in};
@@ -139,10 +139,12 @@ impl Runner {
                     attempt: Some(input.attempt),
                     turns: Some(25),
                     context_tokens: None,
+                    replan_before: None,
                 },
             )
             .await?;
         let reviewed = self.read_review(task, &s.metrics.texts)?;
+        self.note_stopped_with_verdict(&s.record, reviewed.verdict);
         self.journal(JournalRecord::Review {
             task: task.clone(),
             attempt: input.attempt,
@@ -150,6 +152,18 @@ impl Runner {
             verdict: reviewed.verdict,
         });
         Ok(reviewed)
+    }
+
+    /// Says that a reviewer the orchestrator stopped had already given its
+    /// verdict, which is used: otherwise it reads only as a failed session.
+    fn note_stopped_with_verdict(&self, record: &SessionRecord, verdict: Option<Verdict>) {
+        if let (Some(why), Some(verdict)) = (&record.abort_reason, verdict) {
+            self.log(&format!(
+                "  {}: {why} after writing its review; its verdict ({}) is used",
+                record.label,
+                verdict.as_str()
+            ));
+        }
     }
 
     /// The reviewer's briefing: why the builder was stopped, its notes, the

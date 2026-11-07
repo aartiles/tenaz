@@ -11,7 +11,10 @@ crates/
                            Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
                            engine error messages, tool-argument repair, the lowered
-                           reasoning effort, and replies at the output limit reported as cut.
+                           reasoning effort, replies at the output limit reported as cut, and
+                           a harness's own compaction request refused when set (Qwen Code, ADR 0022),
+                           only the last assistant message's reasoning sent on (ADR 0023), and
+                           a note in place of a video file (ADR 0024).
   acp/       tenaz-acp       HarnessAdapter over ACP (fx, OpenCode, Qwen Code), harness as a subprocess.
   pi/        tenaz-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
   mcp/       tenaz-mcp       MCP server (streamable HTTP) exposing media tools that take the lease.
@@ -35,7 +38,7 @@ Pure modules, each unit-tested without I/O:
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time, provider-error and outside-write rules; emits steer, abort or interrupt (stop the turn, prompt again). |
 | `mesh` | The `generate_3d` tool's paths, which must stay inside the project, what counts as a GLB, and 3D model names (ADR 0020). |
 | `write_scope` | Where a session may write without the sandbox, and whether a write tool's target is outside it (ADR 0008). |
-| `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal). |
+| `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal, refused request). |
 | `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |
 | `role` | The session roles, their prompt paths and what a steered session is asked to write before it stops. |
 | `role_models` | The `--model-for ROLE=ID` map: its checks at `init` and the models pinned in `run.json` (ADR 0011). |

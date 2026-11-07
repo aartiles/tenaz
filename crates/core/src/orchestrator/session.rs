@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use crate::backlog::Backlog;
 use crate::briefing::without_map;
 use crate::lease::{LeaseError, LeaseManager};
 use crate::ledger::{JournalRecord, SessionRecord};
@@ -23,13 +24,15 @@ mod record;
 mod requests;
 
 pub(crate) use harness::HarnessRun;
+#[cfg(any(test, feature = "testing"))]
+pub(crate) use harness::REFUSED_REOPENS;
 use reasons::{PromptLimit, give_up_reason, retry_notice, retry_reason};
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
 const CRITICAL_PRESSURE: u32 = 4;
 
 /// What a session is about.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SessionCtx {
     pub task: Option<TaskId>,
     pub attempt: Option<u32>,
@@ -37,6 +40,11 @@ pub(crate) struct SessionCtx {
     pub turns: Option<u32>,
     /// A card's token budget; the run's default otherwise.
     pub context_tokens: Option<u64>,
+    /// A replan's backlog from before it. A blocked task it sets back to
+    /// `todo` that Tenaz would block again is pointed out before the
+    /// session ends, once per harness session: a continuation or a retry
+    /// of the replan is asked again.
+    pub replan_before: Option<Backlog>,
 }
 
 /// A finished session: its journal record plus the raw metrics.
@@ -139,6 +147,14 @@ impl Runner {
                     continuation: count,
                 });
                 "the engine refused an image the session read"
+            }
+            Continuation::Refused(refusal) => {
+                self.journal(JournalRecord::RefusedContinuation {
+                    label: label.clone(),
+                    refusal: refusal.chars().take(300).collect(),
+                    continuation: count,
+                });
+                "the engine refused a request of the session"
             }
             Continuation::Turns => {
                 self.journal(JournalRecord::TurnContinuation {
@@ -329,9 +345,6 @@ impl Runner {
         let Some(cap) = self.ledger.context_cap else {
             return Ok(());
         };
-        if self.params.capacity_recover_sessions == 0 {
-            return Ok(());
-        }
         let label = session.label.as_str();
         if session
             .memory
@@ -340,6 +353,9 @@ impl Runner {
         {
             self.ledger.note_cap_pressed();
             return self.save();
+        }
+        if self.note_cap_overrun(session)? || self.params.capacity_recover_sessions == 0 {
+            return Ok(());
         }
         if session.context_budget < cap {
             return Ok(());
@@ -364,6 +380,35 @@ impl Runner {
             .map_or_else(String::new, |c| format!(", past the ceiling of {c}"));
         self.log(&format!("  {label}: {} sessions in a row without the engine running out of memory; context budget raised to {budget}{past}", raise.clean_sessions));
         Ok(())
+    }
+
+    /// Lifts the cap to the headroom share of a peak the engine held past
+    /// it (`Ledger::note_cap_overrun`, ADR 0026). True when it did: the
+    /// session did not test the new cap, so it does not count toward a raise.
+    fn note_cap_overrun(&mut self, session: &SessionRecord) -> Result<bool, RunError> {
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a context peak times a fraction is far below 2^53 and floors to a positive u64"
+        )]
+        let held = (session.context_peak as f64 * self.params.capacity_headroom).floor() as u64;
+        let Some(cap) = self.ledger.note_cap_overrun(held) else {
+            return Ok(false);
+        };
+        self.save()?;
+        let label = session.label.as_str();
+        self.journal(JournalRecord::ContextCapOverrun {
+            label: label.to_owned(),
+            context_peak: session.context_peak,
+            context_cap: cap,
+        });
+        let budget = cap.unwrap_or_else(|| self.ledger.largest_budget_tokens());
+        self.log(&format!(
+            "  {label}: the engine held {} tokens with no error; context budget raised to {budget}",
+            session.context_peak
+        ));
+        Ok(true)
     }
 
     /// Waits before rerunning a session the engine failed: the base backoff,

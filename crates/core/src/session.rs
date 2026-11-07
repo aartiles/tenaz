@@ -9,6 +9,17 @@ use serde::{Deserialize, Serialize};
 /// The abort reason of a session whose context the harness compacted twice.
 pub const SECOND_COMPACTION: &str = "second context compaction";
 
+/// The abort reason of a session whose harness began to summarize its own
+/// conversation, which the engine proxy refused (ADR 0022).
+pub const HARNESS_COMPACTION: &str = "the harness began to compact its context";
+
+/// Does an abort reason say the session ran out of context?
+fn is_context_abort(reason: &str) -> bool {
+    reason == SECOND_COMPACTION
+        || reason == HARNESS_COMPACTION
+        || reason.starts_with("context budget exceeded")
+}
+
 /// Token usage of one assistant message, as the harness reports it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -83,6 +94,10 @@ pub enum SessionEvent {
         id: String,
         name: String,
         args: serde_json::Value,
+        /// What the call does to files, when the harness says so (ACP's
+        /// `kind`); otherwise the watchdog goes by the name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effect: Option<ToolEffect>,
     },
     ToolCallEnd {
         id: String,
@@ -109,6 +124,9 @@ pub enum SessionEvent {
     CompactionStart {
         reason: String,
     },
+    /// The harness asked the engine to summarize its conversation, and the
+    /// engine proxy refused: the session ends as one out of context.
+    CompactionRefused,
     /// The harness asks whether a tool call may run. The session runner answers.
     PermissionRequest {
         id: String,
@@ -201,18 +219,25 @@ impl ServerTimings {
     }
 }
 
-/// Tool names that change files, for the idle rule's quick count.
-pub fn is_write_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "write" | "edit" | "Write" | "Edit" | "fs_write" | "edit_file" | "write_file"
-    )
+/// What a tool call does to files, for the idle rule and the write count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolEffect {
+    Read,
+    Write,
 }
 
-/// Tool names that read files: a read of something new counts as progress
-/// for the idle rule.
-pub fn is_read_tool(name: &str) -> bool {
-    matches!(name, "read" | "Read" | "read_file" | "fs_read")
+/// A call's effect: the one its harness declared, else the one its name
+/// says (ADR 0021). The names are Pi's and `OpenCode`'s (`read`, `write`,
+/// `edit`), fx's (`read_file`, `write_file`, `edit_file`), Qwen Code's
+/// (`ReadFile`, `WriteFile`, `Edit`) and Claude-style ones.
+pub fn tool_effect(name: &str, declared: Option<ToolEffect>) -> Option<ToolEffect> {
+    declared.or(match name {
+        "write" | "edit" | "Write" | "Edit" | "WriteFile" | "fs_write" | "edit_file"
+        | "write_file" => Some(ToolEffect::Write),
+        "read" | "Read" | "ReadFile" | "read_file" | "fs_read" => Some(ToolEffect::Read),
+        _ => None,
+    })
 }
 
 /// A watchdog event recorded in the session's journal record.
@@ -256,6 +281,9 @@ pub struct SessionMetrics {
     pub capacity_limits: Vec<u64>,
     pub big_outputs: u32,
     pub image_refusal: Option<String>,
+    /// The engine refused a request for what was in it (`is_request_refusal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_refusal: Option<String>,
     /// The session's last engine error said the engine ran out of memory
     /// ([`is_out_of_memory`]), and no reply came after it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -337,14 +365,10 @@ impl SessionMetrics {
         self.tool_calls > 0 && self.tool_errors >= self.tool_calls
     }
 
-    /// The session ran out of context: stopped at its context budget, or
-    /// at its second compaction.
+    /// The session ran out of context: stopped at its context budget, at
+    /// its second compaction, or when its harness began to compact.
     pub fn context_stopped(&self) -> bool {
-        self.compaction_stopped()
-            || self
-                .abort_reason
-                .as_deref()
-                .is_some_and(|r| r.starts_with("context budget exceeded"))
+        self.abort_reason.as_deref().is_some_and(is_context_abort)
     }
 
     /// The session was stopped when the harness compacted its context a
@@ -412,6 +436,15 @@ static UNAVAILABLE: LazyLock<Regex> = LazyLock::new(|| {
     let unreachable = regex::escape(ENGINE_UNREACHABLE);
     Regex::new(&format!(r"^(?:50[234]\b|{unreachable})")).expect("static regex")
 });
+static REQUEST: LazyLock<Regex> = LazyLock::new(|| {
+    // As engine_error_text leads an error with its status.
+    Regex::new(r"^(?:400|413|415|422)\b").expect("static regex")
+});
+static TOO_LONG: LazyLock<Regex> = LazyLock::new(|| {
+    // A prompt over the model's window, as engines other than Sushi say it.
+    Regex::new(r"(?i)context (?:length|size|window)|too many tokens|maximum context")
+        .expect("static regex")
+});
 static IMAGE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)at most \d+ images|image tokens|\bimage \d+ |images need|does not decode")
         .expect("static regex")
@@ -463,6 +496,20 @@ pub fn is_engine_unavailable(error: &str) -> bool {
     is_out_of_memory(error) || UNAVAILABLE.is_match(error)
 }
 
+/// The engine refused a request for what was in it (400, 413, 415 or
+/// 422). Not an image ([`is_image_refusal`]), a prompt too long
+/// ([`capacity_limit`] or an engine's "context length" wording), or an
+/// engine out of memory ([`is_engine_unavailable`]). The same request is
+/// refused again, and the agent sends it with every later turn, so the
+/// session cannot go on.
+pub fn is_request_refusal(error: &str) -> bool {
+    REQUEST.is_match(error)
+        && !is_image_refusal(error)
+        && capacity_limit(error).is_none()
+        && !TOO_LONG.is_match(error)
+        && !is_engine_unavailable(error)
+}
+
 /// A vision engine refused an image the session read.
 pub fn is_image_refusal(error: &str) -> bool {
     IMAGE.is_match(error)
@@ -471,6 +518,46 @@ pub fn is_image_refusal(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_agents_file_tools_have_their_effect() {
+        let cases = [
+            // Pi and OpenCode 1.19.5.
+            ("read", Some(ToolEffect::Read)),
+            ("write", Some(ToolEffect::Write)),
+            ("edit", Some(ToolEffect::Write)),
+            ("bash", None),
+            ("grep", None),
+            // fx.
+            ("read_file", Some(ToolEffect::Read)),
+            ("write_file", Some(ToolEffect::Write)),
+            ("edit_file", Some(ToolEffect::Write)),
+            ("shell", None),
+            ("grep_files", None),
+            // Qwen Code 0.26.6.
+            ("ReadFile", Some(ToolEffect::Read)),
+            ("WriteFile", Some(ToolEffect::Write)),
+            ("Edit", Some(ToolEffect::Write)),
+            ("Shell", None),
+            ("Grep", None),
+        ];
+        for (name, want) in cases {
+            assert_eq!(tool_effect(name, None), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_declared_effect_wins_over_the_name() {
+        // Qwen Code titles a call it cannot describe yet `ToolCall`.
+        assert_eq!(
+            tool_effect("ToolCall", Some(ToolEffect::Read)),
+            Some(ToolEffect::Read)
+        );
+        assert_eq!(
+            tool_effect("read", Some(ToolEffect::Write)),
+            Some(ToolEffect::Write)
+        );
+    }
 
     /// mlx-serve 26.10.3, in the Digger 3D run of 2026-10-29.
     const MLX_SERVE_REFUSAL: &str = "This prompt (30245 tokens) does not fit in GPU memory even after freeing the prefix cache: it requires ~7720MB GPU memory but only ~6960MB is available. It was refused before any work started. Reduce the prompt length, lower --ctx-size, or free memory on the machine.";
@@ -690,6 +777,27 @@ mod tests {
         ] {
             assert!(!is_engine_unavailable(error), "{error}");
         }
+    }
+
+    #[test]
+    fn request_refusals_are_recognised() {
+        assert!(is_request_refusal(
+            "400: messages[26]: video could not be decoded"
+        ));
+        assert!(is_request_refusal("422: unknown content part type"));
+        assert!(is_request_refusal("413: payload too large"));
+        assert!(is_request_refusal("415: unsupported media type"));
+        assert!(!is_request_refusal(
+            "400: the request exceeds the available context size"
+        ));
+        assert!(!is_request_refusal(
+            "400: Maximum context at KV8 and prefill chunk 512: 61488 tokens."
+        ));
+        assert!(!is_request_refusal("400: at most 2 images"), "an image");
+        assert!(!is_request_refusal("503: busy"), "engine unavailable");
+        assert!(!is_request_refusal("400: not enough GPU memory"), "memory");
+        assert!(!is_request_refusal("500: template failed"));
+        assert!(!is_request_refusal("4000 tokens"));
     }
 
     #[test]

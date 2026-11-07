@@ -132,7 +132,8 @@ and `<label>.thinking.md` (the label is in `tenaz status`). Fix what you
 can (an engine down, an unclear brief: tell the user, since the brief
 cannot change after `init`), then `tenaz run --project <dir> --resume`;
 after updating Tenaz, add `--refresh-templates` so the run gets the new
-prompts. Do not edit `.tenaz/run.json` or the task cards to force
+prompts. A run blocked with no task ready gets a replan again on
+`--resume`. Do not edit `.tenaz/run.json` or the task cards to force
 progress; the one edit a block reason asks for is the exception.
 
 ## Check the result

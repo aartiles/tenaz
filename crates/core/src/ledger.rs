@@ -524,6 +524,8 @@ pub struct SessionRecord {
     pub provider_errors: u32,
     pub capacity_limits: Vec<u64>,
     pub image_refusal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_refusal: Option<String>,
     pub big_outputs: u32,
     pub watchdog: Vec<WatchdogEvent>,
     pub reverted: Vec<String>,
@@ -552,6 +554,17 @@ pub enum TaskOutcome {
 pub enum Verdict {
     Accept,
     Changes,
+}
+
+impl Verdict {
+    /// The word a reviewer writes for it, as journaled.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Accept => "ACCEPT",
+            Self::Changes => "CHANGES",
+        }
+    }
 }
 
 /// One line of `journal.jsonl`, tagged by `type`.
@@ -592,6 +605,13 @@ pub enum JournalRecord {
         refusal: String,
         continuation: u32,
     },
+    /// The engine refused what a request of a session held; a fresh
+    /// session continues its work (ADR 0025).
+    RefusedContinuation {
+        label: String,
+        refusal: String,
+        continuation: u32,
+    },
     /// A session that edits files was stopped at its turn budget; a fresh
     /// session continues its work.
     TurnContinuation {
@@ -610,6 +630,13 @@ pub enum JournalRecord {
         /// `None`: back to each model's configured budget.
         context_cap: Option<u64>,
         clean_sessions: u32,
+    },
+    /// A session the engine held past the run's cap lifted it (ADR 0026).
+    ContextCapOverrun {
+        label: String,
+        context_peak: u64,
+        /// `None`: back to each model's configured budget.
+        context_cap: Option<u64>,
     },
     EngineRetry {
         label: String,
@@ -1055,5 +1082,15 @@ mod tests {
         let phase: Phase = serde_json::from_str("\"COMPLETE_WITH_GAPS\"").unwrap();
         assert_eq!(phase, Phase::CompleteWithGaps);
         assert!(!phase.is_running());
+    }
+
+    #[test]
+    fn a_verdict_is_journaled_as_the_word_a_reviewer_writes() {
+        for verdict in [Verdict::Accept, Verdict::Changes] {
+            assert_eq!(
+                serde_json::to_string(&verdict).unwrap(),
+                format!("\"{}\"", verdict.as_str())
+            );
+        }
     }
 }

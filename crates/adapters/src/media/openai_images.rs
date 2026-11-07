@@ -1,7 +1,8 @@
 //! An `OpenAI` Images API (`POST /v1/images/generations`), as local servers
 //! such as `Rapid-MLX`, mlx-omni-server and `LocalAI` serve it. The image comes
-//! back as base64 and is written to the job's output directory. The API has
-//! no way to free the model, so `unload` does nothing.
+//! back as base64 and is written to the job's output directory. The Images
+//! API has no way to free the model; `unload` asks for `/v1/unload-model`,
+//! which mlx-serve has, and a server without it is left as it is.
 
 use std::path::Path;
 use std::time::Duration;
@@ -189,8 +190,10 @@ impl MediaAdapter for OpenAiImages {
         })
     }
 
+    /// Frees the model, also when the LLM's own server serves it: that
+    /// server keeps it loaded otherwise, next to the LLM.
     async fn unload(&self) -> Result<(), MediaError> {
-        Ok(())
+        super::unload_model(&self.client, &self.base_url, &self.model).await
     }
 
     fn shares_engine(&self) -> bool {
@@ -278,6 +281,7 @@ mod tests {
                 "negative_prompt": "blur"
             })
         );
+        // This server has no `/v1/unload-model`: nothing to free, no error.
         images.unload().await.unwrap();
         assert!(!images.shares_engine());
         assert!(images.sharing_the_engine(true).shares_engine());

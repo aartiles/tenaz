@@ -207,6 +207,36 @@ async fn a_raise_aims_at_the_largest_model_s_budget() {
     assert!(reviewers.contains(&109_791), "{reviewers:?}");
 }
 
+/// A session the engine holds past the lowered cap, with no error, lifts
+/// the cap to the headroom share of its peak at once: waiting for a raise
+/// cut every session that needed more, until the run blocked.
+#[tokio::test(start_paused = true)]
+async fn a_session_held_past_the_cap_raises_it_at_once() {
+    let scripted = ScriptedHarness {
+        engine_failures: true,
+        context_stop_task: Some("T001".into()),
+        ..Default::default()
+    };
+    let run = Played::with(scripted, &[]).await;
+    let held = run
+        .records
+        .iter()
+        .find_map(|r| match r {
+            JournalRecord::ContextCapOverrun {
+                context_peak,
+                context_cap,
+                ..
+            } => Some((*context_peak, *context_cap)),
+            _ => None,
+        })
+        .expect("the overrun lifted the cap");
+    // The scripted harness's figures: its bootstrap engine failures lower
+    // the cap to 49190, and the run's largest budget is 85196. T001's
+    // builder outgrew it to 120020 with no engine error. The headroom
+    // share of that, 96016, is past the run's 85196: the cap is gone.
+    assert_eq!(held, (120_020, None));
+}
+
 /// A session whose budget is under the lowered cap does not count toward
 /// raising it: it did not test what the engine can hold.
 #[tokio::test(start_paused = true)]

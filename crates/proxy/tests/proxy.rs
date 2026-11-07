@@ -518,3 +518,66 @@ async fn a_reply_at_the_requested_output_limit_is_reported_as_cut() {
         "the request's settings are reported with its completion: {events:?}"
     );
 }
+
+/// The opening of Qwen Code 0.26.6's summarizing prompt
+/// (`tenaz_acp::qwen::COMPACTION_PROMPT`).
+const COMPACTION_OPENING: &str = "You are the component that summarizes a conversation when its context window is about to overflow.";
+
+/// A chat request whose last message is from the user and says `last`.
+fn chat(last: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"messages": [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "hi"},
+        {"role": "user", "content": last}
+    ]})
+}
+
+/// Qwen Code's request to summarize its conversation is answered with an
+/// error and never reaches the engine; a turn that only quotes the prompt
+/// passes.
+#[tokio::test]
+async fn refuses_the_harness_compaction_request() {
+    let upstream = fake_engine().await;
+    let events: Arc<Mutex<Vec<ProxyEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let mut proxy = Proxy::new(
+        format!("http://{upstream}"),
+        Gate::new(),
+        Arc::new(move |e| sink.lock().unwrap().push(e)),
+    );
+    proxy.compaction_prompt_opening = Some(COMPACTION_OPENING.to_owned());
+    let handle = Arc::new(proxy)
+        .start("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let url = format!("{}/chat/completions", handle.base_url());
+    let summarize = chat(&serde_json::json!([
+        {"type": "text", "text": format!("\n{COMPACTION_OPENING} The summary you produce …")}
+    ]));
+    let refused = client.post(&url).json(&summarize).send().await.unwrap();
+    assert_eq!(refused.status(), 400);
+    let body: serde_json::Value = refused.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "proxy_error", "{body}");
+    let quoted = chat(&serde_json::json!(format!(
+        "Read crates/acp/src/qwen.rs; it holds \"{COMPACTION_OPENING}\""
+    )));
+    let passed = client.post(&url).json(&quoted).send().await.unwrap();
+    assert_eq!(
+        passed.status(),
+        200,
+        "a turn that quotes the prompt is not a compaction"
+    );
+    let events = settle(&events, 2).await;
+    assert_eq!(
+        events[0],
+        ProxyEvent::CompactionRefused {
+            request: FIRST_REQUEST
+        }
+    );
+    assert!(
+        matches!(&events[1], ProxyEvent::Completed { status: 200, .. }),
+        "only the agent's turn reached the engine: {events:?}"
+    );
+    handle.stop().await;
+}
