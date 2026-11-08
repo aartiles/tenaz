@@ -134,14 +134,6 @@ mod tests {
     const TURN_CHARS: usize = 40;
     const BUDGET_TOKENS: u64 = 25;
 
-    /// The requests at which the earlier reasoning passes the budget: it
-    /// takes this many turns' worth, and each step starts counting again.
-    fn is_step(n: usize) -> bool {
-        let turn_tokens = approx_tokens(&"r".repeat(TURN_CHARS));
-        let turns_per_step = usize::try_from(BUDGET_TOKENS).unwrap() / turn_tokens + 1;
-        n > 1 && (n - 1).is_multiple_of(turns_per_step)
-    }
-
     /// The `n`th request of an agent session: a user message, then `n`
     /// assistant turns that send their reasoning in `field`, each with a
     /// tool result.
@@ -187,11 +179,14 @@ mod tests {
     /// turn; at a step it repeats it up to the oldest reasoning it removes.
     #[test]
     fn consecutive_requests_share_their_prefix() {
+        // 10 tokens a turn against a budget of 25: the earlier reasoning
+        // passes it on the third turn after each step.
+        let steps = [4, 7, 10];
         for field in REASONING_FIELDS {
             for n in 2..=12 {
                 let before = rewritten(n - 1, field, BUDGET_TOKENS);
                 let after = rewritten(n, field, BUDGET_TOKENS);
-                let expected = if is_step(n) {
+                let expected = if steps.contains(&n) {
                     first_with_reasoning(&before, field)
                 } else {
                     before.len()
@@ -208,12 +203,6 @@ mod tests {
             let after = rewritten(n, "reasoning_content", 0);
             assert_eq!(shared(&before, &after), 2 * (n - 1) - 1, "request {n}");
         }
-    }
-
-    #[test]
-    fn steps_come_every_third_request_here() {
-        let steps = (2..=12).filter(|&n| is_step(n)).collect::<Vec<_>>();
-        assert_eq!(steps, [4, 7, 10]);
     }
 
     #[test]

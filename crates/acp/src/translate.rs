@@ -776,6 +776,27 @@ mod tests {
         );
     }
 
+    /// What the agent said before a prompt was cancelled is still its
+    /// answer so far, and is reported as late text.
+    #[test]
+    fn late_text_of_a_cancelled_prompt_is_kept() {
+        let mut t = Translator::new();
+        let request_seen = true;
+        t.request_end(Usage::default(), StopReason::Stop, None, None, None);
+        t.update(&SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new("half an answer")),
+        )));
+        assert_eq!(
+            t.prompt_end(AcpStop::Cancelled, request_seen),
+            vec![
+                SessionEvent::LateText {
+                    text: "half an answer".to_owned()
+                },
+                SessionEvent::Settled { aborted: true },
+            ]
+        );
+    }
+
     #[test]
     fn permission_requests_and_option_choice() {
         let options = vec![

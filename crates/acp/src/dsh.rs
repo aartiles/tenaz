@@ -340,9 +340,23 @@ mod tests {
         };
         let critic = critic(false);
         agent.write_config(&critic).unwrap();
+        let spec = SessionSpec {
+            label: "001-builder-T001".into(),
+            cwd: home.path().to_path_buf(),
+            persist_dir: None,
+            raw_log: None,
+            thinking_log: None,
+            stderr_log: None,
+            model: critic.clone(),
+        };
+        let args = agent.args(&spec);
+        let named = args
+            .iter()
+            .skip_while(|a| *a != "--patch")
+            .nth(1)
+            .expect("the command line names a patch");
         let written: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(agent.launch.patch_path()).unwrap())
-                .unwrap();
+            serde_json::from_str(&std::fs::read_to_string(named).unwrap()).unwrap();
         assert_eq!(written, patch().for_model(&critic).to_json());
     }
 }

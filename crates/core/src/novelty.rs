@@ -441,6 +441,8 @@ node .tenaz/private/probe.mjs | tail -60";
         }
     }
 
+    /// Paths ADR 0029 accepts missing. When one of these is fixed, move it
+    /// to `reads_name_their_files`.
     #[test]
     fn known_misses() {
         for (command, why) in [
@@ -458,6 +460,8 @@ node .tenaz/private/probe.mjs | tail -60";
         }
     }
 
+    /// Words ADR 0029 accepts taking as paths. When one of these is fixed,
+    /// move it to `reads_name_their_files`.
     #[test]
     fn known_extras() {
         // A dotted module name looks like a file; it counts once.

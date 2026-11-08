@@ -124,6 +124,7 @@ mod tests {
 
     /// Each session starts the agent's arguments for it, through the
     /// wrapper (the sandbox launcher) when there is one.
+    #[cfg(unix)]
     #[tokio::test]
     async fn each_session_starts_its_arguments_through_the_wrapper() {
         let dir = tempfile::tempdir().unwrap();
