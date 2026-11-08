@@ -2390,7 +2390,7 @@ dependencies = [
 
 [[package]]
 name = "tenaz"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2412,7 +2412,7 @@ dependencies = [
 
 [[package]]
 name = "tenaz-acp"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
@@ -2428,7 +2428,7 @@ dependencies = [
 
 [[package]]
 name = "tenaz-adapters"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2449,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "tenaz-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -2467,7 +2467,7 @@ dependencies = [
 
 [[package]]
 name = "tenaz-mcp"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2486,7 +2486,7 @@ dependencies = [
 
 [[package]]
 name = "tenaz-pi"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "tenaz-proxy"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "axum",
  "bytes",
