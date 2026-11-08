@@ -6,8 +6,7 @@ use thiserror::Error;
 
 use crate::task::frontmatter::{Value, parse_value};
 
-/// The default of [`RunParams::past_reasoning_tokens`], which the engine
-/// proxy also starts with.
+/// The default of [`RunParams::past_reasoning_tokens`].
 pub const PAST_REASONING_TOKENS: u64 = 8192;
 
 /// Tunable parameters of a run. Defaults are the task loop's.
@@ -140,7 +139,7 @@ pub struct RunParams {
     pub repair_tool_args: bool,
     /// The engine proxy sends the reasoning of every earlier assistant
     /// message. Off, it removes it as `past_reasoning_tokens` says
-    /// (ADR 0023).
+    /// (ADRs 0023, 0028).
     pub keep_past_reasoning: bool,
     /// The earlier reasoning the engine proxy keeps, in rough tokens (4
     /// bytes each): once more than this is kept before the newest
@@ -252,6 +251,12 @@ pub enum ParamError {
 }
 
 impl RunParams {
+    /// The earlier reasoning the engine proxy keeps, in rough tokens, or
+    /// `None` when it keeps all of it (`keepPastReasoning`, ADR 0028).
+    pub fn past_reasoning_budget(&self) -> Option<u64> {
+        (!self.keep_past_reasoning).then_some(self.past_reasoning_tokens)
+    }
+
     /// Builders may declare heavy jobs (ADR 0010): `jobMinutes` is not 0.
     pub fn jobs_on(&self) -> bool {
         self.job_minutes > 0
@@ -370,11 +375,23 @@ mod tests {
     }
 
     #[test]
+    fn the_proxy_keeps_8192_tokens_of_past_reasoning_by_default() {
+        assert_eq!(RunParams::default().past_reasoning_budget(), Some(8192));
+    }
+
+    #[test]
     fn a_run_can_remove_past_reasoning_every_turn() {
         let mut p = RunParams::default();
-        assert_eq!(p.past_reasoning_tokens, PAST_REASONING_TOKENS);
         p.apply_override("pastReasoningTokens=0").unwrap();
-        assert_eq!(p.past_reasoning_tokens, 0);
+        assert_eq!(p.past_reasoning_budget(), Some(0));
+    }
+
+    #[test]
+    fn keeping_past_reasoning_overrides_the_budget() {
+        let mut p = RunParams::default();
+        p.apply_override("pastReasoningTokens=100").unwrap();
+        p.apply_override("keepPastReasoning=true").unwrap();
+        assert_eq!(p.past_reasoning_budget(), None);
     }
 
     #[test]

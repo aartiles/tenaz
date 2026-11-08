@@ -134,7 +134,7 @@ impl Proxy {
             effort: None,
             max_output_tokens: None,
             compaction_prompt_opening: None,
-            past_reasoning_budget: Some(tenaz_core::params::PAST_REASONING_TOKENS),
+            past_reasoning_budget: tenaz_core::params::RunParams::default().past_reasoning_budget(),
         }
     }
 
