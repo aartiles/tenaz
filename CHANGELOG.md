@@ -19,8 +19,9 @@ uses [Semantic Versioning](https://semver.org/).
 - `--harness dsh` drives DeepSeek Harness over ACP (`dsh --profile acp`,
   `--dsh-bin` names it), with `HOME` and `DSH_HOME` of its own under
   `.tenaz/private/dsh-home` and a patch Tenaz writes for each session's
-  model that points it at the engine proxy. Not yet tried in a full run;
-  it does not ask before tool calls (see Known gaps).
+  model that points it at the engine proxy. Two runs finished with
+  Qwen3.8-Flash-Next on Sushi, the longer one a 19-hour game brief. It
+  does not ask before tool calls (see Known gaps).
 
 ### Changed
 

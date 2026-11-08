@@ -15,7 +15,7 @@ below; this page is about the real ones.
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 and 1.4.0 in RPC mode | Tested end to end to a COMPLETE run: 1.1.0 with the user's own `models.json`, 1.4.0 with the generated configuration through the proxy and two models (see Known gaps). No media tools (see below). |
 | | [OpenCode](https://github.com/sst/opencode) 1.19.5 (`--harness opencode`) and [Qwen Code](https://github.com/QwenLM/qwen-code) 0.26.6 (`--harness qwen`), both over ACP | One real run each with Qwen3.8-27B on mlx-serve: OpenCode to COMPLETE, Qwen Code to BLOCKED by a replan the run rejected, not by the agent; Tenaz now accepts that replan (ADR 0018). Less tried than fx and Pi (see Known gaps). |
 | | Other ACP agents (`--harness acp`) | The command `--acp-bin` names, with `--acp-args`, told about each session in the file `TENAZ_AGENT_SESSION` names. Tested with unit tests only; no real agent run through it yet. |
-| | [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) 0.2.2-rc.1 (`--harness dsh`) over ACP | Its patch checked with `dsh --profile acp --dump-config` in a fresh `DSH_HOME`, and its ACP behaviour by a probe through the fx path on 2026-11-07 (preflight with Qwen3.8-Flash-Next on Sushi 1.5.1). One small goal run to COMPLETE on 2026-11-07: 17 sessions, preflight `tools=true` (see Known gaps). |
+| | [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) 0.2.2-rc.1 (`--harness dsh`) over ACP | Its patch checked with `dsh --profile acp --dump-config` in a fresh `DSH_HOME`, and its ACP behaviour by a probe through the fx path on 2026-11-07 (preflight with Qwen3.8-Flash-Next on Sushi 1.5.1). Two runs to COMPLETE with Qwen3.8-Flash-Next on Sushi 1.5.1: a small goal on 2026-11-07 (17 sessions) and the raycaster game brief on 2026-11-08 (19 h 20 min, 60 sessions, 19 tasks), preflight `tools=true` in both (see Known gaps). |
 | Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve 26.10.3 loaded and unloaded two models through its API in two runs that swapped them (see Known gaps). |
 | | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run, before the start was skipped for an engine that still serves the model (see Known gaps). The servers named here are untried. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
@@ -134,12 +134,19 @@ above), so a 32k context is the practical floor (`contextFloor`).
   user's `HOME`, settings, skills and memory, and gets the pinned skills
   only if the user's script gives them.
 
-- **DeepSeek Harness has finished one small run only.** `--harness dsh`
-  is built from a probe on 2026-11-07 (dsh 0.2.2-rc.1, ACP protocol 1,
-  agent `deepseek-harness-acp`) and unit tests. On 2026-11-07 it ran a
-  one-file shell goal to COMPLETE with Qwen3.8-Flash-Next on Sushi
-  1.5.1 (17 sessions, six tasks, a replan); that goal used no media
-  tools, skills or long sessions. What the probe showed: dsh did not send permission requests,
+- **DeepSeek Harness has finished two runs.** `--harness dsh` is built
+  from a probe on 2026-11-07 (dsh 0.2.2-rc.1, ACP protocol 1, agent
+  `deepseek-harness-acp`) and unit tests. With Qwen3.8-Flash-Next on
+  Sushi 1.5.1 it ran a one-file shell goal to COMPLETE on 2026-11-07
+  (17 sessions, six tasks, a replan) and the raycaster game brief on
+  2026-11-08 (19 h 20 min, 60 sessions, 19 tasks, two final reviews).
+  The second run changed builds and settings during pauses, so it is
+  evidence that dsh works through a long run, not a clean measurement.
+  It showed: dsh reads images with `read_image` only when the run has
+  `--vision` (without it, it refused all 16 reads); dsh summarizes its
+  own context in a separate request (71 times), Tenaz does not refuse
+  that as it does Qwen Code's, and the request after a summary lost
+  most of its cached prefix in 61 of 70 cases. What the probe showed: dsh did not send permission requests,
   so its tools run without the runner's approval and the watchdog sees a
   call only once it runs; its `usage_update` has no cache counts; it
   sends its answer after the model request ends (kept since the
@@ -184,8 +191,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
   one step. A
   replay of that run's first 713 requests puts the cache at 90.3%, against
   84.9% for ADR 0023 in the same model; the replay models the engine's
-  cache, and the new behaviour is not yet seen in a real run, nor is
-  whether 8192 suits other models and engines.
+  cache. Seen in the same run after the change: sessions 035-041 and
+  046-060 (644 requests, one prefix-cache entry) cached 88.2% and
+  90.8%, with a 1.46 s median time to first token in both, against
+  84.5% and 3.58 s before it; sessions 042-045 ran on a Sushi with two
+  entries and cached 84.3%. The parts had different tasks, so this is
+  not a controlled comparison; whether 8192 suits other models and
+  engines is not checked.
 - **Qwen Code's compaction refused** (ADR 0022). The proxy knows Qwen
   Code's summarizing request by the opening of its prompt in 0.26.6. In
   the articulated-cabinet run (2026-11-03 and 04) it compacted 25 times
