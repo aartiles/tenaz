@@ -398,10 +398,15 @@ is over the budget of the role's model; see
 [ADR 0012](docs/adr/0012-prompts-that-fit-their-model.md). Tenaz
 does not set the sampling temperature, so each engine uses its own
 default; `--set temperature=0` pins it for the run (through the proxy),
-which makes runs on different engines comparable. The proxy forwards only the
-last assistant message's reasoning, so the model's earlier
-reasoning does not fill its window; `--set keepPastReasoning=true` sends
-it all ([ADR 0023](docs/adr/0023-send-only-the-last-reasoning.md)).
+which makes runs on different engines comparable. The proxy removes the model's
+earlier reasoning, so it does not fill the window
+([ADR 0023](docs/adr/0023-send-only-the-last-reasoning.md)): once more
+than `pastReasoningTokens` (8192) of it is kept before the newest
+assistant message, all but the newest one's goes in one step, so the
+engine's prefix cache breaks once per step, not every turn
+([ADR 0028](docs/adr/0028-remove-past-reasoning-in-steps.md)).
+`--set pastReasoningTokens=0` removes it every turn, and
+`--set keepPastReasoning=true` sends it all.
 A video file the agent read reaches the engine as a note that says to
 read it as frames, since the local engines do not decode video files
 ([ADR 0024](docs/adr/0024-a-note-in-place-of-a-video-file.md)).

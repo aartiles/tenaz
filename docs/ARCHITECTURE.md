@@ -13,7 +13,7 @@ crates/
                            engine error messages, tool-argument repair, the lowered
                            reasoning effort, replies at the output limit reported as cut, and
                            a harness's own compaction request refused when set (Qwen Code, ADR 0022),
-                           only the last assistant message's reasoning sent on (ADR 0023), and
+                           earlier reasoning removed in steps over a budget (ADRs 0023, 0028), and
                            a note in place of a video file (ADR 0024).
   acp/       tenaz-acp       HarnessAdapter over ACP (fx, OpenCode, Qwen Code), harness as a subprocess.
   pi/        tenaz-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.

@@ -6,6 +6,10 @@ use thiserror::Error;
 
 use crate::task::frontmatter::{Value, parse_value};
 
+/// The default of [`RunParams::past_reasoning_tokens`], which the engine
+/// proxy also starts with.
+pub const PAST_REASONING_TOKENS: u64 = 8192;
+
 /// Tunable parameters of a run. Defaults are the task loop's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -135,8 +139,16 @@ pub struct RunParams {
     /// each repair in `.tenaz/private/tool-repairs.jsonl`.
     pub repair_tool_args: bool,
     /// The engine proxy sends the reasoning of every earlier assistant
-    /// message. Off, it removes all but the last one's (ADR 0023).
+    /// message. Off, it removes it as `past_reasoning_tokens` says
+    /// (ADR 0023).
     pub keep_past_reasoning: bool,
+    /// The earlier reasoning the engine proxy keeps, in rough tokens (4
+    /// bytes each): once more than this is kept before the newest
+    /// assistant message, all of it goes in one step, so the engine's
+    /// prefix cache breaks once per step rather than every turn
+    /// (ADR 0028). 0 removes it every turn. Unused while
+    /// `keep_past_reasoning` is on.
+    pub past_reasoning_tokens: u64,
     /// Run the coding agent and `verify` in an OS sandbox (Seatbelt on macOS,
     /// Landlock on Linux): they can write only to the project, its git
     /// directory, the temporary directories, on macOS the per-user cache,
@@ -206,6 +218,7 @@ impl Default for RunParams {
             agent_skills: false,
             repair_tool_args: true,
             keep_past_reasoning: false,
+            past_reasoning_tokens: PAST_REASONING_TOKENS,
             sandbox: false,
             sandbox_allow_write: "~/.cargo/registry,~/.cargo/git,~/.npm,~/.cache,~/Library/Caches"
                 .to_owned(),
@@ -354,6 +367,14 @@ mod tests {
         assert_eq!(p.temperature, Some(0.0));
         p.apply_override("temperature=0.6").unwrap();
         assert_eq!(p.temperature, Some(0.6));
+    }
+
+    #[test]
+    fn a_run_can_remove_past_reasoning_every_turn() {
+        let mut p = RunParams::default();
+        assert_eq!(p.past_reasoning_tokens, PAST_REASONING_TOKENS);
+        p.apply_override("pastReasoningTokens=0").unwrap();
+        assert_eq!(p.past_reasoning_tokens, 0);
     }
 
     #[test]

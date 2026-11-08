@@ -614,7 +614,8 @@ async fn start_proxy(
     proxy.repair_tool_args = repairs.is_some();
     proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
     proxy.effort = effort;
-    proxy.keep_past_reasoning = ledger.params.keep_past_reasoning;
+    proxy.past_reasoning_budget =
+        (!ledger.params.keep_past_reasoning).then_some(ledger.params.past_reasoning_tokens);
     proxy.compaction_prompt_opening = (ledger.config.harness == HarnessKind::Qwen)
         .then(|| tenaz_acp::qwen::COMPACTION_PROMPT.to_owned());
     proxy.request_defaults =

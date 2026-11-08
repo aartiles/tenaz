@@ -1,6 +1,7 @@
 # ADR 0023: Send the engine only the last reasoning
 
-Status: accepted, 2026-11-05.
+Status: accepted, 2026-11-05. Amended by ADR 0028, which removes the
+reasoning in steps over a budget.
 
 ## Context
 
@@ -62,4 +63,6 @@ A, with `--set keepPastReasoning=true` to send it all again.
   to each.
 - A model that depends on its earlier reasoning may repeat work. If so,
   `keepPastReasoning` turns this off for the run.
-- Not yet seen in a real run.
+- When this was written, it had not been seen in a real run. The
+  raycaster run (2026-11-08) measured its cost to the engine's cache;
+  see ADR 0028.

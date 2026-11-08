@@ -154,8 +154,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   T014 read `outputs/motion.mp4`, got no 400, and finished in 20 turns,
   where the seven before it had each got a 400 on that video. Other agents
   and engines are not checked.
-- **Earlier reasoning dropped by default** (ADR 0023). The proxy forwards
-  only the last assistant message's reasoning; `--set
+- **Earlier reasoning dropped by default** (ADR 0023). Until ADR 0028
+  the proxy sent only the newest assistant message's reasoning; it now
+  removes the earlier reasoning in steps (next item). `--set
   keepPastReasoning=true` sends it all. In the articulated-cabinet run
   with Qwen Code 0.26.6 and Qwen3.8-Flash-Next on Sushi (2026-11-05),
   two builders of T027 peaked at 45k and 51k tokens after 32 and 24
@@ -164,6 +165,18 @@ above), so a 32k context is the practical floor (`contextFloor`).
   That is one task, not a measurement: how much longer a session lasts,
   and whether the model redoes work it reasoned out before, is not
   measured.
+- **Earlier reasoning removed in steps** (ADR 0028). Removing it every
+  turn cut the engine's cached prefix on every request: in the raycaster
+  run (2026-11-08, dsh and Qwen3.8-Flash-Next on Sushi 1.5.1, its first
+  679 requests) 83.7% of prompt tokens were cached and the median time to
+  first token was 3.48 s, against about 95.7% and 2.2 s in three Sushi
+  runs before ADR 0023. The proxy now keeps up to `pastReasoningTokens`
+  (8192) of it, then removes all of it except the newest message's, in
+  one step. A
+  replay of that run's first 713 requests puts the cache at 90.3%, against
+  84.9% for ADR 0023 in the same model; the replay models the engine's
+  cache, and the new behaviour is not yet seen in a real run, nor is
+  whether 8192 suits other models and engines.
 - **Qwen Code's compaction refused** (ADR 0022). The proxy knows Qwen
   Code's summarizing request by the opening of its prompt in 0.26.6. In
   the articulated-cabinet run (2026-11-03 and 04) it compacted 25 times

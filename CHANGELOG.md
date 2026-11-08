@@ -22,6 +22,17 @@ uses [Semantic Versioning](https://semver.org/).
   model that points it at the engine proxy. Not yet tried in a full run;
   it does not ask before tool calls (see Known gaps).
 
+### Changed
+
+- The engine proxy now keeps the reasoning of earlier assistant messages
+  until it passes `pastReasoningTokens` (8192), then removes all but the
+  newest one's in one step, instead of removing it every turn. Removing
+  it every turn broke the engine's prefix cache on each request: in a
+  replay of the 2026-11-08 raycaster run the cache rises from 85% to 90%
+  and the extra prefill falls from 31 to 10 minutes, for up to 8k more
+  tokens in the window. `--set pastReasoningTokens=0` brings back the
+  old behaviour. See ADR 0028.
+
 ### Fixed
 
 - An ACP agent's message text that arrives after its model request has
