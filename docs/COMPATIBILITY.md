@@ -132,7 +132,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   unit tests only; no real agent has run through it. Its command must
   answer `--version`, and Tenaz isolates nothing: the agent keeps the
   user's `HOME`, settings, skills and memory, and gets the pinned skills
-  only if the user's script gives them.
+  only if the user's script gives them. In a sandboxed run it can write
+  only where the sandbox allows, so an agent that keeps its settings or
+  sessions under `~` needs that folder in `sandboxAllowWrite`.
 
 - **DeepSeek Harness has finished two runs.** `--harness dsh` is built
   from a probe on 2026-11-07 (dsh 0.2.2-rc.1, ACP protocol 1, agent

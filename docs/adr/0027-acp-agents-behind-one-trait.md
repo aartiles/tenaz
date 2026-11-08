@@ -49,7 +49,8 @@ options rather than dsh built on fx.
 
 **B**, plus a generic agent for what has no implementation yet:
 `--harness acp` runs a command the user names. Before each session
-Tenaz writes the engine's URL, the session's model and its limits to
+Tenaz writes the engine's URL, the session's model and its limits, the
+reasoning effort and the media MCP servers to
 `.tenaz/private/acp-session.json` and names that file in
 `TENAZ_AGENT_SESSION`, so a small script can configure an agent Tenaz
 does not know. It replaces

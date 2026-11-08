@@ -116,8 +116,9 @@ project's own tests.
   requests (llama.cpp, LM Studio, Ollama, ...). Tenaz needs only that API
   to run; freeing memory for images needs more (see [Images](#images)).
 - **Harness**: the coding agent Tenaz drives in each session: fx, Pi,
-  OpenCode or Qwen Code. Tenaz talks to fx, OpenCode and Qwen Code over
-  ACP (the Agent Client Protocol) and to Pi over its RPC mode.
+  OpenCode, Qwen Code, DeepSeek Harness (`dsh`) or any other ACP agent.
+  Tenaz talks to all but Pi over ACP (the Agent Client Protocol) and to
+  Pi over its RPC mode.
 - **Brief**: the goal in your words, in `.tenaz/brief.md`. It does not
   change after `init`.
 - **Task card**: one small task in `.tenaz/tasks/`, with the requirements it
