@@ -6,9 +6,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-/// The arguments a write tool names its file in: `path` (Pi, fx) or
-/// `file_path`.
-const PATH_KEYS: [&str; 2] = ["path", "file_path"];
+use crate::session::path_arg;
 
 /// The directories a session may write to, and how to resolve the paths it
 /// names. Sessions run in the project root: relative paths resolve there.
@@ -43,12 +41,16 @@ impl WriteScope {
     /// The file a write tool's `args` name, resolved, when it is outside
     /// every allowed directory; `None` when it is inside one or names none.
     pub fn outside(&self, args: &serde_json::Value) -> Option<String> {
-        let named = PATH_KEYS
-            .iter()
-            .find_map(|key| args.get(*key).and_then(serde_json::Value::as_str))?;
-        let path = self.resolve(named)?;
+        let path = self.resolve(path_arg(args)?)?;
         let inside = self.allowed.iter().any(|dir| path.starts_with(dir));
         (!inside).then(|| path.display().to_string())
+    }
+
+    /// `named` relative to the project root, resolved as a write's target
+    /// is; `None` when it is outside the root.
+    pub fn relative(&self, named: &str) -> Option<PathBuf> {
+        let path = self.resolve(named)?;
+        path.strip_prefix(&self.root).ok().map(Path::to_path_buf)
     }
 
     /// `named` made absolute against the project root, with `~` expanded
@@ -138,6 +140,15 @@ mod tests {
     fn the_other_allowed_directories_are_inside() {
         assert_eq!(outside("/tmp/scratch.txt"), None);
         assert_eq!(outside("~/.cache/tool/x"), None);
+    }
+
+    #[test]
+    fn a_path_is_relative_to_the_root_only_inside_it() {
+        let relative = |path: &str| scope().relative(path);
+        assert_eq!(relative("./src/../a.js"), Some(PathBuf::from("a.js")));
+        assert_eq!(relative("/work/repo/app/b.js"), Some(PathBuf::from("b.js")));
+        assert_eq!(relative("/elsewhere/a.js"), None);
+        assert_eq!(relative("~/a.js"), None, "the home is outside the root");
     }
 
     #[test]

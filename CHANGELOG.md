@@ -32,6 +32,13 @@ uses [Semantic Versioning](https://semver.org/).
   and the extra prefill falls from 31 to 10 minutes, for up to 8k more
   tokens in the window. `--set pastReasoningTokens=0` brings back the
   old behaviour. See ADR 0028.
+- The idle rule counts a shell command that names a file not read or
+  named before as a read, as it counts a read tool's, and so a tool such
+  as Pi's `grep` or `ls` whose `path` is new. A builder that
+  read the checks with `sed -n` and `grep` and ran probe scripts was
+  stopped as idle four times in the 2026-11-08 raycaster run, two of
+  them T019's attempts. Reading the same files again through the shell,
+  or running the same probe again, still counts as idle. See ADR 0029.
 
 ### Fixed
 

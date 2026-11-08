@@ -119,6 +119,15 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **Shell reads count for the idle rule from text alone** (ADR 0029). The
+  words of a command that look like paths are taken without a shell
+  parse and without checking the disk, and a `cd` is not followed; the
+  ADR lists what is missed (a quoted path, a dotfile, a name without an
+  extension). Checked by replaying the four sessions the rule stopped in
+  the 2026-11-08 raycaster run (dsh and Qwen3.8-Flash-Next on Sushi
+  1.5.1) through the watchdog: at most 9 idle turns where they had 20. Not yet seen in a real run, and not
+  measured on whether a looping model now runs longer.
+
 - **The generic ACP agent is untried.** `--harness acp` is covered by
   unit tests only; no real agent has run through it. Its command must
   answer `--version`, and Tenaz isolates nothing: the agent keeps the

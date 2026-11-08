@@ -36,6 +36,7 @@ Pure modules, each unit-tested without I/O:
 | `job` | A heavy job a builder declares, and the report of how it ran (ADR 0010). |
 | `verify` | The `verify` contract: last-line JSON, exit code, clipping; whether a builder attempt passed. |
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time, provider-error and outside-write rules; emits steer, abort or interrupt (stop the turn, prompt again). |
+| `novelty` | Whether a tool call reads something new for the idle rule: a read tool's new arguments, or a path a shell command or another tool's `path` names for the first time (ADR 0029). |
 | `mesh` | The `generate_3d` tool's paths, which must stay inside the project, what counts as a GLB, and 3D model names (ADR 0020). |
 | `write_scope` | Where a session may write without the sandbox, and whether a write tool's target is outside it (ADR 0008). |
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal, refused request). |
