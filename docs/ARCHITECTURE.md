@@ -15,7 +15,7 @@ crates/
                            a harness's own compaction request refused when set (Qwen Code, ADR 0022),
                            earlier reasoning removed in steps over a budget (ADRs 0023, 0028), and
                            a note in place of a video file (ADR 0024).
-  acp/       tenaz-acp       HarnessAdapter over ACP (fx, OpenCode, Qwen Code), harness as a subprocess.
+  acp/       tenaz-acp       HarnessAdapter over ACP (fx, OpenCode, Qwen Code, dsh, any ACP agent), harness as a subprocess.
   pi/        tenaz-pi        HarnessAdapter over Pi's `--mode rpc` JSON lines, one Pi process per session.
   mcp/       tenaz-mcp       MCP server (streamable HTTP) exposing media tools that take the lease.
   cli/       tenaz           the `tenaz` binary: init (flags or the setup wizard), run, status,
@@ -98,7 +98,7 @@ Both adapters follow one shape: the harness process runs behind a background
 task, commands go in, `SessionEvent`s come out, and a pure `translate`
 module with unit tests turns the harness's own records into those events.
 
-| | `tenaz-acp` (fx, OpenCode, Qwen Code) | `tenaz-pi` (Pi) |
+| | `tenaz-acp` (fx, OpenCode, Qwen Code, dsh, any ACP agent) | `tenaz-pi` (Pi) |
 |---|---|---|
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
 | Per session | the agent's configuration written for the session's model in its own `HOME` (ADR 0019; Qwen Code also gets the model on its command line), then `initialize`, `session/new`. Each agent is one `AgentProfile` (`crates/acp/src/agent.rs`, ADR 0027): its configuration, command line and environment; the launch, the wrapper and the configuration step are shared | `pi --mode rpc --session-dir DIR|--no-session --model P/ID (the session role's model) --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |

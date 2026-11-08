@@ -100,5 +100,8 @@ sends it all, whatever the budget.
 - 8192 was read off one run of one model on one engine. A model that
   reasons more steps more often but keeps the same bound.
 - Reasoning a harness sends as JSON rather than text counts as its JSON.
-- The replay is a model of the engine's cache, not a run: not yet seen in
-  a real run.
+- The replay is a model of the engine's cache, not a run. In the same
+  run after the change (sessions 035-041 and 046-060, one prefix-cache
+  entry) 88.2% and 90.8% of prompt tokens were cached, against 84.5%
+  before it; the parts had different tasks, so this is not a controlled
+  comparison.

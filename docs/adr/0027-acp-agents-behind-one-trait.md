@@ -48,16 +48,19 @@ options rather than dsh built on fx.
 ## Decision
 
 **B**, plus a generic agent for what has no implementation yet:
-`--harness acp` runs a command the user names. It is told the engine's
-URL, the session's model and its limits in environment variables, so a
-small script can configure an agent Tenaz does not know. It replaces
+`--harness acp` runs a command the user names. Before each session
+Tenaz writes the engine's URL, the session's model and its limits to
+`.tenaz/private/acp-session.json` and names that file in
+`TENAZ_AGENT_SESSION`, so a small script can configure an agent Tenaz
+does not know. It replaces
 pointing `--fx-bin` at such a script.
 
 ## Consequences
 
 - A new ACP agent is one implementation of `AgentProfile` with its
-  configuration's tests; the session code, the sandbox wrapper and the
-  wiring do not change.
+  configuration's tests, plus its `HarnessKind`, its `--<agent>-bin`
+  flag and a wiring function; the session code and the launch do not
+  change.
 - The generic `acp` kind gives none of the isolation the named agents
   have: what the user's script does is up to it. The docs say so.
 - dsh did not ask for permission before its tool calls in the probe, so

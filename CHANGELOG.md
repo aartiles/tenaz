@@ -21,7 +21,8 @@ uses [Semantic Versioning](https://semver.org/).
   `.tenaz/private/dsh-home` and a patch Tenaz writes for each session's
   model that points it at the engine proxy. Two runs finished with
   Qwen3.8-Flash-Next on Sushi, the longer one a 19-hour game brief. It
-  does not ask before tool calls (see Known gaps).
+  does not ask before tool calls (see
+  [Known gaps](docs/COMPATIBILITY.md#known-gaps)).
 
 ### Changed
 

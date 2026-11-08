@@ -150,7 +150,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
   so its tools run without the runner's approval and the watchdog sees a
   call only once it runs; its `usage_update` has no cache counts; it
   sends its answer after the model request ends (kept since the
-  late-text fix); web search needs a DeepSeek key; its system prompt is
+  late-text fix, which logged 51 `late_text` events in the raycaster run); web search needs a DeepSeek key; its system prompt is
   about 5,700 tokens. The media MCP server and the pinned skills are not
   given to it, and whether a fresh `DSH_HOME` needs the network on first
   start is not checked. The wizard and `tenaz doctor` do not detect it:
