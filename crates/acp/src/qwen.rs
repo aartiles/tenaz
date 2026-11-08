@@ -4,13 +4,12 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tenaz_core::ledger::HarnessKind;
-use tenaz_core::ports::{HarnessInfo, SessionModel};
-use tenaz_core::util::wrap_command;
+use tenaz_core::ports::{SessionModel, SessionSpec};
 
-use crate::{AcpHarness, ConfiguredHarness, ProfileMcpServer, write_json};
+use crate::agent::AgentProfile;
+use crate::{ProfileMcpServer, write_json};
 
 /// The opening of Qwen Code's request to summarize its conversation
 /// (`getCompressionPrompt` in 0.26.6). It cannot be turned off: the engine
@@ -116,52 +115,50 @@ impl QwenLaunch {
         .to_vec()
     }
 
-    /// The program and arguments for a session on `model` (the id the
-    /// engine lists, not the provider's name for it), through the wrapper
-    /// when there is one.
-    pub fn session_command(&self, model: &SessionModel) -> (PathBuf, Vec<String>) {
-        wrap_command(&self.wrapper, &self.binary, self.command_args(&model.id))
-    }
-
     /// The environment Qwen Code starts with: `HOME` at `home`, where it
     /// finds the settings Tenaz writes.
     pub fn env(&self) -> Vec<(String, String)> {
         vec![("HOME".to_owned(), self.home.display().to_string())]
     }
+}
 
-    /// The agent: `qwen --acp` with [`env`](Self::env), each session on its
-    /// own model. [`configured`](Self::configured) prepares its home for
-    /// that model.
-    pub fn harness(&self, version: String) -> AcpHarness {
-        let info = HarnessInfo {
-            name: HarnessKind::Qwen.as_str().to_owned(),
-            version,
-        };
-        let launch = self.clone();
-        let (program, _) = wrap_command(&self.wrapper, &self.binary, Vec::new());
-        AcpHarness::subprocess_with(
-            info,
-            program,
-            Arc::new(move |spec| launch.session_command(&spec.model).1),
-            self.env(),
-        )
+/// Qwen Code as an [`AgentProfile`]: each session on its own model, named on
+/// the command line, with its home prepared for that model.
+#[derive(Clone, Debug)]
+pub struct QwenAgent {
+    pub launch: QwenLaunch,
+    pub settings: QwenSettings,
+}
+
+impl AgentProfile for QwenAgent {
+    fn kind(&self) -> HarnessKind {
+        HarnessKind::Qwen
     }
 
-    /// `acp` with its home prepared ([`prepare_home`]) for each session's
-    /// model before Qwen Code starts, and now for the run's `first`.
-    pub fn configured(
-        &self,
-        acp: AcpHarness,
-        settings: QwenSettings,
-        first: &SessionModel,
-    ) -> io::Result<ConfiguredHarness> {
-        let home = self.home.clone();
-        ConfiguredHarness::new(
-            acp,
-            "the Qwen Code settings",
-            Arc::new(move |model| prepare_home(&home, &settings.for_model(model))),
-            first,
-        )
+    fn config_name(&self) -> &'static str {
+        "the Qwen Code settings"
+    }
+
+    fn program(&self) -> &Path {
+        &self.launch.binary
+    }
+
+    /// The id the engine lists for the session's model, not the provider's
+    /// name for it.
+    fn args(&self, spec: &SessionSpec) -> Vec<String> {
+        self.launch.command_args(&spec.model.id)
+    }
+
+    fn env(&self) -> Vec<(String, String)> {
+        self.launch.env()
+    }
+
+    fn wrapper(&self) -> &[String] {
+        &self.launch.wrapper
+    }
+
+    fn write_config(&self, model: &SessionModel) -> io::Result<()> {
+        prepare_home(&self.launch.home, &self.settings.for_model(model))
     }
 }
 
@@ -255,7 +252,7 @@ mod tests {
 
     #[test]
     fn each_session_names_its_model_needs_no_key_and_asks_before_edits() {
-        let mut launch = QwenLaunch::new("/opt/qwen", "/run/home", "http://127.0.0.1:4001/v1");
+        let launch = QwenLaunch::new("/opt/qwen", "/run/home", "http://127.0.0.1:4001/v1");
         let args = [
             "--acp",
             "--auth-type",
@@ -277,13 +274,7 @@ mod tests {
             context_window: 32_768,
             supports_images: false,
         };
-        assert_eq!(
-            launch.session_command(&critic),
-            ("/opt/qwen".into(), args.clone())
-        );
-        launch.wrapper = vec!["/sbx".into(), "--".into()];
-        let wrapped = [vec!["--".to_owned(), "/opt/qwen".to_owned()], args].concat();
-        assert_eq!(launch.session_command(&critic), ("/sbx".into(), wrapped));
+        assert_eq!(launch.command_args(&critic.id), args);
     }
 
     #[test]

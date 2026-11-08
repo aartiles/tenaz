@@ -116,8 +116,9 @@ project's own tests.
   requests (llama.cpp, LM Studio, Ollama, ...). Tenaz needs only that API
   to run; freeing memory for images needs more (see [Images](#images)).
 - **Harness**: the coding agent Tenaz drives in each session: fx, Pi,
-  OpenCode or Qwen Code. Tenaz talks to fx, OpenCode and Qwen Code over
-  ACP (the Agent Client Protocol) and to Pi over its RPC mode.
+  OpenCode, Qwen Code, DeepSeek Harness (`dsh`) or any other ACP agent.
+  Tenaz talks to all but Pi over ACP (the Agent Client Protocol) and to
+  Pi over its RPC mode.
 - **Brief**: the goal in your words, in `.tenaz/brief.md`. It does not
   change after `init`.
 - **Task card**: one small task in `.tenaz/tasks/`, with the requirements it
@@ -132,8 +133,9 @@ project's own tests.
 - macOS on Apple silicon or Linux x86_64, and `git`.
 - **A coding agent** Tenaz can drive: [fx](https://github.com/vercel-labs/fx)
   or [Pi](https://github.com/earendil-works/pi), or, newer to Tenaz,
-  [OpenCode](https://opencode.ai) or
-  [Qwen Code](https://github.com/QwenLM/qwen-code).
+  [OpenCode](https://opencode.ai),
+  [Qwen Code](https://github.com/QwenLM/qwen-code) or DeepSeek Harness
+  (`dsh`).
 - **An OpenAI-compatible engine** serving a model with tool calling:
   llama.cpp's `llama-server`, LM Studio, Ollama, vLLM, MLX's
   `mlx_lm.server`, TensorFold, Sushi or similar. A context window of 32k
@@ -397,10 +399,15 @@ is over the budget of the role's model; see
 [ADR 0012](docs/adr/0012-prompts-that-fit-their-model.md). Tenaz
 does not set the sampling temperature, so each engine uses its own
 default; `--set temperature=0` pins it for the run (through the proxy),
-which makes runs on different engines comparable. The proxy forwards only the
-last assistant message's reasoning, so the model's earlier
-reasoning does not fill its window; `--set keepPastReasoning=true` sends
-it all ([ADR 0023](docs/adr/0023-send-only-the-last-reasoning.md)).
+which makes runs on different engines comparable. The proxy removes the model's
+earlier reasoning, so it does not fill the window
+([ADR 0023](docs/adr/0023-send-only-the-last-reasoning.md)): once more
+than `pastReasoningTokens` (8192) of it is kept before the newest
+assistant message, all but the newest one's goes in one step, so the
+engine's prefix cache breaks once per step, not every turn
+([ADR 0028](docs/adr/0028-remove-past-reasoning-in-steps.md)).
+`--set pastReasoningTokens=0` removes it every turn, and
+`--set keepPastReasoning=true` sends it all.
 A video file the agent read reaches the engine as a note that says to
 read it as frames, since the local engines do not decode video files
 ([ADR 0024](docs/adr/0024-a-note-in-place-of-a-video-file.md)).
@@ -427,6 +434,34 @@ a watchdog stops the session without one. On its first run OpenCode
 installs its plugin package (about 60 MB) into that `HOME`, from npm's
 cache when it is there. Each has been tried in one real run, much less
 than fx and Pi; see [Compatibility](docs/COMPATIBILITY.md).
+
+### DeepSeek Harness
+
+`--harness dsh` drives DeepSeek Harness (`@deepseek-ai/dsh`) over ACP
+(`dsh --profile acp`); `--dsh-bin` names its executable, for example
+`~/.local/dsh/node_modules/.bin/dsh`. The wizard and `tenaz doctor` do not look for it, since
+another program is called `dsh` too. It runs with `HOME` and `DSH_HOME`
+under `.tenaz/private/dsh-home`, and Tenaz writes a patch there for each
+session's model that points dsh's `acp` profile at the engine proxy
+instead of DeepSeek's own service. dsh does not ask before its tool
+calls, and the media tools and pinned skills are not offered to it yet.
+The thinking level maps to its reasoning effort (`high` is its `xhigh`).
+It has finished two runs with Qwen3.8-Flash-Next on Sushi, the longer
+one a 19-hour game brief; pass `--vision` for it to read images. See
+[Compatibility](docs/COMPATIBILITY.md).
+
+### Any other ACP agent
+
+`--harness acp --acp-bin <command>` runs any agent that speaks ACP;
+`tenaz run --acp-args "<args>"` gives the arguments that put it in ACP
+mode, and `<command> --version` must answer. Before each session Tenaz
+writes `.tenaz/private/acp-session.json` and passes its path in
+`TENAZ_AGENT_SESSION`: the engine's base URL (the proxy), the session's
+model, its context window, output limit and inputs, the reasoning effort
+and the media MCP servers. A small script reads it, configures the agent
+and starts it. Tenaz isolates nothing here: the agent keeps your `HOME`,
+your settings and its memory, so a run on it is only as reproducible as
+your script makes it ([ADR 0027](docs/adr/0027-acp-agents-behind-one-trait.md)).
 
 ### Images
 
@@ -506,7 +541,8 @@ can still find and load the skills in the folders above the project; see
 skill but the pinned ones; Qwen Code loads only its user-level skills,
 which are the pinned ones. Both run in a `HOME` of their own, so with
 `agentSkills=true` they add the project's skills (and Qwen Code its
-bundled ones), not your own.
+bundled ones), not your own. dsh is offered no skills, and an agent
+under `--harness acp` keeps your `HOME`, so it may load your own.
 
 ### Sandbox
 

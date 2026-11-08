@@ -16,9 +16,10 @@ use agent_client_protocol::schema::v1::{
     ToolCallUpdateFields, UsageUpdate,
 };
 use agent_client_protocol::{Agent, DynConnectTo};
-use tenaz_acp::fx::{FxLaunch, FxSettings};
-use tenaz_acp::opencode::{OpenCodeConfig, OpenCodeLaunch};
-use tenaz_acp::qwen::{QwenLaunch, QwenSettings};
+use tenaz_acp::agent::{AgentProfile, configured};
+use tenaz_acp::fx::{FxAgent, FxLaunch, FxSettings};
+use tenaz_acp::opencode::{OpenCodeAgent, OpenCodeConfig, OpenCodeLaunch};
+use tenaz_acp::qwen::{QwenAgent, QwenLaunch, QwenSettings};
 use tenaz_acp::{AcpHarness, EngineObservation, McpEndpoint};
 use tenaz_core::ports::{
     Harness, HarnessError, HarnessInfo, PermissionDecision, SessionModel, SessionSpec,
@@ -558,6 +559,14 @@ fn opencode_config() -> OpenCodeConfig {
     }
 }
 
+/// fx with its profile in `home`.
+fn fx_agent(home: &Path) -> Arc<dyn AgentProfile> {
+    Arc::new(FxAgent {
+        launch: FxLaunch::new("fx", home),
+        settings: fx_settings(),
+    })
+}
+
 /// The run's model, whose configuration is written when the harness is
 /// built; each session's launch then finds its own.
 fn run_model() -> SessionModel {
@@ -623,7 +632,7 @@ async fn configs_at_launch(
 #[tokio::test]
 async fn fx_starts_each_session_with_its_model_in_the_settings() {
     let launched = configs_at_launch(".fx/settings.json", |acp, home| {
-        let fx = FxLaunch::new("fx", home).configured(acp, fx_settings(), &run_model());
+        let fx = configured(fx_agent(home), acp, &run_model());
         Box::new(fx.unwrap())
     })
     .await;
@@ -648,8 +657,11 @@ async fn fx_starts_each_session_with_its_model_in_the_settings() {
 #[tokio::test]
 async fn opencode_starts_each_session_with_its_model_in_the_configuration() {
     let launched = configs_at_launch("opencode.json", |acp, home| {
-        let opencode =
-            OpenCodeLaunch::new("opencode", home).configured(acp, opencode_config(), &run_model());
+        let agent: Arc<dyn AgentProfile> = Arc::new(OpenCodeAgent {
+            launch: OpenCodeLaunch::new("opencode", home),
+            config: opencode_config(),
+        });
+        let opencode = configured(agent, acp, &run_model());
         Box::new(opencode.unwrap())
     })
     .await;
@@ -675,11 +687,11 @@ async fn qwen_starts_each_session_with_its_window_in_the_settings() {
             mcp: Vec::new(),
             discover_skills: false,
         };
-        let qwen = QwenLaunch::new("qwen", home, "http://127.0.0.1:1/v1").configured(
-            acp,
+        let agent: Arc<dyn AgentProfile> = Arc::new(QwenAgent {
+            launch: QwenLaunch::new("qwen", home, "http://127.0.0.1:1/v1"),
             settings,
-            &run_model(),
-        );
+        });
+        let qwen = configured(agent, acp, &run_model());
         Box::new(qwen.unwrap())
     })
     .await;
@@ -703,9 +715,7 @@ async fn a_session_whose_configuration_cannot_be_written_is_not_started() {
     };
     let seen = Arc::new(Mutex::new(Seen::default()));
     let acp = AcpHarness::new(info, Arc::new(move |_| fake_agent(seen.clone(), false)));
-    let fx = FxLaunch::new("fx", &home)
-        .configured(acp, fx_settings(), &run_model())
-        .unwrap();
+    let fx = configured(fx_agent(&home), acp, &run_model()).unwrap();
     std::fs::remove_dir_all(&home).unwrap();
     std::fs::write(&home, "a file, not a folder").unwrap();
     let error = fx.open(spec(dir.path())).await.err().unwrap();
@@ -728,6 +738,6 @@ async fn a_harness_whose_configuration_cannot_be_written_is_not_built() {
     };
     let seen = Arc::new(Mutex::new(Seen::default()));
     let acp = AcpHarness::new(info, Arc::new(move |_| fake_agent(seen.clone(), false)));
-    let built = FxLaunch::new("fx", &home).configured(acp, fx_settings(), &run_model());
+    let built = configured(fx_agent(&home), acp, &run_model());
     assert!(built.is_err());
 }

@@ -6,6 +6,52 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-08
+
+### Added
+
+- `--harness acp` drives any other ACP agent: `--acp-bin` names the
+  command and `tenaz run --acp-args` its arguments. Before each session
+  Tenaz writes `.tenaz/private/acp-session.json` (the proxy's URL, the
+  session's model and limits, the reasoning effort, the media MCP
+  servers) and names it in `TENAZ_AGENT_SESSION`, so a script can
+  configure the agent. Use it instead of pointing `--fx-bin` at such a
+  script. The agent keeps the user's `HOME`.
+
+- `--harness dsh` drives DeepSeek Harness over ACP (`dsh --profile acp`,
+  `--dsh-bin` names it), with `HOME` and `DSH_HOME` of its own under
+  `.tenaz/private/dsh-home` and a patch Tenaz writes for each session's
+  model that points it at the engine proxy. Two runs finished with
+  Qwen3.8-Flash-Next on Sushi, the longer one a 19-hour game brief. It
+  does not ask before tool calls (see
+  [Known gaps](docs/COMPATIBILITY.md#known-gaps)).
+
+### Changed
+
+- The engine proxy now keeps the reasoning of earlier assistant messages
+  until it passes `pastReasoningTokens` (8192), then removes all but the
+  newest one's in one step, instead of removing it every turn. Removing
+  it every turn broke the engine's prefix cache on each request: in a
+  replay of the 2026-11-08 raycaster run the cache rises from 85% to 90%
+  and the extra prefill falls from 31 to 10 minutes, for up to 8k more
+  tokens in the window. `--set pastReasoningTokens=0` brings back the
+  old behaviour. See ADR 0028.
+- The idle rule counts a shell command that names a file not read or
+  named before as a read, as it counts a read tool's, and so a tool such
+  as Pi's `grep` or `ls` whose `path` is new. A builder that
+  read the checks with `sed -n` and `grep` and ran probe scripts was
+  stopped as idle four times in the 2026-11-08 raycaster run, two of
+  them T019's attempts. Reading the same files again through the shell,
+  or running the same probe again, still counts as idle. See ADR 0029.
+
+### Fixed
+
+- An ACP agent's message text that arrives after its model request has
+  ended is kept (a `late_text` event in the journal) instead of dropped.
+  DeepSeek Harness sends its answer so: the preflight's tool probe failed
+  with `tools=false` though the model ran the tool and answered, and a
+  review answer would have been lost the same way.
+
 ## [0.5.0] - 2026-11-07
 
 ### Added

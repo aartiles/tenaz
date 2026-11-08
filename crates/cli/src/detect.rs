@@ -46,9 +46,12 @@ pub fn agents() -> Vec<Agent> {
 pub fn agent_version(harness: HarnessKind, bin: &Path) -> std::io::Result<String> {
     match harness {
         HarnessKind::Fake => Ok(tenaz_core::testing::ScriptedHarness::default().version()),
-        HarnessKind::Pi | HarnessKind::Fx | HarnessKind::OpenCode | HarnessKind::Qwen => {
-            tenaz_acp::agent_version(bin)
-        }
+        HarnessKind::Pi
+        | HarnessKind::Fx
+        | HarnessKind::OpenCode
+        | HarnessKind::Qwen
+        | HarnessKind::Dsh
+        | HarnessKind::Acp => tenaz_acp::agent_version(bin),
     }
 }
 

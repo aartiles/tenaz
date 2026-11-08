@@ -517,6 +517,7 @@ fn event_name(event: &SessionEvent) -> &'static str {
         SessionEvent::ToolCallEnd { .. } => "tool_call_end",
         SessionEvent::MessageEnd { .. } => "message_end",
         SessionEvent::TurnEnd => "turn_end",
+        SessionEvent::LateText { .. } => "late_text",
         SessionEvent::CompactionStart { .. } => "compaction_start",
         SessionEvent::CompactionRefused => "compaction_refused",
         SessionEvent::PermissionRequest { .. } => "permission_request",

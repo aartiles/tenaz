@@ -121,6 +121,13 @@ pub enum SessionEvent {
         sent: Option<RequestSettings>,
     },
     TurnEnd,
+    /// Text the agent sent for its last message after that message's model
+    /// request had ended (an ACP agent may send its message chunk after the
+    /// HTTP response). It follows the prompt's last `MessageEnd` and is kept
+    /// as a text of its own.
+    LateText {
+        text: String,
+    },
     CompactionStart {
         reason: String,
     },
@@ -238,6 +245,21 @@ pub fn tool_effect(name: &str, declared: Option<ToolEffect>) -> Option<ToolEffec
         "read" | "Read" | "ReadFile" | "read_file" | "fs_read" => Some(ToolEffect::Read),
         _ => None,
     })
+}
+
+/// The file a tool call names: `path` (Pi, fx) or `file_path`.
+pub fn path_arg(args: &serde_json::Value) -> Option<&str> {
+    first_str(args, &["path", "file_path"])
+}
+
+/// The command a shell tool call runs: `command` (Pi, fx, dsh) or `cmd`.
+pub fn command_arg(args: &serde_json::Value) -> Option<&str> {
+    first_str(args, &["command", "cmd"])
+}
+
+fn first_str<'a>(args: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|k| args.get(*k).and_then(serde_json::Value::as_str))
 }
 
 /// A watchdog event recorded in the session's journal record.

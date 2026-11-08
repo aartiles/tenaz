@@ -14,6 +14,7 @@ pub mod ledger;
 pub mod memory;
 pub mod mesh;
 pub mod metrics;
+pub mod novelty;
 pub mod orchestrator;
 pub mod ownership;
 pub mod params;

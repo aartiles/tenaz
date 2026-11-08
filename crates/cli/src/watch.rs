@@ -269,6 +269,19 @@ impl SessionTail {
     }
 }
 
+/// The lines of what the agent said (`lines`, trimmed): every line at
+/// `full`, else the first one clipped.
+fn said(mut lines: std::str::Lines<'_>, level: Level) -> Vec<String> {
+    if level >= Level::Full {
+        return lines.map(|l| format!("  » {l}")).collect();
+    }
+    let Some(first) = lines.next() else {
+        return Vec::new();
+    };
+    let more = if lines.next().is_some() { " …" } else { "" };
+    vec![format!("  » {}", clip(&format!("{first}{more}"), LINE))]
+}
+
 /// The lines one session event shows at `level` (none at `summary`).
 pub fn render(event: &SessionEvent, level: Level) -> Vec<String> {
     let full = level >= Level::Full;
@@ -309,14 +322,7 @@ pub fn render(event: &SessionEvent, level: Level) -> Vec<String> {
             server,
             ..
         } => {
-            let mut lines = Vec::new();
-            if !text.trim().is_empty() {
-                if full {
-                    lines.extend(text.trim().lines().map(|l| format!("  » {l}")));
-                } else {
-                    lines.push(format!("  » {}", fit(text.trim())));
-                }
-            }
+            let mut lines = said(text.trim().lines(), level);
             let mut stats = format!(
                 "    ctx {} · out {} · think {} ch",
                 thousands(usage.context()),
@@ -339,6 +345,7 @@ pub fn render(event: &SessionEvent, level: Level) -> Vec<String> {
             }
             lines
         }
+        SessionEvent::LateText { text } => said(text.trim().lines(), level),
         SessionEvent::CompactionStart { reason } => vec![format!("  ⇢ compaction: {reason}")],
         SessionEvent::PromptRejected { reason } => {
             vec![format!("  ✗ prompt rejected: {}", fit(reason))]
@@ -531,6 +538,19 @@ mod tests {
             ["  → shell: interact shell-9"]
         );
         assert!(render(&call, Level::Summary).is_empty());
+    }
+
+    #[test]
+    fn late_text_shows_as_the_agent_s_reply() {
+        let late = SessionEvent::LateText {
+            text: "First line\nsecond line".into(),
+        };
+        assert_eq!(render(&late, Level::Actions), ["  » First line …"]);
+        assert_eq!(
+            render(&late, Level::Full),
+            ["  » First line", "  » second line"]
+        );
+        assert!(render(&late, Level::Summary).is_empty());
     }
 
     #[test]

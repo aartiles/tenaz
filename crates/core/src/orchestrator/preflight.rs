@@ -389,9 +389,12 @@ pub(crate) fn engine_error_note(preflight: &Preflight) -> Option<String> {
 fn details(harness: HarnessKind) -> &'static str {
     match harness {
         HarnessKind::Fx => ".tenaz/run.json \"preflight\" and .tenaz/private/preflight.fx-acp.log",
-        HarnessKind::Pi | HarnessKind::OpenCode | HarnessKind::Qwen | HarnessKind::Fake => {
-            ".tenaz/run.json \"preflight\""
-        }
+        HarnessKind::Pi
+        | HarnessKind::OpenCode
+        | HarnessKind::Qwen
+        | HarnessKind::Dsh
+        | HarnessKind::Acp
+        | HarnessKind::Fake => ".tenaz/run.json \"preflight\"",
     }
 }
 
@@ -938,6 +941,8 @@ mod tests {
             HarnessKind::Pi,
             HarnessKind::OpenCode,
             HarnessKind::Qwen,
+            HarnessKind::Dsh,
+            HarnessKind::Acp,
             HarnessKind::Fake,
         ] {
             let text = stop_with(harness);

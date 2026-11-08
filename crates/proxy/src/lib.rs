@@ -4,6 +4,7 @@
 //! only once per turn), and reports each engine error as its message text.
 
 mod events;
+mod reasoning;
 mod repair;
 mod sse;
 mod tap;
@@ -59,10 +60,12 @@ pub struct Proxy {
     /// engine: the runner ends the session there instead, and a fresh one
     /// continues (ADR 0022).
     pub compaction_prompt_opening: Option<String>,
-    /// Send the engine the reasoning of every earlier assistant message.
-    /// Off, only the last one keeps it: a harness that sends it all back
-    /// fills the window with reasoning the model no longer needs (ADR 0023).
-    pub keep_past_reasoning: bool,
+    /// The reasoning of earlier assistant messages kept, in tokens, before
+    /// all but the newest one's is removed in one step: a harness that sends
+    /// it all back would fill the window with reasoning the model no longer
+    /// needs (ADR 0023), and fewer steps keep the engine's prefix cache
+    /// valid (ADR 0028). 0 removes it every turn; `None` keeps it all.
+    pub past_reasoning_budget: Option<u64>,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -131,7 +134,7 @@ impl Proxy {
             effort: None,
             max_output_tokens: None,
             compaction_prompt_opening: None,
-            keep_past_reasoning: false,
+            past_reasoning_budget: tenaz_core::params::RunParams::default().past_reasoning_budget(),
         }
     }
 
@@ -242,7 +245,9 @@ impl Proxy {
     fn rewrite_request(&self, body: &[u8]) -> Option<Vec<u8>> {
         let mut json: serde_json::Value = serde_json::from_slice(body).ok()?;
         let object = json.as_object_mut()?;
-        let dropped = !self.keep_past_reasoning && drop_past_reasoning(object);
+        let dropped = self
+            .past_reasoning_budget
+            .is_some_and(|budget| reasoning::drop_past_reasoning(object, budget));
         let lowered = self
             .lowered_effort()
             .is_some_and(|effort| set_effort(object, effort));
@@ -298,32 +303,6 @@ fn ask_for_usage(request: &mut JsonObject) -> bool {
         }
         _ => false,
     }
-}
-
-/// The fields in which harnesses send an assistant message's reasoning.
-const REASONING_FIELDS: [&str; 2] = ["reasoning_content", "reasoning"];
-
-/// Removes the reasoning of every assistant message but the last; true when
-/// any was removed. Only the turn before the newest changes from one request
-/// to the next, so the prefix the engine has cached stays valid up to it;
-/// from there on the engine reads the request again.
-fn drop_past_reasoning(request: &mut JsonObject) -> bool {
-    let Some(messages) = request.get_mut("messages").and_then(|m| m.as_array_mut()) else {
-        return false;
-    };
-    let mut assistants = messages
-        .iter_mut()
-        .filter_map(|m| m.as_object_mut())
-        .filter(|m| m.get("role").and_then(serde_json::Value::as_str) == Some("assistant"))
-        .collect::<Vec<_>>();
-    assistants.pop();
-    let mut dropped = false;
-    for message in assistants {
-        for field in REASONING_FIELDS {
-            dropped |= message.remove(field).is_some();
-        }
-    }
-    dropped
 }
 
 async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
@@ -599,8 +578,10 @@ mod tests {
     }
 
     #[test]
-    fn only_the_last_assistant_message_keeps_its_reasoning() {
-        let rewritten = json(&proxy().rewrite_request(&agent_request()).unwrap());
+    fn a_zero_budget_keeps_only_the_last_assistant_messages_reasoning() {
+        let mut proxy = proxy();
+        proxy.past_reasoning_budget = Some(0);
+        let rewritten = json(&proxy.rewrite_request(&agent_request()).unwrap());
         let messages = &rewritten["messages"];
         assert_eq!(
             messages[1],
@@ -612,16 +593,50 @@ mod tests {
     }
 
     #[test]
+    fn earlier_reasoning_within_the_budget_is_kept() {
+        let body = agent_request();
+        let sent = json(&proxy().rewrite_request(&body).unwrap_or(body));
+        assert_eq!(sent["messages"][1]["reasoning_content"], "old");
+        assert_eq!(sent["messages"][1]["reasoning"], "old");
+    }
+
+    #[test]
     fn a_single_assistant_message_keeps_its_reasoning() {
         let one = br#"{"messages":[{"role":"assistant","reasoning_content":"r"}]}"#;
         assert!(proxy().rewrite_request(one).is_none());
     }
 
+    /// Two assistant messages, the first with reasoning just past the
+    /// default budget.
+    fn request_past_the_default_budget() -> Vec<u8> {
+        let tokens = usize::try_from(tenaz_core::params::PAST_REASONING_TOKENS).unwrap() + 1;
+        serde_json::to_vec(&serde_json::json!({"messages": [
+            {"role": "assistant", "reasoning_content": "r".repeat(4 * tokens)},
+            {"role": "assistant", "reasoning_content": "new"},
+        ]}))
+        .unwrap()
+    }
+
     #[test]
-    fn keep_past_reasoning_sends_all_of_it() {
+    fn earlier_reasoning_past_the_default_budget_is_removed() {
+        let rewritten = json(
+            &proxy()
+                .rewrite_request(&request_past_the_default_budget())
+                .unwrap(),
+        );
+        assert!(rewritten["messages"][0].get("reasoning_content").is_none());
+        assert_eq!(rewritten["messages"][1]["reasoning_content"], "new");
+    }
+
+    #[test]
+    fn no_budget_sends_all_earlier_reasoning() {
         let mut proxy = proxy();
-        proxy.keep_past_reasoning = true;
-        assert!(proxy.rewrite_request(&agent_request()).is_none());
+        proxy.past_reasoning_budget = None;
+        assert!(
+            proxy
+                .rewrite_request(&request_past_the_default_budget())
+                .is_none()
+        );
     }
 
     #[test]

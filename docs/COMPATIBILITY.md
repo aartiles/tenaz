@@ -14,7 +14,8 @@ below; this page is about the real ones.
 | Harness | [fx](https://github.com/vercel-labs/fx) 0.0.14 and 0.0.15 over ACP | Tested end to end: preflight, bootstrap, build, review, steering, pause and resume. |
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 and 1.4.0 in RPC mode | Tested end to end to a COMPLETE run: 1.1.0 with the user's own `models.json`, 1.4.0 with the generated configuration through the proxy and two models (see Known gaps). No media tools (see below). |
 | | [OpenCode](https://github.com/sst/opencode) 1.19.5 (`--harness opencode`) and [Qwen Code](https://github.com/QwenLM/qwen-code) 0.26.6 (`--harness qwen`), both over ACP | One real run each with Qwen3.8-27B on mlx-serve: OpenCode to COMPLETE, Qwen Code to BLOCKED by a replan the run rejected, not by the agent; Tenaz now accepts that replan (ADR 0018). Less tried than fx and Pi (see Known gaps). |
-| | Other ACP agents | Only through `--fx-bin`, which passes fx's `--log-file` and writes only fx's settings. Untested. |
+| | Other ACP agents (`--harness acp`) | The command `--acp-bin` names, with `--acp-args`, told about each session in the file `TENAZ_AGENT_SESSION` names. Tested with unit tests only; no real agent run through it yet. |
+| | [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) 0.2.2-rc.1 (`--harness dsh`) over ACP | Its patch checked with `dsh --profile acp --dump-config` in a fresh `DSH_HOME`, and its ACP behaviour by a probe through the fx path on 2026-11-07 (preflight with Qwen3.8-Flash-Next on Sushi 1.5.1). Two runs to COMPLETE with Qwen3.8-Flash-Next on Sushi 1.5.1: a small goal on 2026-11-07 (17 sessions) and the raycaster game brief on 2026-11-08 (19 h 20 min, 60 sessions, 19 tasks), preflight `tools=true` in both (see Known gaps). |
 | Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve 26.10.3 loaded and unloaded two models through its API in two runs that swapped them (see Known gaps). |
 | | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run, before the start was skipped for an engine that still serves the model (see Known gaps). The servers named here are untried. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
@@ -118,6 +119,45 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **Shell reads count for the idle rule from text alone** (ADR 0029). The
+  words of a command that look like paths are taken without a shell
+  parse and without checking the disk, and a `cd` is not followed; the
+  ADR lists what is missed (a quoted path, a dotfile, a name without an
+  extension). Checked by replaying the four sessions the rule stopped in
+  the 2026-11-08 raycaster run (dsh and Qwen3.8-Flash-Next on Sushi
+  1.5.1) through the watchdog: at most 9 idle turns where they had 20. Not yet seen in a real run, and not
+  measured on whether a looping model now runs longer.
+
+- **The generic ACP agent is untried.** `--harness acp` is covered by
+  unit tests only; no real agent has run through it. Its command must
+  answer `--version`, and Tenaz isolates nothing: the agent keeps the
+  user's `HOME`, settings, skills and memory, and gets the pinned skills
+  only if the user's script gives them. In a sandboxed run it can write
+  only where the sandbox allows, so an agent that keeps its settings or
+  sessions under `~` needs that folder in `sandboxAllowWrite`.
+
+- **DeepSeek Harness has finished two runs.** `--harness dsh` is built
+  from a probe on 2026-11-07 (dsh 0.2.2-rc.1, ACP protocol 1, agent
+  `deepseek-harness-acp`) and unit tests. With Qwen3.8-Flash-Next on
+  Sushi 1.5.1 it ran a one-file shell goal to COMPLETE on 2026-11-07
+  (17 sessions, six tasks, a replan) and the raycaster game brief on
+  2026-11-08 (19 h 20 min, 60 sessions, 19 tasks, two final reviews).
+  The second run changed builds and settings during pauses, so it is
+  evidence that dsh works through a long run, not a clean measurement.
+  It showed: dsh reads images with `read_image` only when the run has
+  `--vision` (without it, it refused all 16 reads); dsh summarizes its
+  own context in a separate request (71 times), Tenaz does not refuse
+  that as it does Qwen Code's, and the request after a summary lost
+  most of its cached prefix in 61 of 70 cases. What the probe showed: dsh did not send permission requests,
+  so its tools run without the runner's approval and the watchdog sees a
+  call only once it runs; its `usage_update` has no cache counts; it
+  sends its answer after the model request ends (kept since the
+  late-text fix, which logged 51 `late_text` events in the raycaster run); web search needs a DeepSeek key; its system prompt is
+  about 5,700 tokens. The media MCP server and the pinned skills are not
+  given to it, and whether a fresh `DSH_HOME` needs the network on first
+  start is not checked. The wizard and `tenaz doctor` do not detect it:
+  a `dsh` on PATH may be the distributed shell.
+
 - **A refused request continues in a fresh session.** A 400, 413, 415
   or 422 from the engine, other than an image, a prompt too long or the
   engine's memory, is journaled as `refused-continuation` and a fresh
@@ -132,8 +172,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   T014 read `outputs/motion.mp4`, got no 400, and finished in 20 turns,
   where the seven before it had each got a 400 on that video. Other agents
   and engines are not checked.
-- **Earlier reasoning dropped by default** (ADR 0023). The proxy forwards
-  only the last assistant message's reasoning; `--set
+- **Earlier reasoning dropped by default** (ADR 0023). Until ADR 0028
+  the proxy sent only the newest assistant message's reasoning; it now
+  removes the earlier reasoning in steps (next item). `--set
   keepPastReasoning=true` sends it all. In the articulated-cabinet run
   with Qwen Code 0.26.6 and Qwen3.8-Flash-Next on Sushi (2026-11-05),
   two builders of T027 peaked at 45k and 51k tokens after 32 and 24
@@ -142,6 +183,23 @@ above), so a 32k context is the practical floor (`contextFloor`).
   That is one task, not a measurement: how much longer a session lasts,
   and whether the model redoes work it reasoned out before, is not
   measured.
+- **Earlier reasoning removed in steps** (ADR 0028). Removing it every
+  turn cut the engine's cached prefix on every request: in the raycaster
+  run (2026-11-08, dsh and Qwen3.8-Flash-Next on Sushi 1.5.1, its first
+  679 requests) 83.7% of prompt tokens were cached and the median time to
+  first token was 3.48 s, against about 95.7% and 2.2 s in three Sushi
+  runs before ADR 0023. The proxy now keeps up to `pastReasoningTokens`
+  (8192) of it, then removes all of it except the newest message's, in
+  one step. A
+  replay of that run's first 713 requests puts the cache at 90.3%, against
+  84.9% for ADR 0023 in the same model; the replay models the engine's
+  cache. Seen in the same run after the change: sessions 035-041 and
+  046-060 (644 requests, one prefix-cache entry) cached 88.2% and
+  90.8%, with a 1.46 s median time to first token in both, against
+  84.5% and 3.58 s before it; sessions 042-045 ran on a Sushi with two
+  entries and cached 84.3%. The parts had different tasks, so this is
+  not a controlled comparison; whether 8192 suits other models and
+  engines is not checked.
 - **Qwen Code's compaction refused** (ADR 0022). The proxy knows Qwen
   Code's summarizing request by the opening of its prompt in 0.26.6. In
   the articulated-cabinet run (2026-11-03 and 04) it compacted 25 times

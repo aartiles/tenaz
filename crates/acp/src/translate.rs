@@ -190,6 +190,8 @@ impl Translator {
     /// The events when the agent finishes the prompt. Without a proxy feed,
     /// the whole prompt is one turn and `used` is the agent's figure.
     /// A call still pending never ran, and is forgotten without a report.
+    /// Message text that arrived after the last request ended (`dsh`
+    /// sends it so) is kept as late text of that message.
     pub fn prompt_end(&mut self, stop: AcpStop, request_seen: bool) -> Vec<SessionEvent> {
         self.announced.clear();
         let aborted = stop == AcpStop::Cancelled;
@@ -200,6 +202,10 @@ impl Translator {
                 ..Default::default()
             };
             events.extend(self.request_end(usage, stop_reason(stop), None, None, None));
+        } else if !self.text.is_empty() {
+            events.push(SessionEvent::LateText {
+                text: std::mem::take(&mut self.text),
+            });
         }
         events.push(SessionEvent::Settled { aborted });
         events
@@ -727,6 +733,67 @@ mod tests {
         assert_eq!(
             t.prompt_end(AcpStop::Cancelled, true),
             vec![SessionEvent::Settled { aborted: true }]
+        );
+    }
+
+    #[test]
+    fn text_sent_after_its_request_ended_is_kept_as_late_text() {
+        let mut t = Translator::new();
+        let chunk = |s: &str| ContentChunk::new(ContentBlock::Text(TextContent::new(s)));
+        let request_seen = true;
+        t.update(&SessionUpdate::AgentMessageChunk(chunk("calling the tool")));
+        let ended = t.request_end(Usage::default(), StopReason::Stop, None, None, None);
+        t.update(&SessionUpdate::AgentMessageChunk(chunk("marmalade-")));
+        t.update(&SessionUpdate::AgentMessageChunk(chunk("4817")));
+        let settled = t.prompt_end(AcpStop::EndTurn, request_seen);
+
+        assert!(
+            matches!(&ended[0], SessionEvent::MessageEnd { text, .. } if text == "calling the tool")
+        );
+        assert_eq!(
+            settled,
+            vec![
+                SessionEvent::LateText {
+                    text: "marmalade-4817".to_owned()
+                },
+                SessionEvent::Settled { aborted: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn late_text_is_reported_once() {
+        let mut t = Translator::new();
+        let request_seen = true;
+        t.request_end(Usage::default(), StopReason::Stop, None, None, None);
+        t.update(&SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new("done")),
+        )));
+        t.prompt_end(AcpStop::EndTurn, request_seen);
+        assert_eq!(
+            t.prompt_end(AcpStop::EndTurn, request_seen),
+            vec![SessionEvent::Settled { aborted: false }]
+        );
+    }
+
+    /// What the agent said before a prompt was cancelled is still its
+    /// answer so far, and is reported as late text.
+    #[test]
+    fn late_text_of_a_cancelled_prompt_is_kept() {
+        let mut t = Translator::new();
+        let request_seen = true;
+        t.request_end(Usage::default(), StopReason::Stop, None, None, None);
+        t.update(&SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new("half an answer")),
+        )));
+        assert_eq!(
+            t.prompt_end(AcpStop::Cancelled, request_seen),
+            vec![
+                SessionEvent::LateText {
+                    text: "half an answer".to_owned()
+                },
+                SessionEvent::Settled { aborted: true },
+            ]
         );
     }
 

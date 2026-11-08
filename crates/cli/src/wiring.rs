@@ -96,6 +96,8 @@ pub struct HarnessOptions {
     pub bin: PathBuf,
     /// The arguments that put fx in ACP mode; only fx reads them.
     pub fx_args: Vec<String>,
+    /// The arguments that put the generic agent in ACP mode.
+    pub acp_args: Vec<String>,
 }
 
 pub struct MediaOptions {
@@ -612,7 +614,7 @@ async fn start_proxy(
     proxy.repair_tool_args = repairs.is_some();
     proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
     proxy.effort = effort;
-    proxy.keep_past_reasoning = ledger.params.keep_past_reasoning;
+    proxy.past_reasoning_budget = ledger.params.past_reasoning_budget();
     proxy.compaction_prompt_opening = (ledger.config.harness == HarnessKind::Qwen)
         .then(|| tenaz_acp::qwen::COMPACTION_PROMPT.to_owned());
     proxy.request_defaults =

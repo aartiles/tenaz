@@ -7,12 +7,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use tenaz_acp::fx::{self, FxLaunch, FxSettings};
-use tenaz_acp::opencode::{OpenCodeConfig, OpenCodeLaunch};
-use tenaz_acp::qwen::{QwenLaunch, QwenSettings};
-use tenaz_acp::{AcpHarness, ConfiguredHarness, EngineObservation, McpEndpoint, ProfileMcpServer};
+use tenaz_acp::agent::{self, AgentProfile};
+use tenaz_acp::dsh::{DshAgent, DshLaunch, DshPatch};
+use tenaz_acp::fx::{self, FxAgent, FxLaunch, FxSettings};
+use tenaz_acp::generic::{GenericAgent, SessionFacts};
+use tenaz_acp::opencode::{OpenCodeAgent, OpenCodeConfig, OpenCodeLaunch};
+use tenaz_acp::qwen::{QwenAgent, QwenLaunch, QwenSettings};
+use tenaz_acp::{AcpHarness, EngineObservation, McpEndpoint, ProfileMcpServer};
 use tenaz_core::ledger::{HarnessKind, ModelConfig, SkillPin};
-use tenaz_core::ports::{Harness, SessionModel};
+use tenaz_core::ports::Harness;
 use tenaz_core::project::Project;
 use tenaz_core::testing::ScriptedHarness;
 use tenaz_pi::PiLaunch;
@@ -56,21 +59,32 @@ impl HarnessInputs<'_> {
         self.project.private_dir().join(name)
     }
 
-    /// The steps every ACP agent ends with: feeds the engine's observations
-    /// to `acp`, writes its configuration for the run's model with
-    /// `configured` (a home that cannot be written stops the run here, not
-    /// in its first session),
-    /// then links the pinned skills into `skills_dir`.
+    /// Every ACP agent the same way: launched as `agent` says, fed the
+    /// engine's observations, given `meta` in `session/new`, with its
+    /// configuration written for the run's model (a home that cannot be
+    /// written stops the run here, not in its first session), then the
+    /// pinned skills linked into `skills_dir`, for an agent that has one.
     fn acp_agent(
         &self,
-        acp: AcpHarness,
-        configured: impl FnOnce(AcpHarness, &SessionModel) -> std::io::Result<ConfiguredHarness>,
-        skills_dir: &Path,
+        agent: Arc<dyn AgentProfile>,
+        meta: Option<serde_json::Map<String, serde_json::Value>>,
+        skills_dir: Option<&Path>,
     ) -> anyhow::Result<Arc<dyn Harness>> {
-        let acp = acp.with_observations(self.feed.clone());
-        let agent = configured(acp, &self.config.run_model())?;
-        link_skills(self.project, skills_dir, self.skills)?;
-        Ok(Arc::new(agent))
+        let mut acp: AcpHarness =
+            agent::harness(agent.clone(), self.config.harness_version.clone())
+                .with_observations(self.feed.clone());
+        if let Some(meta) = meta {
+            acp = acp.with_session_meta(meta);
+        }
+        let configured = agent::configured(agent, acp, &self.config.run_model())?;
+        match skills_dir {
+            Some(dir) => link_skills(self.project, dir, self.skills)?,
+            None if !self.skills.is_empty() => {
+                tracing::warn!("{} is not given the pinned skills", self.config.harness);
+            }
+            None => {}
+        }
+        Ok(Arc::new(configured))
     }
 }
 
@@ -89,6 +103,8 @@ pub(super) fn build_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dy
         HarnessKind::Fx => fx_harness(inputs),
         HarnessKind::OpenCode => opencode_harness(inputs),
         HarnessKind::Qwen => qwen_harness(inputs),
+        HarnessKind::Dsh => dsh_harness(inputs),
+        HarnessKind::Acp => generic_harness(inputs),
     }
 }
 
@@ -157,20 +173,17 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     // says outside the protocol (see tenaz_acp::fx::normalize_line).
     launch.shim = std::env::current_exe().ok();
     launch.wrapper = inputs.wrapper.to_vec();
-    let mut acp = launch.harness(config.harness_version.clone());
-    if !inputs.mcp_endpoints.is_empty() {
-        // Profile servers accept a long operation timeout; servers passed in session/new are cut at 60 s.
-        acp = acp.with_session_meta(
-            serde_json::json!({ "fx": { "profileMcpServers": true } })
-                .as_object()
-                .cloned()
-                .unwrap_or_default(),
-        );
-    }
+    // Profile servers accept a long operation timeout; servers passed in session/new are cut at 60 s.
+    let meta = (!inputs.mcp_endpoints.is_empty()).then(|| {
+        serde_json::json!({ "fx": { "profileMcpServers": true } })
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+    });
     inputs.acp_agent(
-        acp,
-        |acp, first| launch.configured(acp, settings, first),
-        &home.join(".agents/skills"),
+        Arc::new(FxAgent { launch, settings }),
+        meta,
+        Some(&home.join(".agents/skills")),
     )
 }
 
@@ -194,10 +207,13 @@ fn opencode_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harnes
     launch.npm_cache = std::env::home_dir().map(|h| h.join(".npm"));
     launch.wrapper = inputs.wrapper.to_vec();
     inputs.acp_agent(
-        launch.harness(config.harness_version.clone()),
-        |acp, first| launch.configured(acp, opencode, first),
+        Arc::new(OpenCodeAgent {
+            launch,
+            config: opencode,
+        }),
+        None,
         // OpenCode finds skills in `.agents/skills` of its home, as fx does.
-        &home.join(".agents/skills"),
+        Some(&home.join(".agents/skills")),
     )
 }
 
@@ -212,10 +228,51 @@ fn qwen_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> 
     let mut launch = QwenLaunch::new(&inputs.options.bin, &home, inputs.base_url.clone());
     launch.wrapper = inputs.wrapper.to_vec();
     inputs.acp_agent(
-        launch.harness(inputs.config.harness_version.clone()),
-        |acp, first| launch.configured(acp, settings, first),
-        &home.join(".qwen/skills"),
+        Arc::new(QwenAgent { launch, settings }),
+        None,
+        Some(&home.join(".qwen/skills")),
     )
+}
+
+/// `DeepSeek` Harness with its patch and its own `DSH_HOME` in
+/// `.tenaz/private/dsh-home`. It is given neither the media MCP server nor
+/// the pinned skills yet (see Known gaps in docs/COMPATIBILITY.md).
+fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
+    let config = inputs.config;
+    let home = inputs.home("dsh-home");
+    let patch = DshPatch {
+        base_url: inputs.base_url.clone(),
+        model: config.id.clone(),
+        context_window: config.context_window,
+        max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
+        supports_images: config.supports_images(),
+        effort: tenaz_acp::dsh::effort(config.thinking.as_deref()).map(str::to_owned),
+    };
+    if !inputs.mcp_endpoints.is_empty() {
+        tracing::warn!("dsh is not given the media tools");
+    }
+    let mut launch = DshLaunch::new(&inputs.options.bin, &home);
+    launch.wrapper = inputs.wrapper.to_vec();
+    inputs.acp_agent(Arc::new(DshAgent { launch, patch }), None, None)
+}
+
+/// The user's ACP command, told about each session in
+/// `.tenaz/private/acp-session.json`; it keeps the user's `HOME`.
+fn generic_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
+    let config = inputs.config;
+    let agent = GenericAgent {
+        binary: inputs.options.bin.clone(),
+        args: inputs.options.acp_args.clone(),
+        session_file: inputs.project.private_dir().join("acp-session.json"),
+        facts: SessionFacts {
+            base_url: inputs.base_url.clone(),
+            max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
+            reasoning_effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
+            mcp_servers: inputs.mcp_endpoints.to_vec(),
+        },
+        wrapper: inputs.wrapper.to_vec(),
+    };
+    inputs.acp_agent(Arc::new(agent), None, None)
 }
 
 /// The provider name the harness's configuration uses.
@@ -324,6 +381,16 @@ mod tests {
     /// Builds the harness `kind` names for a project in `dir`, with the
     /// skills `skills`.
     fn build(dir: &Path, kind: HarnessKind, skills: &[SkillPin]) -> anyhow::Result<()> {
+        build_wrapped(dir, kind, skills, &[]).map(|_| ())
+    }
+
+    /// The same, started through `wrapper` (the sandbox launcher).
+    fn build_wrapped(
+        dir: &Path,
+        kind: HarnessKind,
+        skills: &[SkillPin],
+        wrapper: &[String],
+    ) -> anyhow::Result<Arc<dyn Harness>> {
         let config = ModelConfig {
             harness: kind,
             harness_version: "1".into(),
@@ -337,8 +404,10 @@ mod tests {
             role_models: std::collections::BTreeMap::new(),
         };
         let options = HarnessOptions {
-            bin: "agent".into(),
+            // A path that cannot exist, so no test starts a real program.
+            bin: dir.join("no-such-agent"),
             fx_args: Vec::new(),
+            acp_args: Vec::new(),
         };
         let (feed, _) = tokio::sync::broadcast::channel(1);
         build_harness(&HarnessInputs {
@@ -352,9 +421,78 @@ mod tests {
             agent_skills: false,
             verify_path: ".tenaz/verify",
             feed: &feed,
-            wrapper: &[],
+            wrapper,
         })
-        .map(|_| ())
+    }
+
+    /// The program the wrapper starts for `kind` in a project in `dir`, or
+    /// `None` for a harness that is not an ACP agent. A new harness kind
+    /// must answer here, and be added to the list in the test below.
+    fn acp_program(kind: HarnessKind, dir: &Path) -> Option<String> {
+        match kind {
+            // fx starts through Tenaz's own shim.
+            HarnessKind::Fx => Some(std::env::current_exe().unwrap().display().to_string()),
+            HarnessKind::OpenCode | HarnessKind::Qwen | HarnessKind::Dsh | HarnessKind::Acp => {
+                Some(dir.join("no-such-agent").display().to_string())
+            }
+            HarnessKind::Pi | HarnessKind::Fake => None,
+        }
+    }
+
+    /// Every ACP agent the wiring builds starts through the run's wrapper,
+    /// so a sandboxed run never starts one outside the sandbox.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn every_acp_agent_starts_through_the_wrapper() {
+        // Every kind, so that acp_program decides for each one.
+        let kinds = [
+            HarnessKind::Fx,
+            HarnessKind::Pi,
+            HarnessKind::OpenCode,
+            HarnessKind::Qwen,
+            HarnessKind::Dsh,
+            HarnessKind::Acp,
+            HarnessKind::Fake,
+        ];
+        for kind in kinds {
+            let dir = tempfile::tempdir().unwrap();
+            let Some(program) = acp_program(kind, dir.path()) else {
+                continue;
+            };
+            let argv = dir.path().join("argv");
+            let recorder = dir.path().join("record");
+            tenaz_adapters::testing::write_executable(
+                &recorder,
+                &format!(
+                    "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 1\n",
+                    argv.display()
+                ),
+            );
+            let wrapper = [recorder.display().to_string(), "--sandboxed".into()];
+            let harness = build_wrapped(dir.path(), kind, &[], &wrapper).unwrap();
+            let spec = tenaz_core::ports::SessionSpec {
+                label: "001-builder-T001".into(),
+                cwd: dir.path().to_path_buf(),
+                persist_dir: None,
+                raw_log: None,
+                thinking_log: None,
+                stderr_log: None,
+                model: tenaz_core::ports::SessionModel {
+                    name: "engine/m".into(),
+                    id: "m".into(),
+                    context_window: 65_536,
+                    supports_images: false,
+                },
+            };
+            let opened = tokio::time::timeout(Duration::from_secs(10), harness.open(spec))
+                .await
+                .expect("the launch ends");
+            assert!(opened.is_err(), "{kind}: the recorder is not an ACP agent");
+            let args = std::fs::read_to_string(&argv)
+                .unwrap_or_else(|e| panic!("{kind}: the wrapper did not run: {e}"));
+            let args: Vec<&str> = args.lines().take(2).collect();
+            assert_eq!(args, ["--sandboxed", program.as_str()], "{kind}");
+        }
     }
 
     fn json(path: &Path) -> serde_json::Value {
@@ -394,6 +532,40 @@ mod tests {
             65_536
         );
         assert!(home.join(".qwen/skills/rust").is_symlink());
+    }
+
+    #[test]
+    fn dsh_is_set_up_in_its_home_before_its_first_session() {
+        let dir = tempfile::tempdir().unwrap();
+        build(dir.path(), HarnessKind::Dsh, &[]).unwrap();
+        let home = Project::new(dir.path()).private_dir().join("dsh-home");
+        let patch = json(&home.join(".dsh/tenaz-patch.yml"));
+        let entry = |id: &str| {
+            patch
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["id"] == id)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(entry("acp")["config"]["model"], "m");
+        assert_eq!(
+            entry("llm-pi-ai")["config"]["providers"]["tenaz"]["baseURL"],
+            "http://127.0.0.1:4001/v1"
+        );
+    }
+
+    #[test]
+    fn the_generic_agent_is_told_its_first_session_before_it_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        build(dir.path(), HarnessKind::Acp, &[]).unwrap();
+        let file = Project::new(dir.path())
+            .private_dir()
+            .join("acp-session.json");
+        let session = json(&file);
+        assert_eq!(session["model"], "m");
+        assert_eq!(session["baseUrl"], "http://127.0.0.1:4001/v1");
     }
 
     #[test]

@@ -33,6 +33,10 @@ pub(crate) enum HarnessArg {
     OpenCode,
     /// Qwen Code over ACP.
     Qwen,
+    /// dsh over ACP, with a patch Tenaz writes for the run.
+    Dsh,
+    /// Any other ACP agent: the command --acp-bin names, with --acp-args.
+    Acp,
     /// The scripted fake harness: exercises the runner without a model.
     Fake,
 }
@@ -44,6 +48,8 @@ impl HarnessArg {
             Self::Pi => HarnessKind::Pi,
             Self::OpenCode => HarnessKind::OpenCode,
             Self::Qwen => HarnessKind::Qwen,
+            Self::Dsh => HarnessKind::Dsh,
+            Self::Acp => HarnessKind::Acp,
             Self::Fake => HarnessKind::Fake,
         }
     }
@@ -58,6 +64,8 @@ impl From<HarnessKind> for HarnessArg {
             HarnessKind::Pi => Self::Pi,
             HarnessKind::OpenCode => Self::OpenCode,
             HarnessKind::Qwen => Self::Qwen,
+            HarnessKind::Dsh => Self::Dsh,
+            HarnessKind::Acp => Self::Acp,
             HarnessKind::Fake => Self::Fake,
         }
     }
@@ -506,6 +514,7 @@ fn launch(plan: &InitPlan) -> anyhow::Result<Launch> {
         swap_models: plan.args.swap_models,
         harness_bin: plan.harness_bin.as_deref().map(pinned_path),
         fx_args: None,
+        acp_args: None,
         comfyui: plan.args.comfyui.clone(),
         workflows: pinned_workflows(&plan.args.workflows)?,
         images_url: plan.args.images.clone(),
@@ -548,12 +557,16 @@ fn placement_origin(placement: &worktree::Placement) -> Option<tenaz_core::ledge
 }
 
 /// The harness version to pin and, with Pi, the model's entry in
-/// `~/.pi/agent/models.json` when that file lists it.
+/// `~/.pi/agent/models.json` when that file lists it. The generic agent
+/// has no name to find on PATH: it needs its command.
 fn pin_harness(
     harness: HarnessKind,
     bin: Option<&Path>,
     provider: &str,
 ) -> anyhow::Result<(String, Listed)> {
+    if harness == HarnessKind::Acp && bin.is_none() {
+        anyhow::bail!("--harness acp needs --acp-bin <command>");
+    }
     let bin = bin.unwrap_or_else(|| Path::new(harness.as_str()));
     let version = detect::agent_version(harness, bin)
         .with_context(|| format!("cannot run {} --version", bin.display()))?;
@@ -561,9 +574,12 @@ fn pin_harness(
         HarnessKind::Pi => {
             Listed::read(tenaz_pi::models::default_models_path().as_deref(), provider)?
         }
-        HarnessKind::Fx | HarnessKind::OpenCode | HarnessKind::Qwen | HarnessKind::Fake => {
-            Listed::default()
-        }
+        HarnessKind::Fx
+        | HarnessKind::OpenCode
+        | HarnessKind::Qwen
+        | HarnessKind::Dsh
+        | HarnessKind::Acp
+        | HarnessKind::Fake => Listed::default(),
     };
     Ok((version, listed))
 }
@@ -782,7 +798,7 @@ mod tests {
 
     #[test]
     fn the_harness_is_fx_unless_given_and_keeps_only_its_own_binary() {
-        const BINS: [&str; 8] = [
+        const BINS: [&str; 12] = [
             "--fx-bin",
             "/opt/fx",
             "--pi-bin",
@@ -791,6 +807,10 @@ mod tests {
             "/opt/opencode",
             "--qwen-bin",
             "/opt/qwen",
+            "--dsh-bin",
+            "/opt/dsh",
+            "--acp-bin",
+            "/opt/acp",
         ];
         let fx = plan(&with(&BINS), None);
         assert_eq!(
@@ -801,6 +821,8 @@ mod tests {
             ("pi", HarnessKind::Pi),
             ("opencode", HarnessKind::OpenCode),
             ("qwen", HarnessKind::Qwen),
+            ("dsh", HarnessKind::Dsh),
+            ("acp", HarnessKind::Acp),
         ] {
             let line = with(&[&["--harness", name][..], &BINS].concat());
             let got = plan(&line, None);
@@ -809,6 +831,12 @@ mod tests {
                 (kind, Some(PathBuf::from(format!("/opt/{name}"))))
             );
         }
+    }
+
+    #[test]
+    fn the_generic_agent_needs_its_command() {
+        let error = pin_harness(HarnessKind::Acp, None, "engine").unwrap_err();
+        assert_eq!(error.to_string(), "--harness acp needs --acp-bin <command>");
     }
 
     #[test]

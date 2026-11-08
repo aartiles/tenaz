@@ -34,6 +34,10 @@ pub(crate) struct RunArgs {
     /// Arguments that put fx in ACP mode (default: acp).
     #[arg(long, value_delimiter = ' ')]
     fx_args: Option<Vec<String>>,
+    /// Arguments that put the generic agent (--harness acp) in ACP mode
+    /// (default: none). It may start with `-`.
+    #[arg(long, value_delimiter = ' ', allow_hyphen_values = true)]
+    acp_args: Option<Vec<String>>,
     /// The engine API (default: the one pinned at init).
     #[arg(long, value_enum)]
     engine: Option<EngineKind>,
@@ -93,6 +97,7 @@ impl RunArgs {
             next.harness_bin = Some(pinned_path(bin));
         }
         replace(&mut next.fx_args, self.fx_args.as_ref());
+        replace(&mut next.acp_args, self.acp_args.as_ref());
         replace(&mut next.comfyui, self.comfyui.as_ref());
         if !self.workflows.is_empty() {
             next.workflows = pinned_workflows(&self.workflows)?;
@@ -175,6 +180,7 @@ pub(crate) async fn execute(args: RunArgs) -> anyhow::Result<ExitCode> {
             .fx_args
             .clone()
             .unwrap_or_else(|| vec!["acp".to_owned()]),
+        acp_args: launch.acp_args.clone().unwrap_or_default(),
     };
     let wired = wiring::wire(&project, &engine, &harness, &media).await?;
     let mut runner = Runner::open(project.clone(), wired.deps, stop)?;
@@ -255,6 +261,21 @@ mod tests {
         assert!(!swap(&["tenaz", "run", "--no-swap-models"], true));
         assert!(swap(&["tenaz", "run"], true));
         assert!(!swap(&["tenaz", "run"], false));
+    }
+
+    #[test]
+    fn run_pins_the_generic_agent_s_arguments() {
+        let launch = Launch::default();
+        let line = ["tenaz", "run", "--acp-args", "--profile acp"];
+        let next = run_args(&line).apply(&launch, HarnessKind::Acp).unwrap();
+        assert_eq!(
+            next.acp_args,
+            Some(vec!["--profile".to_owned(), "acp".to_owned()])
+        );
+        let kept = run_args(&["tenaz", "run"])
+            .apply(&next, HarnessKind::Acp)
+            .unwrap();
+        assert_eq!(kept.acp_args, next.acp_args);
     }
 
     #[test]

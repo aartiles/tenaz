@@ -3,11 +3,12 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::novelty::Novelty;
 use crate::params::RunParams;
 use crate::session::{
     HARNESS_COMPACTION, PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics,
-    StopReason, ToolEffect, WatchdogEvent, capacity_limit, is_image_refusal, is_out_of_memory,
-    is_request_refusal, tool_effect,
+    StopReason, ToolEffect, WatchdogEvent, capacity_limit, command_arg, is_image_refusal,
+    is_out_of_memory, is_request_refusal, path_arg, tool_effect,
 };
 use crate::util::{approx_tokens, sha256_hex};
 use crate::write_scope::WriteScope;
@@ -90,8 +91,8 @@ pub struct Watchdog {
     /// The context stop, held back while the tool calls of the reply that
     /// crossed it run.
     held_stop: Option<HeldStop>,
-    /// Arguments of every read so far: a read of something new is progress.
-    reads: HashSet<String>,
+    /// What the session has read so far: reading something new is progress.
+    novelty: Novelty,
     fingerprint: Option<String>,
     /// Where writes belong; `None` checks none (a sandboxed run).
     write_scope: Option<WriteScope>,
@@ -114,7 +115,7 @@ impl Watchdog {
             tool_timeouts: 0,
             interrupting: false,
             held_stop: None,
-            reads: HashSet::new(),
+            novelty: Novelty::default(),
             fingerprint: None,
             write_scope: None,
         }
@@ -138,7 +139,8 @@ impl Watchdog {
         self.fingerprint = fingerprint;
     }
 
-    /// Checks the files the write tools name against `scope`.
+    /// Checks the files the write tools name against `scope`, and reads
+    /// against its root: a path counts the same absolute or relative.
     pub fn set_write_scope(&mut self, scope: Option<WriteScope>) {
         self.write_scope = scope;
     }
@@ -205,9 +207,8 @@ impl Watchdog {
         let Some((name, args)) = self.call_args.get(id) else {
             return String::new();
         };
-        let shown = ["command", "cmd", "path"]
-            .iter()
-            .find_map(|k| args.get(*k).and_then(serde_json::Value::as_str))
+        let shown = command_arg(args)
+            .or_else(|| path_arg(args))
             .map_or_else(|| format!("{name} {args}"), str::to_owned);
         match shown.char_indices().nth(200) {
             Some((cut, _)) => format!("{}…", &shown[..cut]),
@@ -270,11 +271,7 @@ impl Watchdog {
                 is_error,
             } => {
                 if *is_error {
-                    self.metrics.tool_errors += 1;
-                    if self.metrics.first_tool_error.is_none() {
-                        let shown: String = result_text.chars().take(200).collect();
-                        self.metrics.first_tool_error = Some(format!("{name}: {shown}"));
-                    }
+                    self.count_tool_error(name, result_text);
                 }
                 self.tool_end(id, name, result_text, elapsed_ms, &mut actions);
             }
@@ -297,6 +294,7 @@ impl Watchdog {
                 );
             }
             SessionEvent::TurnEnd => self.turn_end(elapsed_ms, fingerprint, &mut actions),
+            SessionEvent::LateText { text } => self.push_text(text),
             SessionEvent::CompactionStart { reason } => {
                 self.compaction_started(reason, elapsed_ms, &mut actions);
             }
@@ -407,7 +405,7 @@ impl Watchdog {
     }
 
     /// A tool call starting: the loop rules, then its effect on files. A
-    /// write, or a read of something not read before, is progress for the
+    /// write, or a read of something new ([`Novelty`]), is progress for the
     /// idle rule; a write is also counted and its path checked.
     fn tool_call(&mut self, call: &SessionEvent, elapsed_ms: u64, actions: &mut Vec<Action>) {
         let SessionEvent::ToolCallStart {
@@ -420,16 +418,18 @@ impl Watchdog {
             return;
         };
         self.tool_start(id, name, args, elapsed_ms, actions);
-        match tool_effect(name, *effect) {
+        let scope = self.write_scope.as_ref();
+        let progress = match tool_effect(name, *effect) {
             Some(ToolEffect::Write) => {
                 self.metrics.writes += 1;
-                self.idle_turns = -1;
                 self.check_write_target(args, elapsed_ms, actions);
+                true
             }
-            Some(ToolEffect::Read) if self.reads.insert(args.to_string()) => {
-                self.idle_turns = -1;
-            }
-            _ => {}
+            Some(ToolEffect::Read) => self.novelty.read(args, scope),
+            None => self.novelty.other(args, scope),
+        };
+        if progress {
+            self.idle_turns = -1;
         }
     }
 
@@ -566,6 +566,22 @@ impl Watchdog {
         }
     }
 
+    /// Counts a failed tool call, keeping the first one's start.
+    fn count_tool_error(&mut self, name: &str, result_text: &str) {
+        self.metrics.tool_errors += 1;
+        if self.metrics.first_tool_error.is_none() {
+            let shown: String = result_text.chars().take(200).collect();
+            self.metrics.first_tool_error = Some(format!("{name}: {shown}"));
+        }
+    }
+
+    /// Keeps what the agent said, when it said anything.
+    fn push_text(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.metrics.texts.push(text.to_owned());
+        }
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "each argument is a separate field of the harness's message-end event"
@@ -594,9 +610,7 @@ impl Watchdog {
         self.metrics.reasoning_chars += thinking_chars;
         self.metrics.context_peak = self.metrics.context_peak.max(usage.context());
         self.metrics.last_stop_reason = Some(stop_reason.clone());
-        if !text.is_empty() {
-            self.metrics.texts.push(text.to_owned());
-        }
+        self.push_text(text);
         self.metrics.assistant.push(crate::session::AssistantTurn {
             stop_reason: stop_reason.clone(),
             usage: *usage,
@@ -950,6 +964,21 @@ mod tests {
         assert!(w.metrics().context_stopped());
         assert_eq!(w.metrics().reasoning_chars, 28);
         assert_eq!(w.metrics().texts.len(), 4);
+    }
+
+    #[test]
+    fn late_text_is_kept_with_the_messages_text() {
+        let mut w = watched();
+        message(&mut w, 1_000, StopReason::Stop, None);
+        let late = SessionEvent::LateText {
+            text: "marmalade-4817".into(),
+        };
+        let empty = SessionEvent::LateText {
+            text: String::new(),
+        };
+        assert!(w.handle(&late, 6, String::new).is_empty());
+        assert!(w.handle(&empty, 7, String::new).is_empty());
+        assert_eq!(w.metrics().texts, ["hi", "marmalade-4817"]);
     }
 
     /// The context stop for a reply of 80,000 input and the helper's 10
@@ -1383,6 +1412,115 @@ mod tests {
             w.handle(&SessionEvent::TurnEnd, 0, || "a".into())
                 .is_empty()
         );
+    }
+
+    /// A builder held to the idle rule: steered after 2 idle turns,
+    /// stopped after 3.
+    fn idle_watched() -> Watchdog {
+        let mut p = RunParams::default();
+        p.idle_steer = 2;
+        p.idle_abort = 3;
+        let mut w = Watchdog::new(
+            p,
+            Some(WatchConfig {
+                turns: 40,
+                context_tokens: 60_000,
+                idle: true,
+                wrap_up: Role::Builder.wrap_up(),
+            }),
+        );
+        w.set_fingerprint(Some("a".into()));
+        w
+    }
+
+    /// One turn of one shell call, in an unchanged worktree.
+    fn shell_turn(w: &mut Watchdog, command: &str) -> Vec<Action> {
+        w.handle(
+            &tool_call("bash", serde_json::json!({ "command": command })),
+            0,
+            String::new,
+        );
+        w.handle(&SessionEvent::TurnEnd, 0, || "a".into())
+    }
+
+    #[test]
+    fn shell_reads_of_new_files_are_not_idle() {
+        // Sessions 054 and 055-builder-T019 (dsh, 2026-11-08) read the
+        // checks with `sed -n` and `grep` and were aborted as idle.
+        let mut w = idle_watched();
+        for n in 0..20 {
+            let command = format!("sed -n 1,60p checks/T{n:03}.check.mjs | grep -n barrel");
+            assert!(shell_turn(&mut w, &command).is_empty(), "read {n}");
+        }
+    }
+
+    #[test]
+    fn a_probe_script_is_progress_once() {
+        let mut w = idle_watched();
+        let write = "cat > .tenaz/private/probe.mjs <<'EOF'\nconsole.log(1)\nEOF";
+        assert!(shell_turn(&mut w, write).is_empty(), "a new path");
+        let run = "node .tenaz/private/probe.mjs 2>&1 | tail -60";
+        assert!(shell_turn(&mut w, run).is_empty(), "idle 1: run again");
+        let rewrite = "cat > .tenaz/private/probe.mjs <<'EOF'\nconsole.log(2)\nEOF";
+        assert!(
+            is_steer(&shell_turn(&mut w, rewrite), "idle"),
+            "idle 2: rewritten"
+        );
+        assert!(
+            shell_turn(&mut w, "node .tenaz/private/probe2.mjs").is_empty(),
+            "a new probe resets the count"
+        );
+    }
+
+    #[test]
+    fn a_shell_read_of_a_file_already_read_is_idle() {
+        // Qwen Code reads with absolute paths; the shell names them relative.
+        let mut w = scoped(idle_watched());
+        let read = tool_call(
+            "ReadFile",
+            serde_json::json!({ "file_path": "/work/app/src/world.js" }),
+        );
+        w.handle(&read, 0, String::new);
+        w.handle(&SessionEvent::TurnEnd, 0, || "a".into());
+        assert!(
+            shell_turn(&mut w, "sed -n 1,40p src/world.js").is_empty(),
+            "idle 1"
+        );
+        assert!(is_steer(
+            &shell_turn(&mut w, "sed -n 40,80p src/world.js"),
+            "idle"
+        ));
+    }
+
+    #[test]
+    fn shell_reads_of_the_same_file_are_steered_then_stopped() {
+        let mut w = idle_watched();
+        let turns: Vec<Vec<Action>> = (0..4)
+            .map(|n| shell_turn(&mut w, &format!("sed -n {n},9p ./src/world.js")))
+            .collect();
+        assert!(
+            turns[0].is_empty() && turns[1].is_empty(),
+            "a new path, then idle 1"
+        );
+        assert!(is_steer(&turns[2], "idle"));
+        assert!(
+            matches!(&turns[3][..], [Action::Abort { reason }] if reason.starts_with("3 turns"))
+        );
+    }
+
+    #[test]
+    fn reading_back_a_written_file_counts_once() {
+        // A write is not a read: the first look at what was written is new.
+        let mut w = idle_watched();
+        w.handle(
+            &tool_call("write", serde_json::json!({ "path": "src/a.js" })),
+            0,
+            String::new,
+        );
+        w.handle(&SessionEvent::TurnEnd, 0, || "b".into());
+        assert!(shell_turn(&mut w, "cat src/a.js").is_empty(), "new");
+        assert!(shell_turn(&mut w, "cat src/a.js").is_empty(), "idle 1");
+        assert!(is_steer(&shell_turn(&mut w, "cat src/a.js"), "idle"));
     }
 
     #[test]

@@ -117,12 +117,18 @@ pub enum HarnessKind {
     OpenCode,
     /// Qwen Code over ACP.
     Qwen,
+    /// `DeepSeek` Harness (`dsh`) over ACP.
+    Dsh,
+    /// Any other ACP agent: the user's command (`--acp-bin`, `--acp-args`).
+    Acp,
     /// The scripted harness, which needs no agent and no engine.
     Fake,
 }
 
 impl HarnessKind {
     /// The real coding agents, in the order the setup wizard offers them.
+    /// Not dsh: another program is called `dsh` too (a distributed shell),
+    /// so a `dsh` on PATH is not taken for it.
     pub const AGENTS: [Self; 4] = [Self::Fx, Self::Pi, Self::OpenCode, Self::Qwen];
 
     pub fn as_str(self) -> &'static str {
@@ -131,6 +137,8 @@ impl HarnessKind {
             Self::Pi => "pi",
             Self::OpenCode => "opencode",
             Self::Qwen => "qwen",
+            Self::Dsh => "dsh",
+            Self::Acp => "acp",
             Self::Fake => "fake",
         }
     }
@@ -180,6 +188,9 @@ pub struct Launch {
     /// Arguments that put fx in ACP mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fx_args: Option<Vec<String>>,
+    /// Arguments that put the generic agent (`--harness acp`) in ACP mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acp_args: Option<Vec<String>>,
     /// `ComfyUI` base URL; enables the image tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comfyui: Option<String>,
@@ -856,6 +867,8 @@ mod tests {
             (HarnessKind::Pi, "pi"),
             (HarnessKind::OpenCode, "opencode"),
             (HarnessKind::Qwen, "qwen"),
+            (HarnessKind::Dsh, "dsh"),
+            (HarnessKind::Acp, "acp"),
             (HarnessKind::Fake, "fake"),
         ] {
             assert_eq!(serde_json::json!(kind), name);
