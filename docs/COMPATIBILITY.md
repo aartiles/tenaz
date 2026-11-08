@@ -15,7 +15,7 @@ below; this page is about the real ones.
 | | [Pi](https://github.com/earendil-works/pi) 1.1.0 and 1.4.0 in RPC mode | Tested end to end to a COMPLETE run: 1.1.0 with the user's own `models.json`, 1.4.0 with the generated configuration through the proxy and two models (see Known gaps). No media tools (see below). |
 | | [OpenCode](https://github.com/sst/opencode) 1.19.5 (`--harness opencode`) and [Qwen Code](https://github.com/QwenLM/qwen-code) 0.26.6 (`--harness qwen`), both over ACP | One real run each with Qwen3.8-27B on mlx-serve: OpenCode to COMPLETE, Qwen Code to BLOCKED by a replan the run rejected, not by the agent; Tenaz now accepts that replan (ADR 0018). Less tried than fx and Pi (see Known gaps). |
 | | Other ACP agents (`--harness acp`) | The command `--acp-bin` names, with `--acp-args`, told about each session in the file `TENAZ_AGENT_SESSION` names. Tested with unit tests only; no real agent run through it yet. |
-| | [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) 0.2.2-rc.1 (`--harness dsh`) over ACP | Its patch checked with `dsh --profile acp --dump-config` in a fresh `DSH_HOME`, and its ACP behaviour by a probe through the fx path on 2026-11-07 (preflight with Qwen3.8-Flash-Next on Sushi 1.5.1). Not yet run to the end of a run (see Known gaps). |
+| | [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) 0.2.2-rc.1 (`--harness dsh`) over ACP | Its patch checked with `dsh --profile acp --dump-config` in a fresh `DSH_HOME`, and its ACP behaviour by a probe through the fx path on 2026-11-07 (preflight with Qwen3.8-Flash-Next on Sushi 1.5.1). One small goal run to COMPLETE on 2026-11-07: 17 sessions, preflight `tools=true` (see Known gaps). |
 | Engine | Sushi 1.2.4 and 1.3.0, and mlx-serve 26.10.3 (`--engine load-api`) | Tested for inference. Sushi 1.3.0 unloaded and reloaded the LLM through its API for each of 10 images in one run (about 8 s per reload). mlx-serve 26.10.3 loaded and unloaded two models through its API in two runs that swapped them (see Known gaps). |
 | | Any OpenAI-compatible server (`--engine generic` with `--engine-start` / `--engine-stop`): llama.cpp `llama-server`, LM Studio, Ollama's `/v1`, llama-swap, vLLM | Tested against a mock, and with TensorFold native 1.1.4 stopped and started by its own scripts around each of 8 images in one run, before the start was skipped for an engine that still serves the model (see Known gaps). The servers named here are untried. |
 | | MLX's `mlx_lm.server`, TensorFold (`--engine generic`) | Untested. `tenaz init` does not look for either: `mlx_lm.server` listens on 8080 by default, where the wizard expects llama.cpp, so it may be found under that name; otherwise pass `--base-url`. TensorFold needs the proxy's argument repair (see below). |
@@ -125,10 +125,12 @@ above), so a 32k context is the practical floor (`contextFloor`).
   user's `HOME`, settings, skills and memory, and gets the pinned skills
   only if the user's script gives them.
 
-- **DeepSeek Harness is untried in a full run.** `--harness dsh` is
-  built from a probe on 2026-11-07 (dsh 0.2.2-rc.1, ACP protocol 1,
-  agent `deepseek-harness-acp`) and unit tests; no run has finished
-  with it. What the probe showed: dsh did not send permission requests,
+- **DeepSeek Harness has finished one small run only.** `--harness dsh`
+  is built from a probe on 2026-11-07 (dsh 0.2.2-rc.1, ACP protocol 1,
+  agent `deepseek-harness-acp`) and unit tests. On 2026-11-07 it ran a
+  one-file shell goal to COMPLETE with Qwen3.8-Flash-Next on Sushi
+  1.5.1 (17 sessions, six tasks, a replan); that goal used no media
+  tools, skills or long sessions. What the probe showed: dsh did not send permission requests,
   so its tools run without the runner's approval and the watchdog sees a
   call only once it runs; its `usage_update` has no cache counts; it
   sends its answer after the model request ends (kept since the
