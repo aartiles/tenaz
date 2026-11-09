@@ -32,6 +32,13 @@ uses [Semantic Versioning](https://semver.org/).
   "command not found". It now says to set the shell tool's own time limit,
   and to time out a program a check starts in the check's own language.
 
+- A check tests its requirement in the state the spec describes: one
+  about the first screen is checked before any user action. The prompts
+  of the builder, the task reviewer and the planners now say so. A check
+  that changes such a state first is MAJOR for the reviewer; when a card
+  asks for one, the builder follows the spec. In two runs a check of a game's
+  first frame opened a door first, and only the final review caught it.
+
 ## [0.6.0] - 2026-11-08
 
 ### Added

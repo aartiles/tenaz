@@ -16,6 +16,10 @@ saying why. A child that does the amending of a card with `amends` keeps
 that field. A child may depend on the original card's dependencies
 and on its siblings.
 
+Each new card's checks test its requirements in the state the spec
+describes. One about the first screen or state the program shows is
+checked there, before any key press, click or other user action.
+
 You may also adjust other `todo` cards if the split changes their
 dependencies. Edit nothing outside `.tenaz/tasks/` except
 `.tenaz/notes/PLANNER.md` (short, about 15 lines). Do not edit `done` cards,

@@ -24,6 +24,13 @@ protocol) and stop: the task is blocked and replanned. If it cannot be done
 as written for another reason, explain why in your notes and stop; the
 attempt fails, and after the last one the task is split or blocked.
 
+A check tests its requirement in the state the spec describes. One about
+the first screen or state the program shows is checked there, before any
+key press, click or other user action. Do not make such a check change
+that state first (for example, open a door before it checks the first
+frame). If the card asks for that, follow the spec and say so in your
+notes.
+
 Never leave heavy work running in the background. If a command needs more
 than a tool call's time, or most of the machine's memory for minutes,
 write `.tenaz/jobs/<TASK>.json` (see the protocol, "Heavy jobs") and stop:
