@@ -7,6 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use thiserror::Error;
 
+use crate::leftover::ProcessRow;
 use crate::memory::MemoryReading;
 use crate::metrics::EngineCounters;
 use crate::session::SessionEvent;
@@ -151,6 +152,21 @@ pub trait Vcs: Send + Sync {
 #[async_trait]
 pub trait VerifyRunner: Send + Sync {
     async fn run(&self, args: &[&str], timeout: Duration) -> RawVerifyOutput;
+}
+
+// ---------- processes ----------
+
+/// The machine's process table, to find and stop what `verify` or a heavy
+/// job left running outside its process group (ADR 0031). Synchronous:
+/// each call runs `ps`, `lsof` or `kill` once.
+pub trait ProcessTable: Send + Sync {
+    /// Every process.
+    fn list(&self) -> Vec<ProcessRow>;
+    /// The working directories of those of `pids` it can read.
+    fn cwds(&self, pids: &[u32]) -> Vec<(u32, PathBuf)>;
+    /// Kills `pids`; one already gone is no error. False when it did not
+    /// try (out of time).
+    fn kill(&self, pids: &[u32]) -> bool;
 }
 
 // ---------- heavy jobs ----------

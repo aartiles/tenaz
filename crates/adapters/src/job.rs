@@ -51,27 +51,27 @@ impl JobRunner for JobProcess {
             Err(error) => return failed(format!("cannot open its log: {error}")),
         };
         let spawned = log.try_clone().map(|err| {
-            crate::process::command(
-                &self.root,
-                &self.wrapper,
-                Path::new("/bin/sh"),
-                vec!["-c".to_owned(), job.command.clone()],
+            crate::process::spawn(
+                crate::process::command(
+                    &self.root,
+                    &self.wrapper,
+                    Path::new("/bin/sh"),
+                    vec!["-c".to_owned(), job.command.clone()],
+                )
+                .stdout(log)
+                .stderr(err),
             )
-            .stdout(log)
-            .stderr(err)
-            .spawn()
         });
-        let mut child = match spawned {
-            Ok(Ok(child)) => child,
+        let mut spawned = match spawned {
+            Ok(Ok(spawned)) => spawned,
             Ok(Err(error)) | Err(error) => {
                 let why = format!("cannot run the job: {error}");
                 let _ = std::fs::write(&job.log, format!("{why}\n"));
                 return failed(why);
             }
         };
-        let group = child.id();
         let outcome = tokio::select! {
-            waited = tokio::time::timeout(job.timeout, child.wait()) => match waited {
+            waited = tokio::time::timeout(job.timeout, spawned.child.wait()) => match waited {
                 Ok(Ok(status)) => JobOutcome { status: status.code(), ..JobOutcome::default() },
                 Ok(Err(error)) => failed(format!("cannot wait for the job: {error}")),
                 Err(_) => JobOutcome { timed_out: true, ..JobOutcome::default() },
@@ -80,7 +80,7 @@ impl JobRunner for JobProcess {
         };
         // Whatever the job started goes with it: a render left running
         // would hold the GPU the LLM is about to reload into.
-        crate::process::reap(&mut child, group).await;
+        crate::process::reap(&mut spawned, &self.root).await;
         outcome
     }
 }
@@ -203,6 +203,27 @@ mod tests {
         assert!(
             gone_within(pid.trim().parse().expect("a pid"), Duration::from_secs(5)),
             "the background sleep still runs"
+        );
+    }
+
+    /// What the job left in a session of its own, in the project, is
+    /// stopped too (ADR 0031).
+    #[tokio::test]
+    async fn what_a_job_left_in_a_session_of_its_own_is_stopped() {
+        let (dir, job, log) = job();
+        let pidfile = dir.path().join("pid");
+        let command = crate::testing::detached_sleep(&pidfile);
+        let outcome = job
+            .run(
+                &spec(&command, Duration::from_secs(20), &log),
+                &CancellationToken::new(),
+            )
+            .await;
+        let sleep = crate::testing::KillOnDrop::read(&pidfile);
+        assert_eq!(outcome.status, Some(0), "{outcome:?}");
+        assert!(
+            gone_within(sleep.pid(), Duration::from_secs(5)),
+            "the detached sleep still runs"
         );
     }
 

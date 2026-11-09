@@ -8,6 +8,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- After `verify` or a heavy job ends, Tenaz also stops the processes it
+  left running in a session of their own (Node's `detached: true`,
+  `setsid`), which killing its process group missed. Such a process was
+  born while it ran, leads a process group of its own, has no terminal,
+  runs as the same user, is not `git`, works inside the project, and was
+  adopted by `launchd`, `init` or `systemd --user` or has a parent still
+  in the command's group (ADR 0031; see its known gap in
+  `docs/COMPATIBILITY.md`). In a raycaster run, a check's detached `npx
+  vite preview` built up 175 servers, about 2.5 GB, until the engine ran
+  out of memory.
 - `--harness dsh` turns off dsh's own automatic compaction, so a session
   ends at Tenaz's context budget instead of summarizing its history once
   dsh's count reaches about 49k tokens of a 131k window. That count

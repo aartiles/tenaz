@@ -62,17 +62,18 @@ impl VerifyRunner for VerifyProcess {
         }
         // `./verify` from the root, as the contract names it: a relative root
         // joined into the program path would be resolved from the root again.
-        let spawned = crate::process::command(
-            &self.root,
-            &self.wrapper,
-            std::path::Path::new(&format!("./{}", self.path)),
-            args.iter().map(|a| (*a).to_owned()).collect(),
-        )
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-        let mut child = match spawned {
-            Ok(child) => child,
+        let spawned = crate::process::spawn(
+            crate::process::command(
+                &self.root,
+                &self.wrapper,
+                std::path::Path::new(&format!("./{}", self.path)),
+                args.iter().map(|a| (*a).to_owned()).collect(),
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        );
+        let mut spawned = match spawned {
+            Ok(spawned) => spawned,
             Err(error) => {
                 return RawVerifyOutput {
                     status: None,
@@ -81,8 +82,8 @@ impl VerifyRunner for VerifyProcess {
                 };
             }
         };
-        let mut stdout = child.stdout.take();
-        let mut stderr = child.stderr.take();
+        let mut stdout = spawned.child.stdout.take();
+        let mut stderr = spawned.child.stderr.take();
         let out = tokio::spawn(async move {
             let mut buffer = Vec::new();
             if let Some(mut s) = stdout.take() {
@@ -97,14 +98,13 @@ impl VerifyRunner for VerifyProcess {
             }
             buffer
         });
-        let group = child.id();
-        let (status, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
+        let (status, timed_out) = match tokio::time::timeout(timeout, spawned.child.wait()).await {
             Ok(Ok(status)) => (status.code(), false),
             Ok(Err(_)) => (None, false),
             Err(_) => (None, true),
         };
         // Before reading to the end: what is left may hold the pipes open.
-        crate::process::reap(&mut child, group).await;
+        crate::process::reap(&mut spawned, &self.root).await;
         let stdout = String::from_utf8_lossy(&out.await.unwrap_or_default()).into_owned();
         let stderr = String::from_utf8_lossy(&err.await.unwrap_or_default()).into_owned();
         RawVerifyOutput {
@@ -185,6 +185,41 @@ mod tests {
                 "{name} still running"
             );
         }
+    }
+
+    /// A check that starts a server in a session of its own and never
+    /// stops it: the one started in the project is stopped, one started
+    /// from another directory is not Tenaz's to stop (ADR 0031).
+    #[tokio::test]
+    async fn stops_what_verify_left_in_a_session_of_its_own() {
+        use crate::testing::{KillOnDrop, detached_sleep, gone_within};
+        let outside = tempfile::tempdir().unwrap();
+        let (dir, verify) = project("");
+        let inside_pid = dir.path().join("inside.pid");
+        let outside_pid = dir.path().join("outside.pid");
+        write_executable(
+            &dir.path().join("verify"),
+            &format!(
+                "#!/bin/sh\n{}cd '{}'\n{}echo '{{\"ok\":true,\"passed\":1,\"failed\":[]}}'\n",
+                detached_sleep(&inside_pid),
+                outside.path().display(),
+                detached_sleep(&outside_pid),
+            ),
+        );
+        let raw = verify.run(&["--all"], Duration::from_secs(20)).await;
+        let (inside, outside) = (
+            KillOnDrop::read(&inside_pid),
+            KillOnDrop::read(&outside_pid),
+        );
+        assert_eq!(raw.status, Some(0), "{}", raw.stderr);
+        assert!(
+            gone_within(inside.pid(), Duration::from_secs(5)),
+            "the server started in the project still runs"
+        );
+        assert!(
+            !gone_within(outside.pid(), Duration::from_millis(200)),
+            "the server started from another directory was stopped"
+        );
     }
 
     #[tokio::test]
