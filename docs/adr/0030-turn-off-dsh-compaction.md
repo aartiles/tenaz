@@ -68,8 +68,8 @@ two files 21 times.
 A, with C behind it: Tenaz's patch turns off dsh's automatic compaction,
 and the proxy refuses a summary request dsh still sends, as it does
 Qwen Code's. A refused request is counted as a compaction, not as a
-turn, so it no longer brings the session closer to its turn limit or to
-the idle rule.
+turn, as Qwen Code's already was, so a dsh summary no longer brings the
+session closer to its turn limit or to the idle rule.
 
 ## Consequences
 

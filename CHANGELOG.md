@@ -34,7 +34,6 @@ uses [Semantic Versioning](https://semver.org/).
 - The orchestrator's message after it stops a long tool call no longer
   suggests `timeout 60 <command>`; it says to run the call again with
   the shell tool's own time limit.
-
 - A check tests its requirement in the state the spec describes: one
   about the first screen is checked before any user action. The
   protocol, which every role reads, now says so. A check that changes

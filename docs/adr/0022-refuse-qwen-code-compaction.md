@@ -1,6 +1,7 @@
 # ADR 0022: Refuse Qwen Code's compaction in the proxy
 
-Status: accepted, 2026-11-04.
+Status: accepted, 2026-11-04. Amended by ADR 0030, which refuses dsh's
+summary request the same way.
 
 ## Context
 
