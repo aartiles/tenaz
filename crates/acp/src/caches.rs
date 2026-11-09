@@ -94,6 +94,16 @@ mod tests {
             "/Users/me/Library/Caches/ms-playwright"
         );
         assert_eq!(cache("/Users/me", &empty, true, NPM), "/Users/me/.npm");
+        assert_eq!(
+            cache(
+                "/home/me",
+                env(&[("XDG_CACHE_HOME", "")]),
+                false,
+                PLAYWRIGHT
+            ),
+            "/home/me/.cache/ms-playwright",
+            "an empty XDG_CACHE_HOME is no setting either"
+        );
     }
 
     #[test]

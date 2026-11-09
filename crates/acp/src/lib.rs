@@ -311,19 +311,6 @@ mod tests {
     }
 
     #[test]
-    fn the_proxy_refuses_only_the_summaries_of_qwen_code_and_dsh() {
-        assert_eq!(
-            compaction_prompt(HarnessKind::Dsh),
-            Some(dsh::COMPACTION_PROMPT)
-        );
-        assert_eq!(
-            compaction_prompt(HarnessKind::Qwen),
-            Some(qwen::COMPACTION_PROMPT)
-        );
-        assert_eq!(compaction_prompt(HarnessKind::Pi), None);
-    }
-
-    #[test]
     fn a_missing_agent_has_no_version() {
         assert!(agent_version(Path::new("/nonexistent/agent")).is_err());
     }

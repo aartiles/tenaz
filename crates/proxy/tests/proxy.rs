@@ -594,12 +594,10 @@ async fn refuses_the_harness_compaction_request() {
 const DSH_COMPACTION_OPENING: &str =
     "You are now acting as a compaction engine for this AI coding assistant.";
 
-/// dsh sends its summarizing prompt as one text part after a tool result,
-/// which pi-ai may mark for caching; the proxy refuses it as Qwen Code's.
-#[tokio::test]
-async fn refuses_dsh_s_compaction_request() {
-    let (handle, events) = refusing_proxy(DSH_COMPACTION_OPENING).await;
-    let summarize = serde_json::json!({"messages": [
+/// A dsh request after a tool result whose last message is one text part,
+/// which pi-ai may mark for caching, saying `text`.
+fn dsh_turn(text: &str) -> serde_json::Value {
+    serde_json::json!({"messages": [
         {"role": "system", "content": "You are a coding agent."},
         {"role": "user", "content": "build the map"},
         {"role": "assistant", "content": null, "tool_calls": [
@@ -608,22 +606,46 @@ async fn refuses_dsh_s_compaction_request() {
         {"role": "tool", "tool_call_id": "c1", "content": "map.js"},
         {"role": "user", "content": [{
             "type": "text",
-            "text": format!("{DSH_COMPACTION_OPENING} Condense the conversation ABOVE …"),
+            "text": text,
             "cache_control": {"type": "ephemeral"}
         }]}
-    ]});
-    let refused = reqwest::Client::new()
-        .post(format!("{}/chat/completions", handle.base_url()))
-        .json(&summarize)
-        .send()
-        .await
-        .unwrap();
+    ]})
+}
+
+/// dsh sends its summarizing prompt as one text part after a tool result;
+/// the proxy refuses it as Qwen Code's, and a dsh turn that only quotes
+/// the prompt passes.
+#[tokio::test]
+async fn refuses_dsh_s_compaction_request() {
+    let (handle, events) = refusing_proxy(DSH_COMPACTION_OPENING).await;
+    let client = reqwest::Client::new();
+    let url = format!("{}/chat/completions", handle.base_url());
+    let summarize = dsh_turn(&format!(
+        "{DSH_COMPACTION_OPENING} Condense the conversation ABOVE …"
+    ));
+    let refused = client.post(&url).json(&summarize).send().await.unwrap();
     assert_eq!(refused.status(), 400);
+    let body: serde_json::Value = refused.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "proxy_error", "{body}");
+    let quoted = dsh_turn(&format!(
+        "Read crates/acp/src/dsh.rs; it holds \"{DSH_COMPACTION_OPENING}\""
+    ));
+    let passed = client.post(&url).json(&quoted).send().await.unwrap();
     assert_eq!(
-        settle(&events, 1).await,
-        [ProxyEvent::CompactionRefused {
+        passed.status(),
+        200,
+        "a turn that quotes the prompt is not a compaction"
+    );
+    let events = settle(&events, 2).await;
+    assert_eq!(
+        events[0],
+        ProxyEvent::CompactionRefused {
             request: FIRST_REQUEST
-        }]
+        }
+    );
+    assert!(
+        matches!(&events[1], ProxyEvent::Completed { status: 200, .. }),
+        "only the agent's turn reached the engine: {events:?}"
     );
     handle.stop().await;
 }
