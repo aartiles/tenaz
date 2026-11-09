@@ -27,6 +27,10 @@ uses [Semantic Versioning](https://semver.org/).
   that `HOME`. In the 0.6.0 raycaster run a browser installed into
   dsh's `HOME` failed the first task's first `verify`, and `npm install`
   ran from an empty cache (354 s).
+- The protocol no longer tells sessions to use `timeout 120 <command>`,
+  which macOS does not have: most sessions of a macOS run lost a turn to
+  "command not found". It now says to set the shell tool's own time limit,
+  and to time out a program a check starts in the check's own language.
 
 ## [0.6.0] - 2026-11-08
 

@@ -27,9 +27,13 @@ and you do not commit, push, open pull requests or switch branches.
   see, so a check must not need anything you put under your `$HOME`. When
   `verify` ends it kills every process it started, so a check that needs a
   server starts its own.
-- Give a command that may run long a time limit (`timeout 120 <command>`).
-  The orchestrator stops a tool call that runs over its limit (10 minutes by
-  default); a second one in the same session ends the session.
+- Give a command that may run long a time limit: set your shell tool's own
+  time limit when it has one. Do not use the `timeout` command; macOS does
+  not have it. A check that starts a program gives it a time limit in the
+  check's own language (for example Node's `spawnSync` or Python's
+  `subprocess.run`). The orchestrator stops a tool call that runs over its
+  limit (10 minutes by default); a second one in the same session ends the
+  session.
 - Check your work with `./verify` (or `./verify --task <ID>`) rather than
   improvised one-off commands. If you need a new kind of check, add it to
   `verify`.
