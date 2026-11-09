@@ -590,7 +590,9 @@ async fn refuses_the_harness_compaction_request() {
 }
 
 /// The opening of dsh 0.2.2-rc.1's summarizing prompt
-/// (`tenaz_acp::dsh::COMPACTION_PROMPT`).
+/// (`tenaz_acp::dsh::COMPACTION_PROMPT`; the proxy does not depend on
+/// tenaz-acp, so the CLI's `a_run_s_proxy_refuses_its_agent_s_summary_request`
+/// sends the real constant).
 const DSH_COMPACTION_OPENING: &str =
     "You are now acting as a compaction engine for this AI coding assistant.";
 

@@ -1238,8 +1238,10 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains("shell tool's own time limit") && !message.contains("timeout 60"),
-            "no GNU `timeout`, which macOS lacks: {message}"
+            message.contains("shell tool's own time limit")
+                && message.contains("Do not use the `timeout` command")
+                && !message.contains("timeout "),
+            "no GNU `timeout` example, which macOS lacks: {message}"
         );
         assert_eq!(
             w.tool_deadline(),

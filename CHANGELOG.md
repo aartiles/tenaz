@@ -38,8 +38,8 @@ uses [Semantic Versioning](https://semver.org/).
   about the first screen is checked before any user action. The
   protocol, which every role reads, now says so. A check that changes
   such a state first is MAJOR for the reviewer; when a card asks for
-  one, the builder follows the spec. In two runs a check of a game's first frame opened a
-  door first, and only the final review caught it.
+  one, the builder follows the spec. In two runs a check of a game's
+  first frame opened a door first, and only the final review caught it.
 
 ## [0.6.0] - 2026-11-08
 
