@@ -11,6 +11,13 @@ use tenaz_core::ports::{SessionModel, SessionSpec};
 use crate::agent::AgentProfile;
 use crate::write_json;
 
+/// The opening of dsh's request to summarize its conversation
+/// (`COMPACTION_INSTRUCTION` in `dsh-compaction-basic` 0.2.2-rc.1, sent as
+/// the last user message). The patch turns automatic compaction off; a
+/// request that still arrives is refused, as Qwen Code's is (ADR 0030).
+pub const COMPACTION_PROMPT: &str =
+    "You are now acting as a compaction engine for this AI coding assistant.";
+
 /// The provider name the patch gives the engine proxy inside dsh.
 const PROVIDER: &str = "tenaz";
 

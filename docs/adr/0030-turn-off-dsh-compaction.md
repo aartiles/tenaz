@@ -65,15 +65,24 @@ two files 21 times.
 
 ## Decision
 
-A: Tenaz's patch turns off dsh's automatic compaction.
+A, with C behind it: Tenaz's patch turns off dsh's automatic compaction,
+and the proxy refuses a summary request dsh still sends, as it does
+Qwen Code's. A refused request is counted as a compaction, not as a
+turn, so it no longer brings the session closer to its turn limit or to
+the idle rule.
 
 ## Consequences
 
 - dsh sessions end at Tenaz's context budget, steered by the context
   rules, with no summaries. The raycaster run spent about 51 minutes on
   them; some of that returns as context continuations instead.
+- A summary request that still reaches the proxy, because the setting
+  did not apply (a later dsh renamed the entry or its package), shows up
+  in the journal as "the harness began to compact its context" and ends
+  the session as one out of context.
 - A new dsh version must be checked for the `compaction-basic` id, its
-  package name, and that the entry still has no config of its own,
-  which the patch's config would replace.
+  package name, that the entry still has no config of its own, which
+  the patch's config would replace, and for the prompt's opening
+  (`COMPACTION_PROMPT` in `crates/acp/src/dsh.rs`).
 - The patch was checked with `dsh --profile acp --dump-config`; no real
   run has used it yet.

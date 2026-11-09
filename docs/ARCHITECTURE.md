@@ -12,7 +12,8 @@ crates/
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
                            engine error messages, tool-argument repair, the lowered
                            reasoning effort, replies at the output limit reported as cut, and
-                           a harness's own compaction request refused when set (Qwen Code, ADR 0022),
+                           a harness's own compaction request refused when set (Qwen Code and
+                           dsh, ADRs 0022, 0030),
                            earlier reasoning removed in steps over a budget (ADRs 0023, 0028), and
                            a note in place of a video file (ADR 0024).
   acp/       tenaz-acp       HarnessAdapter over ACP (fx, OpenCode, Qwen Code, dsh, any ACP agent), harness as a subprocess.

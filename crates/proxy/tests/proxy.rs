@@ -10,7 +10,7 @@ use axum::response::IntoResponse;
 use futures::StreamExt;
 use tenaz_core::lease::Gate;
 use tenaz_core::session::{ENGINE_UNREACHABLE, is_engine_unavailable};
-use tenaz_proxy::{Proxy, ProxyEvent, ProxyUsage};
+use tenaz_proxy::{Proxy, ProxyEvent, ProxyHandle, ProxyUsage};
 
 /// The id a fresh proxy gives its first request.
 const FIRST_REQUEST: u64 = 1;
@@ -532,11 +532,9 @@ fn chat(last: &serde_json::Value) -> serde_json::Value {
     ]})
 }
 
-/// Qwen Code's request to summarize its conversation is answered with an
-/// error and never reaches the engine; a turn that only quotes the prompt
-/// passes.
-#[tokio::test]
-async fn refuses_the_harness_compaction_request() {
+/// A proxy in front of a fake engine that refuses requests opening with
+/// `opening`, and the events it reports.
+async fn refusing_proxy(opening: &str) -> (ProxyHandle, Arc<Mutex<Vec<ProxyEvent>>>) {
     let upstream = fake_engine().await;
     let events: Arc<Mutex<Vec<ProxyEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
@@ -545,11 +543,20 @@ async fn refuses_the_harness_compaction_request() {
         Gate::new(),
         Arc::new(move |e| sink.lock().unwrap().push(e)),
     );
-    proxy.compaction_prompt_opening = Some(COMPACTION_OPENING.to_owned());
+    proxy.compaction_prompt_opening = Some(opening.to_owned());
     let handle = Arc::new(proxy)
         .start("127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
+    (handle, events)
+}
+
+/// Qwen Code's request to summarize its conversation is answered with an
+/// error and never reaches the engine; a turn that only quotes the prompt
+/// passes.
+#[tokio::test]
+async fn refuses_the_harness_compaction_request() {
+    let (handle, events) = refusing_proxy(COMPACTION_OPENING).await;
     let client = reqwest::Client::new();
     let url = format!("{}/chat/completions", handle.base_url());
     let summarize = chat(&serde_json::json!([
@@ -578,6 +585,45 @@ async fn refuses_the_harness_compaction_request() {
     assert!(
         matches!(&events[1], ProxyEvent::Completed { status: 200, .. }),
         "only the agent's turn reached the engine: {events:?}"
+    );
+    handle.stop().await;
+}
+
+/// The opening of dsh 0.2.2-rc.1's summarizing prompt
+/// (`tenaz_acp::dsh::COMPACTION_PROMPT`).
+const DSH_COMPACTION_OPENING: &str =
+    "You are now acting as a compaction engine for this AI coding assistant.";
+
+/// dsh sends its summarizing prompt as one text part after a tool result,
+/// which pi-ai may mark for caching; the proxy refuses it as Qwen Code's.
+#[tokio::test]
+async fn refuses_dsh_s_compaction_request() {
+    let (handle, events) = refusing_proxy(DSH_COMPACTION_OPENING).await;
+    let summarize = serde_json::json!({"messages": [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "build the map"},
+        {"role": "assistant", "content": null, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "content": "map.js"},
+        {"role": "user", "content": [{
+            "type": "text",
+            "text": format!("{DSH_COMPACTION_OPENING} Condense the conversation ABOVE …"),
+            "cache_control": {"type": "ephemeral"}
+        }]}
+    ]});
+    let refused = reqwest::Client::new()
+        .post(format!("{}/chat/completions", handle.base_url()))
+        .json(&summarize)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        settle(&events, 1).await,
+        [ProxyEvent::CompactionRefused {
+            request: FIRST_REQUEST
+        }]
     );
     handle.stop().await;
 }

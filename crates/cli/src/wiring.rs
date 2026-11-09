@@ -615,8 +615,8 @@ async fn start_proxy(
     proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
     proxy.effort = effort;
     proxy.past_reasoning_budget = ledger.params.past_reasoning_budget();
-    proxy.compaction_prompt_opening = (ledger.config.harness == HarnessKind::Qwen)
-        .then(|| tenaz_acp::qwen::COMPACTION_PROMPT.to_owned());
+    proxy.compaction_prompt_opening =
+        tenaz_acp::compaction_prompt(ledger.config.harness).map(str::to_owned);
     proxy.request_defaults =
         request_defaults(ledger.config.thinking.as_deref(), ledger.params.temperature);
     let handle = Arc::new(proxy)

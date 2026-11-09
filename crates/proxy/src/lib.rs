@@ -55,10 +55,10 @@ pub struct Proxy {
     /// reply that reaches it is reported with `finish_reason: length`.
     pub max_output_tokens: Option<u64>,
     /// The text that opens the harness's own request to summarize its
-    /// conversation, for a harness that cannot be told not to send one.
+    /// conversation, for a harness whose summary requests Tenaz refuses.
     /// Such a request is answered with an error and never reaches the
     /// engine: the runner ends the session there instead, and a fresh one
-    /// continues (ADR 0022).
+    /// continues (ADRs 0022, 0030).
     pub compaction_prompt_opening: Option<String>,
     /// The reasoning of earlier assistant messages kept, in tokens, before
     /// all but the newest one's is removed in one step: a harness that sends
@@ -212,8 +212,9 @@ fn is_completion(method: &axum::http::Method, path: &str) -> bool {
 }
 
 /// Is a chat request the harness's own request to summarize its
-/// conversation? Qwen Code 0.26.6 sends it as the last message, from the
-/// user, opening with `opening` (its system prompt is the agent's own).
+/// conversation? Qwen Code 0.26.6 and dsh 0.2.2-rc.1 send it as the last
+/// message, from the user, opening with `opening` (the system prompt is
+/// the agent's own).
 fn asks_to_compact(request: &serde_json::Value, opening: &str) -> bool {
     let Some(last) = request
         .get("messages")

@@ -21,6 +21,7 @@ use std::sync::Arc;
 use agent_client_protocol::schema::v1::{HttpHeader, McpServer, McpServerHttp};
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, DynConnectTo, LineDirection};
 use async_trait::async_trait;
+use tenaz_core::ledger::HarnessKind;
 use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionModel, SessionSpec};
 
 pub use session::{EngineObservation, ObservationFeed, stop_reason_for_finish};
@@ -212,6 +213,21 @@ impl Harness for ConfiguredHarness {
     }
 }
 
+/// The opening of the request in which `harness` asks the engine to
+/// summarize its conversation, for the agents whose request the engine
+/// proxy refuses (ADRs 0022 and 0030); `None` for the others.
+pub fn compaction_prompt(harness: HarnessKind) -> Option<&'static str> {
+    match harness {
+        HarnessKind::Qwen => Some(qwen::COMPACTION_PROMPT),
+        HarnessKind::Dsh => Some(dsh::COMPACTION_PROMPT),
+        HarnessKind::Fx
+        | HarnessKind::Pi
+        | HarnessKind::OpenCode
+        | HarnessKind::Acp
+        | HarnessKind::Fake => None,
+    }
+}
+
 /// The first line of `<binary> --version`, trimmed: how every agent Tenaz
 /// drives, Pi included, reports its version.
 pub fn agent_version(binary: &Path) -> io::Result<String> {
@@ -291,6 +307,19 @@ mod tests {
     #[test]
     fn an_agent_that_fails_has_no_version() {
         assert!(agent_version(Path::new("false")).is_err());
+    }
+
+    #[test]
+    fn the_proxy_refuses_only_the_summaries_of_qwen_code_and_dsh() {
+        assert_eq!(
+            compaction_prompt(HarnessKind::Dsh),
+            Some(dsh::COMPACTION_PROMPT)
+        );
+        assert_eq!(
+            compaction_prompt(HarnessKind::Qwen),
+            Some(qwen::COMPACTION_PROMPT)
+        );
+        assert_eq!(compaction_prompt(HarnessKind::Pi), None);
     }
 
     #[test]

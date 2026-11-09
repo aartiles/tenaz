@@ -14,6 +14,12 @@ uses [Semantic Versioning](https://semver.org/).
   includes reasoning the proxy does not send (ADR 0030). In a 7-hour
   raycaster run with 0.6.0, 18 summaries and the requests after them
   took about 51 minutes.
+- If dsh still asks to summarize its conversation (the setting above did
+  not apply), the engine proxy refuses the request, as it does Qwen
+  Code's, and the session ends there as one out of context instead of
+  the summary counting as a turn. In the 0.6.0 raycaster run seven
+  summaries counted toward one session's 40-turn limit, which stopped it
+  at "60/40" with 53 real turns and its checks passing.
 
 ## [0.6.0] - 2026-11-08
 
