@@ -97,13 +97,22 @@ pub(crate) async fn reap(spawned: &mut Spawned) {
         (swept, table.out_of_time())
     })
     .await;
-    match swept {
-        Ok((swept, _)) if !swept.is_empty() => tracing::warn!(
+    let (swept, late) = match swept {
+        Ok(found) => found,
+        Err(error) => {
+            tracing::warn!(%error, "the search for what a command left running failed");
+            return;
+        }
+    };
+    if !swept.is_empty() {
+        tracing::warn!(
             pids = ?swept,
             "stopped processes a command left running outside its process group"
-        ),
-        Ok((_, true)) => tracing::warn!("gave up looking for what a command left running"),
-        _ => {}
+        );
+    }
+    // Also when it stopped some: it may have missed others.
+    if late {
+        tracing::warn!("gave up looking for what a command left running");
     }
 }
 
