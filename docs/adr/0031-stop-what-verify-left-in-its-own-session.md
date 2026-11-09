@@ -103,5 +103,5 @@ dependency.
   not start it, and its leftovers are older than any later window.
 - `crates/adapters/src/verify.rs` has a test with a real detached
   process in the project and one outside it, and `job.rs` one in the
-  project; run on macOS, not yet on Linux. No real run has used this
-  yet.
+  project; they pass on macOS and in CI on Ubuntu (`ubuntu-latest`).
+  No real run has used this yet.

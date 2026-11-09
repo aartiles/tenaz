@@ -140,10 +140,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   names the pids stopped, not the journal. `./verify` the agent runs in its own shell is not
   covered. Busybox `ps` (Alpine) does not take the columns Tenaz asks
   for; there nothing is stopped. Tested with a detached `sleep`
-  (through `perl`'s `setsid`) on macOS; not yet run on Linux, nor seen
-  in a real run, nor
-  with `npx vite preview`, nor on a Linux desktop with a `systemd
-  --user` subreaper.
+  (through `perl`'s `setsid`) on macOS and in CI on Ubuntu; not yet seen
+  in a real run, nor with `npx vite preview`, nor on a Linux desktop
+  with a `systemd --user` subreaper.
 
 - **Shell reads count for the idle rule from text alone** (ADR 0029). The
   words of a command that look like paths are taken without a shell
