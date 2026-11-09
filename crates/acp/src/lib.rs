@@ -5,6 +5,7 @@
 //! turn.
 
 pub mod agent;
+pub mod caches;
 pub mod dsh;
 pub mod fx;
 pub mod generic;

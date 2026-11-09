@@ -445,9 +445,11 @@ under `.tenaz/private/dsh-home`, and Tenaz writes a patch there for each
 session's model that points dsh's `acp` profile at the engine proxy
 instead of DeepSeek's own service and turns off dsh's own automatic
 compaction, so Tenaz's context budget ends a session; a summary request
-dsh still sends is refused and ends the session (ADR 0030). dsh does not
-ask before its tool calls, and the media tools and pinned skills are
-not offered to it yet.
+dsh still sends is refused and ends the session (ADR 0030). dsh gets
+the user's Playwright and npm caches (`PLAYWRIGHT_BROWSERS_PATH`,
+`npm_config_cache`), since `verify` runs with the user's own `HOME`.
+dsh does not ask before its tool calls, and the media tools and pinned
+skills are not offered to it yet.
 The thinking level maps to its reasoning effort (`high` is its `xhigh`).
 It has finished two runs with Qwen3.8-Flash-Next on Sushi, the longer
 one a 19-hour game brief; pass `--vision` for it to read images. See

@@ -151,14 +151,22 @@ above), so a 32k context is the practical floor (`contextFloor`).
   patch now turns that compaction off and the proxy refuses a summary
   request that still comes (ADR 0030); the patch was checked with
   `dsh --profile acp --dump-config`, the refusal only against dsh's
-  source, and no run has used either yet. What the probe showed: dsh
-  did not send permission requests, so its tools run without the
-  runner's approval and the watchdog sees a call only once it runs; its
-  `usage_update` has no cache counts; it sends its answer after the
+  source, and no run has used either yet. dsh now gets the user's
+  Playwright and npm caches: in a 0.6.0 raycaster run it installed a
+  browser under its own `HOME`, where `verify` did not find it. A
+  sandboxed run writes them only while `~/Library/Caches` (or
+  `~/.cache`) and `~/.npm` stay in `sandboxAllowWrite`, or the user's
+  own paths are added there. A `cache` set in `~/.npmrc` is not read:
+  dsh gets `~/.npm` while `verify` uses that cache. The other agents
+  with a `HOME` of their own (fx, OpenCode, Qwen Code) do not get these
+  caches yet (OpenCode gets npm's). No run has used this yet. What the
+  probe showed: dsh did not send permission requests, so its tools run
+  without the runner's approval and the watchdog sees a call only once
+  it runs; its `usage_update` has no cache counts; it sends its answer after the
   model request ends (kept since the late-text fix, which logged 51
   `late_text` events in the raycaster run); web search needs a DeepSeek
-  key; its system prompt is about 5,700 tokens. The media MCP
-  server and the pinned skills are not given to it, and whether a fresh
+  key; its system prompt is about 5,700 tokens. The media MCP server
+  and the pinned skills are not given to it, and whether a fresh
   `DSH_HOME` needs the network on first start is not checked. The wizard
   and `tenaz doctor` do not detect it: a `dsh` on PATH may be the
   distributed shell.

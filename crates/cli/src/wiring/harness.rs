@@ -253,6 +253,7 @@ fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     }
     let mut launch = DshLaunch::new(&inputs.options.bin, &home);
     launch.wrapper = inputs.wrapper.to_vec();
+    launch.caches = user_caches();
     inputs.acp_agent(Arc::new(DshAgent { launch, patch }), None, None)
 }
 
@@ -273,6 +274,18 @@ fn generic_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
         wrapper: inputs.wrapper.to_vec(),
     };
     inputs.acp_agent(Arc::new(agent), None, None)
+}
+
+/// The user's browser and package caches, for an agent with an isolated
+/// `HOME` (see [`tenaz_acp::caches::user_caches`]).
+fn user_caches() -> Vec<(String, String)> {
+    std::env::home_dir().map_or_else(Vec::new, |home| {
+        tenaz_acp::caches::user_caches(
+            &home,
+            |name| std::env::var(name).ok(),
+            cfg!(target_os = "macos"),
+        )
+    })
 }
 
 /// The provider name the harness's configuration uses.

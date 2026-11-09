@@ -133,6 +133,10 @@ pub struct DshLaunch {
     /// A program and leading arguments dsh is started through: the sandbox
     /// launcher, when the run is sandboxed.
     pub wrapper: Vec<String>,
+    /// The user's browser and package caches (see
+    /// [`crate::caches::user_caches`]), so that what the agent installs
+    /// is found by `verify`, which runs with the user's own `HOME`.
+    pub caches: Vec<(String, String)>,
 }
 
 impl DshLaunch {
@@ -141,6 +145,7 @@ impl DshLaunch {
             binary: binary.into(),
             home: home.into(),
             wrapper: Vec::new(),
+            caches: Vec::new(),
         }
     }
 
@@ -165,12 +170,14 @@ impl DshLaunch {
     }
 
     /// `HOME` and `DSH_HOME` inside `home`, so the user's own profiles and
-    /// sessions stay out.
+    /// sessions stay out, then the user's caches.
     pub fn env(&self) -> Vec<(String, String)> {
-        vec![
+        let mut env = vec![
             ("HOME".to_owned(), self.home.display().to_string()),
             ("DSH_HOME".to_owned(), self.dsh_home().display().to_string()),
-        ]
+        ];
+        env.extend(self.caches.iter().cloned());
+        env
     }
 }
 
@@ -351,6 +358,14 @@ mod tests {
                 ("DSH_HOME".to_owned(), "/run/home/.dsh".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn dsh_s_environment_carries_the_user_s_caches() {
+        let mut launch = DshLaunch::new("/opt/dsh", "/run/home");
+        let cache = ("npm_config_cache".to_owned(), "/Users/me/.npm".to_owned());
+        launch.caches = vec![cache.clone()];
+        assert!(launch.env().contains(&cache), "{:?}", launch.env());
     }
 
     #[test]

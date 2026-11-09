@@ -20,6 +20,13 @@ uses [Semantic Versioning](https://semver.org/).
   the summary counting as a turn. In the 0.6.0 raycaster run seven
   summaries counted toward one session's 40-turn limit, which stopped it
   at "60/40" with 53 real turns and its checks passing.
+- `--harness dsh` gives dsh the user's Playwright and npm caches
+  (`PLAYWRIGHT_BROWSERS_PATH`, `npm_config_cache`), so browsers and
+  packages it installs are where `verify`, which runs with the user's
+  own `HOME`, finds them. The protocol now says that `verify` runs with
+  that `HOME`. In the 0.6.0 raycaster run a browser installed into
+  dsh's `HOME` failed the first task's first `verify`, and `npm install`
+  ran from an empty cache (354 s).
 
 ## [0.6.0] - 2026-11-08
 
