@@ -31,6 +31,9 @@ uses [Semantic Versioning](https://semver.org/).
   which macOS does not have: most sessions of a macOS run lost a turn to
   "command not found". It now says to set the shell tool's own time limit,
   and to time out a program a check starts in the check's own language.
+- The orchestrator's message after it stops a long tool call no longer
+  suggests `timeout 60 <command>`; it says to run the call again with
+  the shell tool's own time limit.
 
 - A check tests its requirement in the state the spec describes: one
   about the first screen is checked before any user action. The prompts
