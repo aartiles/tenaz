@@ -6,6 +6,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `--harness dsh` turns off dsh's own automatic compaction, so a session
+  ends at Tenaz's context budget instead of summarizing its history once
+  dsh's count reaches about 49k tokens of a 131k window. That count
+  includes reasoning the proxy does not send (ADR 0030). In a 7-hour
+  raycaster run with 0.6.0, 18 summaries and the requests after them
+  took about 51 minutes.
+
 ## [0.6.0] - 2026-11-08
 
 ### Added

@@ -146,17 +146,20 @@ above), so a 32k context is the practical floor (`contextFloor`).
   evidence that dsh works through a long run, not a clean measurement.
   It showed: dsh reads images with `read_image` only when the run has
   `--vision` (without it, it refused all 16 reads); dsh summarizes its
-  own context in a separate request (71 times), Tenaz does not refuse
-  that as it does Qwen Code's, and the request after a summary lost
-  most of its cached prefix in 61 of 70 cases. What the probe showed: dsh did not send permission requests,
-  so its tools run without the runner's approval and the watchdog sees a
-  call only once it runs; its `usage_update` has no cache counts; it
-  sends its answer after the model request ends (kept since the
-  late-text fix, which logged 51 `late_text` events in the raycaster run); web search needs a DeepSeek key; its system prompt is
-  about 5,700 tokens. The media MCP server and the pinned skills are not
-  given to it, and whether a fresh `DSH_HOME` needs the network on first
-  start is not checked. The wizard and `tenaz doctor` do not detect it:
-  a `dsh` on PATH may be the distributed shell.
+  own context in a separate request (71 times), and the request after a
+  summary lost most of its cached prefix in 61 of 70 cases. Tenaz's
+  patch now turns that compaction off (ADR 0030), checked with
+  `dsh --profile acp --dump-config`; no run has used it yet. What the
+  probe showed: dsh did not send permission requests, so its tools run
+  without the runner's approval and the watchdog sees a call only once
+  it runs; its `usage_update` has no cache counts; it sends its answer
+  after the model request ends (kept since the late-text fix, which
+  logged 51 `late_text` events in the raycaster run); web search needs
+  a DeepSeek key; its system prompt is about 5,700 tokens. The media MCP
+  server and the pinned skills are not given to it, and whether a fresh
+  `DSH_HOME` needs the network on first start is not checked. The wizard
+  and `tenaz doctor` do not detect it: a `dsh` on PATH may be the
+  distributed shell.
 
 - **A refused request continues in a fresh session.** A 400, 413, 415
   or 422 from the engine, other than an image, a prompt too long or the

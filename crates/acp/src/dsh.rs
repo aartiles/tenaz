@@ -16,8 +16,9 @@ const PROVIDER: &str = "tenaz";
 
 /// What Tenaz overrides in dsh's `acp` profile, which by default uses the
 /// `deepseek-official` provider: the default model and the ACP app's model
-/// (both on the proxy), and an OpenAI-compatible provider at the proxy with
-/// the session's model.
+/// (both on the proxy), an OpenAI-compatible provider at the proxy with
+/// the session's model, and no automatic compaction, so that Tenaz's
+/// context budget decides when a session ends (ADR 0030).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DshPatch {
     /// The proxy's base URL (`http://127.0.0.1:<port>/v1`).
@@ -92,6 +93,12 @@ impl DshPatch {
                 "id": "llm-pi-ai",
                 "name": "@deepseek-ai/dsh-llm-pi-ai",
                 "config": { "providers": { PROVIDER: provider } }
+            },
+            {
+                // dsh-base gives this entry no config, so none is lost.
+                "id": "compaction-basic",
+                "name": "@deepseek-ai/dsh-compaction-basic",
+                "config": { "auto": false }
             }
         ])
     }
@@ -229,7 +236,7 @@ mod tests {
             .unwrap()
             .iter()
             .find(|e| e["id"] == id)
-            .unwrap()
+            .unwrap_or_else(|| panic!("no patch entry with id {id}"))
     }
 
     #[test]
@@ -267,6 +274,14 @@ mod tests {
         assert_eq!(model["contextWindow"], 131_072);
         assert_eq!(model["maxTokens"], 16_384);
         assert_eq!(model["input"], serde_json::json!(["text"]));
+    }
+
+    #[test]
+    fn the_patch_turns_off_dsh_s_automatic_compaction() {
+        let json = patch().to_json();
+        let compaction = entry(&json, "compaction-basic");
+        assert_eq!(compaction["name"], "@deepseek-ai/dsh-compaction-basic");
+        assert_eq!(compaction["config"], serde_json::json!({ "auto": false }));
     }
 
     #[test]
