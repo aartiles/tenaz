@@ -37,6 +37,10 @@ and you do not commit, push, open pull requests or switch branches.
 - Check your work with `./verify` (or `./verify --task <ID>`) rather than
   improvised one-off commands. If you need a new kind of check, add it to
   `verify`.
+- A check tests its requirement in the state the spec describes. One about
+  the first screen or state the program shows is checked there, before any
+  key press, click or other user action. A check must not change that state
+  first (for example, open a door before it checks the first frame).
 - If a command gives the same result twice, do not run it again unchanged.
   Change something, read the relevant code, or move on.
 - Keep tool output small: use `head`, `tail`, `grep`, and read file ranges.

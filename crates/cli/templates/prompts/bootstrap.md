@@ -57,9 +57,6 @@ Task sizing:
   it runs. Reach a minimal end-to-end version early, then extend it task
   by task.
 - Each acceptance names the check IDs the task will add (`T007.<name>`).
-- A check tests its requirement in the state the spec describes. One
-  about the first screen or state the program shows is checked there,
-  before any key press, click or other user action.
 - `depends` lists only real prerequisites.
 - Every requirement except `manual` ones appears in some task's `requires`.
 - Plan between 6 and 40 tasks. Number them in the order you expect them to

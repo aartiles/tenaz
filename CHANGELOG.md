@@ -36,11 +36,11 @@ uses [Semantic Versioning](https://semver.org/).
   the shell tool's own time limit.
 
 - A check tests its requirement in the state the spec describes: one
-  about the first screen is checked before any user action. The prompts
-  of the builder, the task reviewer and the planners now say so. A check
-  that changes such a state first is MAJOR for the reviewer; when a card
-  asks for one, the builder follows the spec. In two runs a check of a game's
-  first frame opened a door first, and only the final review caught it.
+  about the first screen is checked before any user action. The
+  protocol, which every role reads, now says so. A check that changes
+  such a state first is MAJOR for the reviewer; when a card asks for
+  one, the builder follows the spec. In two runs a check of a game's first frame opened a
+  door first, and only the final review caught it.
 
 ## [0.6.0] - 2026-11-08
 

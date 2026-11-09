@@ -26,9 +26,6 @@ does not, route around the blocked card another way, or leave it blocked
 and say why in your notes.
 
 A card you add or rewrite must fit the builder context budget below.
-Each card's checks test its requirements in the state the spec describes.
-One about the first screen or state the program shows is checked there,
-before any key press, click or other user action.
 
 Every requirement except `manual` ones must stay covered by a card that is
 not dropped. Do not edit `done` cards, source code, or `verify`. Write
