@@ -109,6 +109,11 @@ above), so a 32k context is the practical floor (`contextFloor`).
   in `models.json` instead.
 - fx's `settings.json` is written again before each session, for that
   session's model.
+- `verify` and heavy jobs run in a process group of their own, killed
+  when they end. Afterwards Tenaz reads `ps` (up to three times) and
+  stops what they left in a session of their own, using `lsof` (macOS)
+  or `/proc` (Linux) for the working directories, for at most 10
+  seconds (ADR 0031).
 - Skills: by default Pi sees only the skills pinned with `init --skill`,
   and none without them: it gets `--no-skills` plus each pinned skill.
   fx's skill catalog gets a 0-byte budget, so its prompt lists no skills,
@@ -118,6 +123,26 @@ above), so a 32k context is the practical floor (`contextFloor`).
   it finds by itself.
 
 ## Known gaps
+
+- **What verify leaves in a session of its own is found by its age,
+  group, parent and directory** (ADR 0031). A process `verify` or a
+  heavy job started is stopped afterwards only if it was born while the
+  command ran, leads a process group of its own, pid 1 or a `systemd`
+  above Tenaz adopted it (or its parent is still in the command's
+  group), it has no terminal, it runs as Tenaz's user, it is not `git`,
+  and its working directory is inside the project, at any depth. Missed: one that changed directory to outside
+  the project; on Linux one adopted by a subreaper with another name;
+  everything when Tenaz runs as pid 1 (a container). Stopped with
+  everything under it, though Tenaz did not start it: a daemon (`code
+  .`, a new tmux server, `nohup setsid ...`) that the user or the agent
+  driving Tenaz starts from inside the project, a nested worktree
+  included, while a `verify` or a heavy job runs. Only Tenaz's stderr
+  names the pids stopped, not the journal. `./verify` the agent runs in its own shell is not
+  covered. Busybox `ps` (Alpine) does not take the columns Tenaz asks
+  for; there nothing is stopped. Tested with a detached `sleep`
+  (through `perl`'s `setsid`) on macOS and in CI on Ubuntu; not yet seen
+  in a real run, nor with `npx vite preview`, nor on a Linux desktop
+  with a `systemd --user` subreaper.
 
 - **Shell reads count for the idle rule from text alone** (ADR 0029). The
   words of a command that look like paths are taken without a shell

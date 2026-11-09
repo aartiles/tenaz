@@ -36,6 +36,7 @@ Pure modules, each unit-tested without I/O:
 | `conflict` | A builder's declared conflict with checks of done tasks, and which checks a card's `amends` may name (ADR 0009, 0018). |
 | `job` | A heavy job a builder declares, and the report of how it ran (ADR 0010). |
 | `verify` | The `verify` contract: last-line JSON, exit code, clipping; whether a builder attempt passed. |
+| `leftover` | Which processes `verify` or a heavy job left running in a session of their own, from `ps` and `lsof` output, and the sweep that stops them (ADR 0031). |
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time, provider-error and outside-write rules; emits steer, abort or interrupt (stop the turn, prompt again). |
 | `novelty` | Whether a tool call reads something new for the idle rule: a read tool's new arguments, or a path a shell command or another tool's `path` names for the first time (ADR 0029). |
 | `mesh` | The `generate_3d` tool's paths, which must stay inside the project, what counts as a GLB, and 3D model names (ADR 0020). |
@@ -54,7 +55,10 @@ Pure modules, each unit-tested without I/O:
 
 `ports` declares the traits the orchestration needs: `Harness` and
 `Session`, `Vcs`, `VerifyRunner`, `JobRunner`, `Clock`, `Notifier`,
-`MemoryProbe`, `EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`. `lease::Gate` is
+`MemoryProbe`, `EngineAdapter`, `MediaAdapter`, `EngineMetricsSource`,
+and `ProcessTable`, which the orchestration does not use: the adapters'
+`process` module reads the machine's processes through it, so that
+`leftover`'s sweep is tested on a fake. `lease::Gate` is
 what the proxy awaits while the LLM is away. `testing` (feature `testing`)
 holds the scripted harness, which plays the happy path of a small goal
 with each recovery opt-in (`every_recovery` is what `tenaz demo` plays),
@@ -62,7 +66,8 @@ with each recovery opt-in (`every_recovery` is what `tenaz demo` plays),
 which answers for the memory probe and the engine counters with readings
 a test gives it, `ScriptedVerify`, which judges the scripted harness's
 checks without a shell, `ScriptedJobs`, which runs heavy jobs without a
-shell (ADR 0010), and `SnapshotVcs`, a repository kept as snapshots
+shell (ADR 0010), `ScriptedProcesses`, a process table read from
+listings a test gives it (ADR 0031), and `SnapshotVcs`, a repository kept as snapshots
 in memory; `vcs_contract_tests!` holds it and
 `GitRepo` to the same checks (ADR 0005). They serve the core's own tests
 and the crates above it. `tenaz-adapters` has a `testing` feature too:
@@ -70,7 +75,7 @@ and the crates above it. `tenaz-adapters` has a `testing` feature too:
 `gone_within`, which checks that a process is gone, zombies included.
 `tenaz-acp`'s tests use it too. `tenaz-adapters`' private `process`
 module starts and stops the process groups that `verify` and heavy jobs
-run in.
+run in, and what they left in a session of their own (ADR 0031).
 `orchestrator` is the application service: phases (bootstrap in three
 steps, see ADR 0003; loop; final),
 the session wrapper with engine retries, capacity caps and continuations

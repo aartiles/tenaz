@@ -51,6 +51,51 @@ pub fn gone_within(pid: u32, limit: std::time::Duration) -> bool {
     }
 }
 
+/// Shell lines that start `sleep 30` in a session of its own, as Node's
+/// `spawn(..., { detached: true })` does, and wait until it has written
+/// its pid to `pidfile`, which it does once it has left the caller's
+/// process group. They exit 1 after about 5 s if it never does. A test
+/// that leaves one behind runs in a temporary directory of its own: the
+/// tests of one binary share Tenaz's pid, and only the project's
+/// directory keeps one test's sweep from stopping another's.
+pub fn detached_sleep(pidfile: &Path) -> String {
+    let pidfile = pidfile.display();
+    format!(
+        "perl -MPOSIX -e 'POSIX::setsid() or die; open my $f, \">\", shift or die; print $f $$; close $f; exec @ARGV' '{pidfile}' sleep 30 </dev/null >/dev/null 2>&1 &\n\
+         tries=0; while [ ! -s '{pidfile}' ]; do tries=$((tries+1)); [ $tries -gt 100 ] && {{ echo 'the sleep did not detach' >&2; exit 1; }}; sleep 0.05; done\n"
+    )
+}
+
+/// The pid in `pidfile`, killed when dropped, so a failed test leaves
+/// nothing running; `None` when there is no pid to read.
+#[derive(Debug)]
+pub struct KillOnDrop(Option<u32>);
+
+impl KillOnDrop {
+    pub fn read(pidfile: &Path) -> Self {
+        let pid = std::fs::read_to_string(pidfile)
+            .ok()
+            .and_then(|t| t.trim().parse().ok());
+        Self(pid)
+    }
+
+    /// The pid; a test that needs one fails here without it.
+    pub fn pid(&self) -> u32 {
+        self.0.expect("a pid was written")
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
