@@ -48,6 +48,13 @@ pub struct Started<'a> {
 /// may have started another just before.
 const ROUNDS: usize = 3;
 
+/// The one process name never stopped: `git gc --auto` detaches as a
+/// daemon does, and one killed mid-write leaves its locks behind.
+const NEVER_STOPPED: &str = "git";
+
+/// The subreaper that adopts orphans on Linux: `systemd --user`.
+const SUBREAPER: &str = "systemd";
+
 /// Stops what the command in `started` left behind, as long as rounds find
 /// more; the pids it stopped. `ran` says how long ago the command started.
 pub fn sweep(
@@ -57,28 +64,7 @@ pub fn sweep(
 ) -> Vec<u32> {
     let mut stopped = BTreeSet::new();
     for _ in 0..ROUNDS {
-        let rows = table.list();
-        let uid = rows.iter().find(|r| r.pid == started.own).map(|r| r.uid);
-        let found: Vec<u32> = candidates(&rows, started, ran())
-            .into_iter()
-            .filter(|pid| !stopped.contains(pid))
-            .collect();
-        let roots: Vec<u32> = table
-            .cwds(&found)
-            .into_iter()
-            .filter(|(_, cwd)| cwd.starts_with(started.root))
-            .map(|(pid, _)| pid)
-            .collect();
-        // Another user's process under one cannot be killed: not stopped.
-        let mine: Vec<ProcessRow> = rows
-            .iter()
-            .filter(|r| Some(r.uid) == uid)
-            .cloned()
-            .collect();
-        let tree: Vec<u32> = with_descendants(&mine, &roots)
-            .into_iter()
-            .filter(|pid| !stopped.contains(pid))
-            .collect();
+        let tree = round(table, started, ran(), &stopped);
         if tree.is_empty() || !table.kill(&tree) {
             break;
         }
@@ -87,23 +73,49 @@ pub fn sweep(
     stopped.into_iter().collect()
 }
 
+/// What one reading of the table finds left behind and not yet in
+/// `stopped`: each process whose directory is in the project, with
+/// Tenaz's user's processes under it (another user's cannot be killed).
+fn round(
+    table: &dyn ProcessTable,
+    started: &Started<'_>,
+    ran: Duration,
+    stopped: &BTreeSet<u32>,
+) -> Vec<u32> {
+    let rows = table.list();
+    let Some(own) = rows.iter().find(|r| r.pid == started.own) else {
+        return Vec::new();
+    };
+    let found: Vec<u32> = candidates(&rows, own, started.group, ran)
+        .into_iter()
+        .filter(|pid| !stopped.contains(pid))
+        .collect();
+    let roots: Vec<u32> = table
+        .cwds(&found)
+        .into_iter()
+        .filter(|(_, cwd)| cwd.starts_with(started.root))
+        .map(|(pid, _)| pid)
+        .collect();
+    with_descendants(&rows, &roots, |r| r.uid == own.uid)
+        .into_iter()
+        .filter(|pid| !stopped.contains(pid))
+        .collect()
+}
+
 /// The processes that may have been left behind, before their working
 /// directory is known: born within `ran` (rounded up to whole seconds,
 /// as `ps` rounds ages down), detached (see [`detached`]), run by
 /// Tenaz's user, and with a parent that adopts orphans or is in the
-/// command's group. Empty when Tenaz is not in `rows`.
-fn candidates(rows: &[ProcessRow], started: &Started<'_>, ran: Duration) -> Vec<u32> {
+/// command's `group`. `own` is Tenaz's row.
+fn candidates(rows: &[ProcessRow], own: &ProcessRow, group: u32, ran: Duration) -> Vec<u32> {
     let by_pid: HashMap<u32, &ProcessRow> = rows.iter().map(|r| (r.pid, r)).collect();
-    let Some(own) = by_pid.get(&started.own) else {
-        return Vec::new();
-    };
     let adopters = adopters(&by_pid, own);
     let window = Duration::from_secs(ran.as_secs() + u64::from(ran.subsec_nanos() > 0));
-    let in_group = |pid: u32| by_pid.get(&pid).is_some_and(|p| p.pgid == started.group);
+    let in_group = |pid: u32| by_pid.get(&pid).is_some_and(|p| p.pgid == group);
     rows.iter()
         .filter(|r| {
             r.age <= window
-                && r.pid != started.own
+                && r.pid != own.pid
                 && detached(r)
                 && r.uid == own.uid
                 && (adopters.contains(&r.ppid) || in_group(r.ppid))
@@ -113,20 +125,20 @@ fn candidates(rows: &[ProcessRow], started: &Started<'_>, ran: Duration) -> Vec<
 }
 
 /// It leads a process group of its own and has no terminal, as a daemon
-/// does, and is not `git` (`git gc --auto` detaches too).
+/// does, and is not [`NEVER_STOPPED`].
 fn detached(row: &ProcessRow) -> bool {
-    row.pgid == row.pid && !row.terminal && row.name != "git"
+    row.pgid == row.pid && !row.terminal && row.name != NEVER_STOPPED
 }
 
 /// Where an orphan of Tenaz's commands goes: pid 1, which the table may
-/// not list, and a `systemd` above Tenaz (`systemd --user`, a subreaper).
+/// not list, and a [`SUBREAPER`] above Tenaz.
 /// Never Tenaz itself, which may be pid 1 in a container.
 fn adopters(by_pid: &HashMap<u32, &ProcessRow>, own: &ProcessRow) -> BTreeSet<u32> {
     let mut found = BTreeSet::from([1]);
     let mut seen = BTreeSet::new();
     let mut next = by_pid.get(&own.ppid);
     while let Some(row) = next.filter(|r| r.pid > 1 && seen.insert(r.pid)) {
-        if row.name == "systemd" {
+        if row.name == SUBREAPER {
             found.insert(row.pid);
         }
         next = by_pid.get(&row.ppid);
@@ -135,10 +147,14 @@ fn adopters(by_pid: &HashMap<u32, &ProcessRow>, own: &ProcessRow) -> BTreeSet<u3
     found
 }
 
-/// `roots` and every process under them in `rows`.
-fn with_descendants(rows: &[ProcessRow], roots: &[u32]) -> Vec<u32> {
+/// `roots` and every process under them in `rows` that `keep` accepts.
+fn with_descendants(
+    rows: &[ProcessRow],
+    roots: &[u32],
+    keep: impl Fn(&ProcessRow) -> bool,
+) -> Vec<u32> {
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    for row in rows {
+    for row in rows.iter().filter(|r| keep(r)) {
         children.entry(row.ppid).or_default().push(row.pid);
     }
     let mut found: BTreeSet<u32> = BTreeSet::new();
@@ -268,8 +284,13 @@ mod tests {
         }
     }
 
+    /// The candidates in `rows`, which list Tenaz.
     fn candidates_in(rows: &[ProcessRow], ran: Duration) -> Vec<u32> {
-        candidates(rows, &started(Path::new("/p")), ran)
+        let own = rows
+            .iter()
+            .find(|r| r.pid == TENAZ)
+            .expect("Tenaz is listed");
+        candidates(rows, own, GROUP, ran)
     }
 
     fn with(extra: Vec<ProcessRow>) -> Vec<ProcessRow> {
@@ -387,15 +408,7 @@ mod tests {
             },
             row(800, 1, 800, 1),
         ];
-        let found = candidates(
-            &rows,
-            &Started {
-                own: 1,
-                ..started(Path::new("/p"))
-            },
-            RAN,
-        );
-        assert!(found.is_empty());
+        assert!(candidates(&rows, &rows[0], GROUP, RAN).is_empty());
     }
 
     /// `ps` rounds ages down: after 4.0 s an age of 4 counts and 5 does
@@ -409,10 +422,13 @@ mod tests {
         }
     }
 
+    /// Without Tenaz's row its user and adopters are unknown: nothing
+    /// is stopped.
     #[test]
     fn nothing_without_tenaz_in_the_table() {
-        let rows = vec![row(800, 1, 800, 1)];
-        assert!(candidates_in(&rows, RAN).is_empty());
+        let table = ScriptedProcesses::new(vec![vec![row(800, 1, 800, 1)]]).cwd(800, "/p");
+        assert!(sweep_p(&table).is_empty());
+        assert!(table.killed().is_empty());
     }
 
     #[test]
@@ -423,7 +439,10 @@ mod tests {
             row(802, 801, 800, 1),
             row(900, 1, 900, 1),
         ];
-        assert_eq!(with_descendants(&rows, &[800, 801]), vec![800, 801, 802]);
+        assert_eq!(
+            with_descendants(&rows, &[800, 801], |_| true),
+            vec![800, 801, 802]
+        );
     }
 
     /// `npx vite preview` started detached, in the project, and `node`

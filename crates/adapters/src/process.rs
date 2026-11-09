@@ -35,21 +35,37 @@ pub(crate) fn command(
     command
 }
 
-/// A command Tenaz started, with its process group and when it started.
+/// A command Tenaz started from `root`, with its process group and when
+/// it started.
 pub(crate) struct Spawned {
-    pub(crate) child: tokio::process::Child,
+    child: tokio::process::Child,
     group: Option<u32>,
+    root: PathBuf,
     at: Instant,
 }
 
-/// Starts `command`, noting the time first: what it leaves behind is
-/// born after that (ADR 0031).
+impl Spawned {
+    pub(crate) fn child(&mut self) -> &mut tokio::process::Child {
+        &mut self.child
+    }
+}
+
+/// Starts `command`, made by [`command`], noting the time first: what it
+/// leaves behind is born after that (ADR 0031). Its root is the command's
+/// working directory; a command without one is refused, as the search
+/// for what it left would have no project to keep to.
 pub(crate) fn spawn(command: &mut tokio::process::Command) -> std::io::Result<Spawned> {
+    let root = command
+        .as_std()
+        .get_current_dir()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| std::io::Error::other("no working directory to run from"))?;
     let at = Instant::now();
     let child = command.spawn()?;
     Ok(Spawned {
         group: child.id(),
         child,
+        root,
         at,
     })
 }
@@ -60,13 +76,13 @@ const SWEEP_LIMIT: Duration = Duration::from_secs(10);
 
 /// Kills the command if it still runs, and whatever it left running in
 /// its process group: a server a check started, a render a job left
-/// behind. Then stops what it started from `root` in a session of its own
+/// behind. Then stops what it left from its root in a session of its own
 /// (ADR 0031), giving up after [`SWEEP_LIMIT`].
-pub(crate) async fn reap(spawned: &mut Spawned, root: &Path) {
+pub(crate) async fn reap(spawned: &mut Spawned) {
     let _ = spawned.child.kill().await;
     let Some(group) = spawned.group else { return };
     kill_group(group).await;
-    let (root, at) = (root.to_path_buf(), spawned.at);
+    let (root, at) = (spawned.root.clone(), spawned.at);
     let table = SystemProcesses {
         until: Instant::now() + SWEEP_LIMIT,
     };
@@ -202,6 +218,18 @@ async fn kill_group(group: u32) {
 mod tests {
     use super::*;
     use crate::testing::gone_within;
+
+    /// Without a working directory there is no project to keep the
+    /// search for leftovers to: the command does not start.
+    #[test]
+    fn a_command_without_a_working_directory_is_refused() {
+        let mut bare = tokio::process::Command::new("true");
+        let refused = spawn(&mut bare).err().expect("refused");
+        assert!(
+            refused.to_string().contains("working directory"),
+            "{refused}"
+        );
+    }
 
     /// A program still running at the deadline is killed and read as
     /// nothing, so a hung `lsof` cannot hold the run.

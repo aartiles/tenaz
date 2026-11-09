@@ -82,8 +82,8 @@ impl VerifyRunner for VerifyProcess {
                 };
             }
         };
-        let mut stdout = spawned.child.stdout.take();
-        let mut stderr = spawned.child.stderr.take();
+        let mut stdout = spawned.child().stdout.take();
+        let mut stderr = spawned.child().stderr.take();
         let out = tokio::spawn(async move {
             let mut buffer = Vec::new();
             if let Some(mut s) = stdout.take() {
@@ -98,13 +98,14 @@ impl VerifyRunner for VerifyProcess {
             }
             buffer
         });
-        let (status, timed_out) = match tokio::time::timeout(timeout, spawned.child.wait()).await {
+        let (status, timed_out) = match tokio::time::timeout(timeout, spawned.child().wait()).await
+        {
             Ok(Ok(status)) => (status.code(), false),
             Ok(Err(_)) => (None, false),
             Err(_) => (None, true),
         };
         // Before reading to the end: what is left may hold the pipes open.
-        crate::process::reap(&mut spawned, &self.root).await;
+        crate::process::reap(&mut spawned).await;
         let stdout = String::from_utf8_lossy(&out.await.unwrap_or_default()).into_owned();
         let stderr = String::from_utf8_lossy(&err.await.unwrap_or_default()).into_owned();
         RawVerifyOutput {

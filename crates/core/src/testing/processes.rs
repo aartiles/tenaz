@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::leftover::ProcessRow;
 use crate::ports::ProcessTable;
@@ -15,7 +16,7 @@ use crate::ports::ProcessTable;
 pub struct ScriptedProcesses {
     listings: Vec<Vec<ProcessRow>>,
     cwds: HashMap<u32, PathBuf>,
-    listed: Mutex<usize>,
+    listed: AtomicUsize,
     killed: Mutex<Vec<Vec<u32>>>,
     refuses: bool,
 }
@@ -45,7 +46,7 @@ impl ScriptedProcesses {
 
     /// How many times the table was listed.
     pub fn listed(&self) -> usize {
-        *self.listed.lock().unwrap()
+        self.listed.load(Ordering::Relaxed)
     }
 
     /// The pids of each `kill` call, in order.
@@ -56,9 +57,8 @@ impl ScriptedProcesses {
 
 impl ProcessTable for ScriptedProcesses {
     fn list(&self) -> Vec<ProcessRow> {
-        let mut listed = self.listed.lock().unwrap();
-        let index = (*listed).min(self.listings.len().saturating_sub(1));
-        *listed += 1;
+        let listed = self.listed.fetch_add(1, Ordering::Relaxed);
+        let index = listed.min(self.listings.len().saturating_sub(1));
         self.listings.get(index).cloned().unwrap_or_default()
     }
 

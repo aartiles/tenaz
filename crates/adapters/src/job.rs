@@ -71,7 +71,7 @@ impl JobRunner for JobProcess {
             }
         };
         let outcome = tokio::select! {
-            waited = tokio::time::timeout(job.timeout, spawned.child.wait()) => match waited {
+            waited = tokio::time::timeout(job.timeout, spawned.child().wait()) => match waited {
                 Ok(Ok(status)) => JobOutcome { status: status.code(), ..JobOutcome::default() },
                 Ok(Err(error)) => failed(format!("cannot wait for the job: {error}")),
                 Err(_) => JobOutcome { timed_out: true, ..JobOutcome::default() },
@@ -80,7 +80,7 @@ impl JobRunner for JobProcess {
         };
         // Whatever the job started goes with it: a render left running
         // would hold the GPU the LLM is about to reload into.
-        crate::process::reap(&mut spawned, &self.root).await;
+        crate::process::reap(&mut spawned).await;
         outcome
     }
 }
