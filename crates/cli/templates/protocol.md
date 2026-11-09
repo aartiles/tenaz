@@ -21,16 +21,26 @@ and you do not commit, push, open pull requests or switch branches.
   Do not edit them.
 - The orchestrator runs `./verify` after your session and decides the outcome
   from its result. Make the checks pass; a claim of success counts for
-  nothing. It runs it with `CI=1 NO_COLOR=1`, without a terminal; run it the
-  same way when a check passes for you and fails for the orchestrator. When
+  nothing. It runs it with `CI=1 NO_COLOR=1` and the user's own `HOME`,
+  without a terminal; run it the same way when a check passes for you and
+  fails for the orchestrator. That `HOME` may not be the one your commands
+  see, so a check must not need anything you put under your `$HOME`. When
   `verify` ends it kills every process it started, so a check that needs a
   server starts its own.
-- Give a command that may run long a time limit (`timeout 120 <command>`).
-  The orchestrator stops a tool call that runs over its limit (10 minutes by
-  default); a second one in the same session ends the session.
+- Give a command that may run long a time limit: set your shell tool's own
+  time limit when it has one. Do not use the `timeout` command; macOS does
+  not have it. A check that starts a program gives it a time limit in the
+  check's own language (for example Node's `spawnSync` or Python's
+  `subprocess.run`). The orchestrator stops a tool call that runs over its
+  limit (10 minutes by default); a second one in the same session ends the
+  session.
 - Check your work with `./verify` (or `./verify --task <ID>`) rather than
   improvised one-off commands. If you need a new kind of check, add it to
   `verify`.
+- A check tests its requirement in the state the spec describes. One about
+  the first screen or state the program shows is checked there, before any
+  key press, click or other user action. A check must not change that state
+  first (for example, open a door before it checks the first frame).
 - If a command gives the same result twice, do not run it again unchanged.
   Change something, read the relevant code, or move on.
 - Keep tool output small: use `head`, `tail`, `grep`, and read file ranges.

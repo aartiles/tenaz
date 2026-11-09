@@ -6,6 +6,41 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `--harness dsh` turns off dsh's own automatic compaction, so a session
+  ends at Tenaz's context budget instead of summarizing its history once
+  dsh's count reaches about 49k tokens of a 131k window. That count
+  includes reasoning the proxy does not send (ADR 0030). In a 7-hour
+  raycaster run with 0.6.0, 18 summaries and the requests after them
+  took about 51 minutes.
+- If dsh still asks to summarize its conversation (the setting above did
+  not apply), the engine proxy refuses the request, as it does Qwen
+  Code's, and the session ends there as one out of context instead of
+  the summary counting as a turn. In the 0.6.0 raycaster run seven
+  summaries counted toward one session's 40-turn limit, which stopped it
+  at "60/40" with 53 real turns and its checks passing.
+- `--harness dsh` gives dsh the user's Playwright and npm caches
+  (`PLAYWRIGHT_BROWSERS_PATH`, `npm_config_cache`), so browsers and
+  packages it installs are where `verify`, which runs with the user's
+  own `HOME`, finds them. The protocol now says that `verify` runs with
+  that `HOME`. In the 0.6.0 raycaster run a browser installed into
+  dsh's `HOME` failed the first task's first `verify`, and `npm install`
+  ran from an empty cache (354 s).
+- The protocol no longer tells sessions to use `timeout 120 <command>`,
+  which macOS does not have: most sessions of a macOS run lost a turn to
+  "command not found". It now says to set the shell tool's own time limit,
+  and to time out a program a check starts in the check's own language.
+- The orchestrator's message after it stops a long tool call no longer
+  suggests `timeout 60 <command>`; it says to run the call again with
+  the shell tool's own time limit.
+- A check tests its requirement in the state the spec describes: one
+  about the first screen is checked before any user action. The
+  protocol, which every role reads, now says so. A check that changes
+  such a state first is MAJOR for the reviewer; when a card asks for
+  one, the builder follows the spec. In two runs a check of a game's
+  first frame opened a door first, and only the final review caught it.
+
 ## [0.6.0] - 2026-11-08
 
 ### Added

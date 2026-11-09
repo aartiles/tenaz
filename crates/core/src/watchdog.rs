@@ -187,7 +187,7 @@ impl Watchdog {
         }
         actions.push(Action::Interrupt {
             message: format!(
-                "[orchestrator] Your call `{call}` ran for more than {minutes} minutes and was stopped. It was probably waiting for input, serving, or looping. Find out why by running it with a time limit (`timeout 60 <command>`), fix the cause, and go on with your task. Give any command that may run long a time limit: a call that runs over {minutes} minutes again ends this session."
+                "[orchestrator] Your call `{call}` ran for more than {minutes} minutes and was stopped. It was probably waiting for input, serving, or looping. Find out why by running it again with your shell tool's own time limit. Do not use the `timeout` command; macOS does not have it. Fix the cause, and go on with your task. Give any command that may run long a time limit: a call that runs over {minutes} minutes again ends this session."
             ),
         });
         actions
@@ -1236,6 +1236,12 @@ mod tests {
         assert!(
             message.contains("`./verify --all` ran for more than 10 minutes"),
             "{message}"
+        );
+        assert!(
+            message.contains("shell tool's own time limit")
+                && message.contains("Do not use the `timeout` command")
+                && !message.contains("timeout "),
+            "no GNU `timeout` example, which macOS lacks: {message}"
         );
         assert_eq!(
             w.tool_deadline(),

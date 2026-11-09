@@ -5,7 +5,11 @@ contains the task card, the diff, and the `verify` results.
 
 Check that:
 
-- the change does what the card and its cited requirements ask;
+- the change does what the card and its cited requirements ask. Check
+  each requirement as the spec states it. A check that changes the state
+  its requirement is about, against the protocol, is MAJOR. If the card
+  asked for that and the builder followed the spec instead, that is
+  right: write a MINOR finding that the card is wrong;
 - the new checks really exercise the behaviour, not just the existence of a
   file or function;
 - existing checks were not weakened or removed. When the briefing has a

@@ -435,6 +435,10 @@ async fn a_refused_compaction_becomes_a_session_event() {
             .any(|e| matches!(e, SessionEvent::MessageEnd { .. })),
         "the refusal is not a reply: {events:?}"
     );
+    assert!(
+        !events.iter().any(|e| matches!(e, SessionEvent::TurnEnd)),
+        "the refusal is not a turn: {events:?}"
+    );
     session.close(Duration::from_secs(5)).await;
 }
 

@@ -37,6 +37,9 @@ pub(super) struct HarnessInputs<'a> {
     pub(super) feed: &'a tokio::sync::broadcast::Sender<EngineObservation>,
     /// The sandbox launcher, when the run is sandboxed.
     pub(super) wrapper: &'a [String],
+    /// The user's browser and package caches, for an agent with an
+    /// isolated `HOME` (see [`user_caches`]).
+    pub(super) caches: &'a [(String, String)],
 }
 
 impl HarnessInputs<'_> {
@@ -253,6 +256,7 @@ fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     }
     let mut launch = DshLaunch::new(&inputs.options.bin, &home);
     launch.wrapper = inputs.wrapper.to_vec();
+    launch.caches = inputs.caches.to_vec();
     inputs.acp_agent(Arc::new(DshAgent { launch, patch }), None, None)
 }
 
@@ -273,6 +277,18 @@ fn generic_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
         wrapper: inputs.wrapper.to_vec(),
     };
     inputs.acp_agent(Arc::new(agent), None, None)
+}
+
+/// The user's browser and package caches, for an agent with an isolated
+/// `HOME` (see [`tenaz_acp::caches::user_caches`]).
+pub(super) fn user_caches() -> Vec<(String, String)> {
+    std::env::home_dir().map_or_else(Vec::new, |home| {
+        tenaz_acp::caches::user_caches(
+            &home,
+            |name| std::env::var(name).ok(),
+            cfg!(target_os = "macos"),
+        )
+    })
 }
 
 /// The provider name the harness's configuration uses.
@@ -381,15 +397,27 @@ mod tests {
     /// Builds the harness `kind` names for a project in `dir`, with the
     /// skills `skills`.
     fn build(dir: &Path, kind: HarnessKind, skills: &[SkillPin]) -> anyhow::Result<()> {
-        build_wrapped(dir, kind, skills, &[]).map(|_| ())
+        let extras = Extras {
+            skills,
+            ..Extras::default()
+        };
+        build_with(dir, kind, &extras).map(|_| ())
     }
 
-    /// The same, started through `wrapper` (the sandbox launcher).
-    fn build_wrapped(
+    /// What a test gives the harness besides its kind: skills, the
+    /// sandbox launcher (`wrapper`) and the user's caches.
+    #[derive(Default)]
+    struct Extras<'a> {
+        skills: &'a [SkillPin],
+        wrapper: &'a [String],
+        caches: &'a [(String, String)],
+    }
+
+    /// The same, with `extras`.
+    fn build_with(
         dir: &Path,
         kind: HarnessKind,
-        skills: &[SkillPin],
-        wrapper: &[String],
+        extras: &Extras<'_>,
     ) -> anyhow::Result<Arc<dyn Harness>> {
         let config = ModelConfig {
             harness: kind,
@@ -417,12 +445,31 @@ mod tests {
             media_timeout: Duration::from_secs(60),
             base_url: "http://127.0.0.1:4001/v1".into(),
             mcp_endpoints: &[],
-            skills,
+            skills: extras.skills,
             agent_skills: false,
             verify_path: ".tenaz/verify",
             feed: &feed,
-            wrapper,
+            wrapper: extras.wrapper,
+            caches: extras.caches,
         })
+    }
+
+    /// A builder session's spec for a project in `dir`.
+    fn session_spec(dir: &Path) -> tenaz_core::ports::SessionSpec {
+        tenaz_core::ports::SessionSpec {
+            label: "001-builder-T001".into(),
+            cwd: dir.to_path_buf(),
+            persist_dir: None,
+            raw_log: None,
+            thinking_log: None,
+            stderr_log: None,
+            model: tenaz_core::ports::SessionModel {
+                name: "engine/m".into(),
+                id: "m".into(),
+                context_window: 65_536,
+                supports_images: false,
+            },
+        }
     }
 
     /// The program the wrapper starts for `kind` in a project in `dir`, or
@@ -469,21 +516,12 @@ mod tests {
                 ),
             );
             let wrapper = [recorder.display().to_string(), "--sandboxed".into()];
-            let harness = build_wrapped(dir.path(), kind, &[], &wrapper).unwrap();
-            let spec = tenaz_core::ports::SessionSpec {
-                label: "001-builder-T001".into(),
-                cwd: dir.path().to_path_buf(),
-                persist_dir: None,
-                raw_log: None,
-                thinking_log: None,
-                stderr_log: None,
-                model: tenaz_core::ports::SessionModel {
-                    name: "engine/m".into(),
-                    id: "m".into(),
-                    context_window: 65_536,
-                    supports_images: false,
-                },
+            let extras = Extras {
+                wrapper: &wrapper,
+                ..Extras::default()
             };
+            let harness = build_with(dir.path(), kind, &extras).unwrap();
+            let spec = session_spec(dir.path());
             let opened = tokio::time::timeout(Duration::from_secs(10), harness.open(spec))
                 .await
                 .expect("the launch ends");
@@ -493,6 +531,44 @@ mod tests {
             let args: Vec<&str> = args.lines().take(2).collect();
             assert_eq!(args, ["--sandboxed", program.as_str()], "{kind}");
         }
+    }
+
+    /// dsh starts with the user's caches it is given, so what it installs
+    /// there is where `verify`, with the user's own `HOME`, finds it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dsh_starts_with_the_user_s_caches() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = dir.path().join("env");
+        let recorder = dir.path().join("record");
+        tenaz_adapters::testing::write_executable(
+            &recorder,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$PLAYWRIGHT_BROWSERS_PATH\" \"$npm_config_cache\" > '{}'\nexit 1\n",
+                seen.display()
+            ),
+        );
+        let caches = [
+            (
+                "PLAYWRIGHT_BROWSERS_PATH".to_owned(),
+                "/u/browsers".to_owned(),
+            ),
+            ("npm_config_cache".to_owned(), "/u/npm".to_owned()),
+        ];
+        let wrapper = [recorder.display().to_string()];
+        let extras = Extras {
+            wrapper: &wrapper,
+            caches: &caches,
+            ..Extras::default()
+        };
+        let harness = build_with(dir.path(), HarnessKind::Dsh, &extras).unwrap();
+        let spec = session_spec(dir.path());
+        let opened = tokio::time::timeout(Duration::from_secs(10), harness.open(spec))
+            .await
+            .expect("the launch ends");
+        assert!(opened.is_err(), "the recorder is not an ACP agent");
+        let env = std::fs::read_to_string(&seen).expect("the wrapper ran");
+        assert_eq!(env.lines().collect::<Vec<_>>(), ["/u/browsers", "/u/npm"]);
     }
 
     fn json(path: &Path) -> serde_json::Value {

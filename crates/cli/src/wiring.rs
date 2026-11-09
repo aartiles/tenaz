@@ -35,7 +35,7 @@ use tenaz_mcp::workflow::WorkflowTemplate;
 use tenaz_mcp::{MediaTools, serve};
 use tenaz_proxy::{Proxy, ProxyEvent};
 
-use harness::{HarnessInputs, build_harness};
+use harness::{HarnessInputs, build_harness, user_caches};
 
 mod harness;
 
@@ -358,8 +358,7 @@ pub async fn wire(
     let sandbox = sandbox(project, &ledger.params)?;
     let wrapper = sandbox
         .as_ref()
-        .map(|s| s.wrapper.clone())
-        .unwrap_or_default();
+        .map_or_else(Vec::new, |s| s.wrapper.clone());
     let mut harness = build_harness(&HarnessInputs {
         project,
         config,
@@ -372,6 +371,7 @@ pub async fn wire(
         verify_path: ledger.params.verify_path(),
         feed: &feed,
         wrapper: &wrapper,
+        caches: &user_caches(),
     })?;
     let (verify, jobs) = runners(project, &ledger.params, sandbox.as_ref());
     if let Some(sandbox) = sandbox {
@@ -612,19 +612,26 @@ async fn start_proxy(
         proxy_observer(feed, cache_report, repairs.clone()),
     );
     proxy.repair_tool_args = repairs.is_some();
-    proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
     proxy.effort = effort;
-    proxy.past_reasoning_budget = ledger.params.past_reasoning_budget();
-    proxy.compaction_prompt_opening = (ledger.config.harness == HarnessKind::Qwen)
-        .then(|| tenaz_acp::qwen::COMPACTION_PROMPT.to_owned());
-    proxy.request_defaults =
-        request_defaults(ledger.config.thinking.as_deref(), ledger.params.temperature);
+    set_up_for_run(&mut proxy, ledger);
     let handle = Arc::new(proxy)
         .start("127.0.0.1:0".parse()?)
         .await
         .context("cannot start the engine proxy")?;
     tracing::info!("engine proxy at {} -> {}", handle.base_url(), base_url);
     Ok(handle)
+}
+
+/// What the engine proxy does for the run in `ledger`: the output cap,
+/// how much earlier reasoning it keeps, the summary request it refuses
+/// for the agent (ADRs 0022 and 0030), and the request defaults.
+fn set_up_for_run(proxy: &mut Proxy, ledger: &tenaz_core::ledger::Ledger) {
+    proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
+    proxy.past_reasoning_budget = ledger.params.past_reasoning_budget();
+    proxy.compaction_prompt_opening =
+        tenaz_acp::compaction_prompt(ledger.config.harness).map(str::to_owned);
+    proxy.request_defaults =
+        request_defaults(ledger.config.thinking.as_deref(), ledger.params.temperature);
 }
 
 #[cfg(test)]
@@ -818,6 +825,87 @@ mod tests {
             ..images("", None)
         };
         assert!(media_adapter(&none, llm).unwrap().is_none());
+    }
+
+    /// A run's ledger for an agent of kind `harness`, with defaults.
+    fn ledger_for(harness: tenaz_core::ledger::HarnessKind) -> tenaz_core::ledger::Ledger {
+        let config = tenaz_core::ledger::ModelConfig {
+            harness,
+            harness_version: "1".into(),
+            model: "engine/m".into(),
+            provider: Some("engine".into()),
+            id: "m".into(),
+            base_url: None,
+            context_window: 65_536,
+            input: vec!["text".into()],
+            thinking: None,
+            role_models: BTreeMap::new(),
+        };
+        tenaz_core::ledger::Ledger::new(
+            "t".into(),
+            "b".into(),
+            "s".into(),
+            "0".into(),
+            config,
+            tenaz_core::params::RunParams::default(),
+            vec![],
+        )
+    }
+
+    /// The proxy of a dsh or Qwen Code run refuses that agent's summary
+    /// request before it reaches the engine (there is none here).
+    #[tokio::test]
+    async fn a_run_s_proxy_refuses_its_agent_s_summary_request() {
+        use tenaz_core::ledger::HarnessKind;
+        let dir = tempfile::tempdir().unwrap();
+        let project = tenaz_core::project::Project::new(dir.path());
+        for (harness, prompt) in [
+            (HarnessKind::Dsh, tenaz_acp::dsh::COMPACTION_PROMPT),
+            (HarnessKind::Qwen, tenaz_acp::qwen::COMPACTION_PROMPT),
+        ] {
+            let (feed, _) = tokio::sync::broadcast::channel(8);
+            let handle = super::start_proxy(
+                "http://127.0.0.1:1/v1",
+                Gate::new(),
+                feed,
+                tenaz_core::cache_report::CacheReport::new(),
+                None,
+                &project,
+                &ledger_for(harness),
+            )
+            .await
+            .unwrap();
+            let summarize = serde_json::json!({"messages": [
+                {"role": "user", "content": "build the map"},
+                {"role": "user", "content": [{"type": "text", "text": format!("{prompt} …")}]}
+            ]});
+            let refused = reqwest::Client::new()
+                .post(format!("{}/chat/completions", handle.base_url()))
+                .json(&summarize)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(refused.status(), 400, "{harness}");
+            handle.stop().await;
+        }
+    }
+
+    /// Only a dsh or Qwen Code run's proxy refuses a summary request.
+    #[test]
+    fn other_agents_runs_refuse_no_summary_request() {
+        use tenaz_core::ledger::HarnessKind;
+        for harness in [
+            HarnessKind::Fx,
+            HarnessKind::Pi,
+            HarnessKind::OpenCode,
+            HarnessKind::Acp,
+            HarnessKind::Fake,
+        ] {
+            let mut proxy =
+                tenaz_proxy::Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
+            super::set_up_for_run(&mut proxy, &ledger_for(harness));
+            assert_eq!(proxy.compaction_prompt_opening, None, "{harness}");
+        }
     }
 
     #[test]

@@ -11,13 +11,21 @@ use tenaz_core::ports::{SessionModel, SessionSpec};
 use crate::agent::AgentProfile;
 use crate::write_json;
 
+/// The opening of dsh's request to summarize its conversation
+/// (`COMPACTION_INSTRUCTION` in `dsh-compaction-basic` 0.2.2-rc.1, sent as
+/// the last user message). The patch turns automatic compaction off; a
+/// request that still arrives is refused, as Qwen Code's is (ADR 0030).
+pub const COMPACTION_PROMPT: &str =
+    "You are now acting as a compaction engine for this AI coding assistant.";
+
 /// The provider name the patch gives the engine proxy inside dsh.
 const PROVIDER: &str = "tenaz";
 
 /// What Tenaz overrides in dsh's `acp` profile, which by default uses the
 /// `deepseek-official` provider: the default model and the ACP app's model
-/// (both on the proxy), and an OpenAI-compatible provider at the proxy with
-/// the session's model.
+/// (both on the proxy), an OpenAI-compatible provider at the proxy with
+/// the session's model, and no automatic compaction, so that Tenaz's
+/// context budget decides when a session ends (ADR 0030).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DshPatch {
     /// The proxy's base URL (`http://127.0.0.1:<port>/v1`).
@@ -92,6 +100,12 @@ impl DshPatch {
                 "id": "llm-pi-ai",
                 "name": "@deepseek-ai/dsh-llm-pi-ai",
                 "config": { "providers": { PROVIDER: provider } }
+            },
+            {
+                // dsh-base gives this entry no config, so none is lost.
+                "id": "compaction-basic",
+                "name": "@deepseek-ai/dsh-compaction-basic",
+                "config": { "auto": false }
             }
         ])
     }
@@ -119,6 +133,10 @@ pub struct DshLaunch {
     /// A program and leading arguments dsh is started through: the sandbox
     /// launcher, when the run is sandboxed.
     pub wrapper: Vec<String>,
+    /// The user's browser and package caches (see
+    /// [`crate::caches::user_caches`]), so that what the agent installs
+    /// is found by `verify`, which runs with the user's own `HOME`.
+    pub caches: Vec<(String, String)>,
 }
 
 impl DshLaunch {
@@ -127,6 +145,7 @@ impl DshLaunch {
             binary: binary.into(),
             home: home.into(),
             wrapper: Vec::new(),
+            caches: Vec::new(),
         }
     }
 
@@ -151,12 +170,14 @@ impl DshLaunch {
     }
 
     /// `HOME` and `DSH_HOME` inside `home`, so the user's own profiles and
-    /// sessions stay out.
+    /// sessions stay out, then the user's caches.
     pub fn env(&self) -> Vec<(String, String)> {
-        vec![
+        let mut env = vec![
             ("HOME".to_owned(), self.home.display().to_string()),
             ("DSH_HOME".to_owned(), self.dsh_home().display().to_string()),
-        ]
+        ];
+        env.extend(self.caches.iter().cloned());
+        env
     }
 }
 
@@ -229,7 +250,7 @@ mod tests {
             .unwrap()
             .iter()
             .find(|e| e["id"] == id)
-            .unwrap()
+            .unwrap_or_else(|| panic!("no patch entry with id {id}"))
     }
 
     #[test]
@@ -267,6 +288,14 @@ mod tests {
         assert_eq!(model["contextWindow"], 131_072);
         assert_eq!(model["maxTokens"], 16_384);
         assert_eq!(model["input"], serde_json::json!(["text"]));
+    }
+
+    #[test]
+    fn the_patch_turns_off_dsh_s_automatic_compaction() {
+        let json = patch().to_json();
+        let compaction = entry(&json, "compaction-basic");
+        assert_eq!(compaction["name"], "@deepseek-ai/dsh-compaction-basic");
+        assert_eq!(compaction["config"], serde_json::json!({ "auto": false }));
     }
 
     #[test]
@@ -329,6 +358,14 @@ mod tests {
                 ("DSH_HOME".to_owned(), "/run/home/.dsh".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn dsh_s_environment_carries_the_user_s_caches() {
+        let mut launch = DshLaunch::new("/opt/dsh", "/run/home");
+        let cache = ("npm_config_cache".to_owned(), "/Users/me/.npm".to_owned());
+        launch.caches = vec![cache.clone()];
+        assert!(launch.env().contains(&cache), "{:?}", launch.env());
     }
 
     #[test]

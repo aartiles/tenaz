@@ -5,6 +5,7 @@
 //! turn.
 
 pub mod agent;
+pub mod caches;
 pub mod dsh;
 pub mod fx;
 pub mod generic;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 use agent_client_protocol::schema::v1::{HttpHeader, McpServer, McpServerHttp};
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Client, DynConnectTo, LineDirection};
 use async_trait::async_trait;
+use tenaz_core::ledger::HarnessKind;
 use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionModel, SessionSpec};
 
 pub use session::{EngineObservation, ObservationFeed, stop_reason_for_finish};
@@ -209,6 +211,21 @@ impl Harness for ConfiguredHarness {
     async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
         (self.write)(&spec.model).map_err(|e| HarnessError::Spawn(cannot_write(self.what, &e)))?;
         self.acp.open(spec).await
+    }
+}
+
+/// The opening of the request in which `harness` asks the engine to
+/// summarize its conversation, for the agents whose request the engine
+/// proxy refuses (ADRs 0022 and 0030); `None` for the others.
+pub fn compaction_prompt(harness: HarnessKind) -> Option<&'static str> {
+    match harness {
+        HarnessKind::Qwen => Some(qwen::COMPACTION_PROMPT),
+        HarnessKind::Dsh => Some(dsh::COMPACTION_PROMPT),
+        HarnessKind::Fx
+        | HarnessKind::Pi
+        | HarnessKind::OpenCode
+        | HarnessKind::Acp
+        | HarnessKind::Fake => None,
     }
 }
 

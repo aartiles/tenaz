@@ -24,6 +24,10 @@ protocol) and stop: the task is blocked and replanned. If it cannot be done
 as written for another reason, explain why in your notes and stop; the
 attempt fails, and after the last one the task is split or blocked.
 
+If the card asks a check to change the state its requirement is about
+(see the protocol), that is not a reason to stop: do the task with the
+check as the spec states it, and say so in your notes.
+
 Never leave heavy work running in the background. If a command needs more
 than a tool call's time, or most of the machine's memory for minutes,
 write `.tenaz/jobs/<TASK>.json` (see the protocol, "Heavy jobs") and stop:

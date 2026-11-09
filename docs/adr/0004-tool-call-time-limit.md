@@ -1,6 +1,7 @@
 # ADR 0004: A time limit per tool call
 
-Status: accepted, 2026-10-27.
+Status: accepted, 2026-10-27. Amended after 0.6.0: the message points to
+the shell tool's own time limit, not to `timeout`, which macOS lacks.
 
 ## Context
 
@@ -54,8 +55,8 @@ model can poll.
 - When the oldest open tool call passes it, the watchdog records a
   `tool-timeout` event with the call and asks for an interrupt: the runner
   aborts the turn and, when it settles, prompts the same session with the
-  call, the likely causes and what to do (run it with `timeout`, fix the
-  cause, go on).
+  call, the likely causes and what to do (run it again with the shell
+  tool's own time limit, fix the cause, go on).
 - An aborted turn after an interrupt is not the session's end.
 - The second time in a session, the session is aborted ("a tool call ran
   over N minutes twice") and the attempt counts. A call the harness does
