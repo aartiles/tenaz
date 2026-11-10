@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use tenaz_core::doctor;
-use tenaz_core::ledger::EngineApi;
+use tenaz_core::ledger::{EngineApi, HarnessKind};
 
 use crate::commands::EngineKind;
 use crate::commands::init::{
@@ -183,12 +183,7 @@ pub async fn run<R: BufRead, W: Write>(
             here.display()
         );
     }
-    if detect::git().is_none() {
-        bail!(
-            "Tenaz needs git, and git is not on PATH. {}",
-            doctor::git_fix(doctor::Os::from_name(std::env::consts::OS)).join(" ")
-        );
-    }
+    check_before_asking(args)?;
     p.say("Tenaz setup. Press Enter to take the [default].\n")?;
     let client = detect::client();
     let goal = ask_goal(args, p)?;
@@ -368,7 +363,33 @@ fn ask_project<R: BufRead, W: Write>(
     }
 }
 
+/// What stops the wizard before its first question: git missing, or
+/// `--mcp` servers that are malformed or that `--harness` would not see.
+fn check_before_asking(args: &InitArgs) -> anyhow::Result<()> {
+    if detect::git().is_none() {
+        bail!(
+            "Tenaz needs git, and git is not on PATH. {}",
+            doctor::git_fix(doctor::Os::from_name(std::env::consts::OS)).join(" ")
+        );
+    }
+    // Without --harness the agent is picked later, and checked then.
+    let harness = args.harness.map_or(HarnessKind::Fx, HarnessArg::kind);
+    crate::commands::init::mcp_servers_for(&args.mcp_servers, harness)?;
+    Ok(())
+}
+
 fn ask_agent<R: BufRead, W: Write>(
+    args: &InitArgs,
+    p: &mut Prompter<R, W>,
+) -> anyhow::Result<HarnessArg> {
+    let harness = pick_agent(args, p)?;
+    // An agent picked from the list that would not see `--mcp` stops here,
+    // before the questions that follow.
+    crate::commands::init::mcp_servers_for(&args.mcp_servers, harness.kind())?;
+    Ok(harness)
+}
+
+fn pick_agent<R: BufRead, W: Write>(
     args: &InitArgs,
     p: &mut Prompter<R, W>,
 ) -> anyhow::Result<HarnessArg> {
@@ -870,6 +891,28 @@ fn slug(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn init_args(line: &[&str]) -> InitArgs {
+        use clap::Parser as _;
+        let crate::Command::Init(args) = crate::Cli::parse_from(line).command else {
+            panic!("not an init line: {line:?}");
+        };
+        *args
+    }
+
+    /// A malformed `--mcp`, or one `--harness` would not see, stops the
+    /// wizard before its first question; without `--harness` the agent is
+    /// checked once picked. Needs git on PATH, as Tenaz does.
+    #[test]
+    fn the_wizard_checks_mcp_servers_before_asking() {
+        let check =
+            |line: &[&str]| check_before_asking(&init_args(line)).map_err(|e| e.to_string());
+        let malformed = check(&["tenaz", "init", "--mcp", "blender"]).unwrap_err();
+        assert!(malformed.contains("name=url"), "{malformed}");
+        let pi = check(&["tenaz", "init", "--harness", "pi", "--mcp", "b=http://h/"]).unwrap_err();
+        assert!(pi.starts_with("pi is not given"), "{pi}");
+        assert_eq!(check(&["tenaz", "init", "--mcp", "b=http://h/"]), Ok(()));
+    }
 
     fn prompter(input: &str) -> Prompter<&[u8], Vec<u8>> {
         Prompter::new(input.as_bytes(), Vec::new())

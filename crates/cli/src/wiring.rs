@@ -25,6 +25,7 @@ use tenaz_core::cache_report::CacheReport;
 use tenaz_core::effort::EffortDial;
 use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
 use tenaz_core::ledger::{HarnessKind, JournalRecord, ModelConfig};
+use tenaz_core::mcp_servers::MEDIA_SERVER;
 use tenaz_core::orchestrator::Deps;
 use tenaz_core::params::RunParams;
 use tenaz_core::ports::{EngineAdapter, MediaAdapter};
@@ -284,6 +285,22 @@ async fn media_server(
     Ok(Some(handle))
 }
 
+/// The MCP servers every session is offered: Tenaz's media server when the
+/// run has one, then the user's own by name (ADR 0032).
+fn mcp_endpoints(media_url: Option<String>, own: &BTreeMap<String, String>) -> Vec<McpEndpoint> {
+    let media = media_url.map(|url| McpEndpoint {
+        name: MEDIA_SERVER.to_owned(),
+        url,
+    });
+    media
+        .into_iter()
+        .chain(own.iter().map(|(name, url)| McpEndpoint {
+            name: name.clone(),
+            url: url.clone(),
+        }))
+        .collect()
+}
+
 /// Builds everything a run needs.
 pub async fn wire(
     project: &Project,
@@ -318,7 +335,6 @@ pub async fn wire(
     let lease = lease_over(project, engine_adapter.clone(), config, &gate);
     let mut lease = swapping(lease, engine.swap)?;
     let mut services = Services::default();
-    let mut mcp_endpoints = Vec::new();
     let engines = MediaEngines {
         image: media_adapter(media, &base_url)?,
         mesh: mesh_adapter(media, &base_url)?,
@@ -327,13 +343,11 @@ pub async fn wire(
         lease = lease.with_media(adapter.clone());
     }
     let lease = Arc::new(lease);
-    if let Some(handle) = media_server(&lease, project, media, &engines).await? {
-        mcp_endpoints.push(McpEndpoint {
-            name: "media".to_owned(),
-            url: handle.url(),
-        });
-        services.mcp = Some(handle);
-    }
+    services.mcp = media_server(&lease, project, media, &engines).await?;
+    let mcp_endpoints = mcp_endpoints(
+        services.mcp.as_ref().map(tenaz_mcp::McpHandle::url),
+        &ledger.launch.mcp_servers,
+    );
     // The proxy sits between the harness and the engine; the harness is pointed at it.
     let (feed, _) = tokio::sync::broadcast::channel::<EngineObservation>(256);
     let effort = engine.proxy.then(EffortDial::new);
@@ -644,8 +658,8 @@ mod tests {
     use tenaz_core::ports::EngineAdapter;
 
     use super::{
-        BTreeMap, Duration, MediaOptions, harness_usage, media_adapter, mesh_adapter,
-        reasoning_effort, request_defaults, swapping,
+        BTreeMap, Duration, MediaOptions, harness_usage, mcp_endpoints, media_adapter,
+        mesh_adapter, reasoning_effort, request_defaults, swapping,
     };
 
     /// Pi's agent directory lists the run's model first, then each role's
@@ -764,6 +778,26 @@ mod tests {
         assert_eq!(named.output, 9);
     }
 
+    #[test]
+    fn mcp_endpoints_put_the_media_server_first_then_the_user_s_by_name() {
+        let own = BTreeMap::from([
+            ("docs".to_owned(), "http://d/".to_owned()),
+            ("blender".to_owned(), "http://b/".to_owned()),
+        ]);
+        let names = |media: Option<&str>| {
+            mcp_endpoints(media.map(str::to_owned), &own)
+                .into_iter()
+                .map(|e| format!("{}={}", e.name, e.url))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(Some("http://m/")),
+            ["media=http://m/", "blender=http://b/", "docs=http://d/"]
+        );
+        assert_eq!(names(None), ["blender=http://b/", "docs=http://d/"]);
+        assert!(mcp_endpoints(None, &BTreeMap::new()).is_empty());
+    }
+
     fn images(url: &str, model: Option<&str>) -> MediaOptions {
         MediaOptions {
             comfyui: None,
@@ -827,31 +861,6 @@ mod tests {
         assert!(media_adapter(&none, llm).unwrap().is_none());
     }
 
-    /// A run's ledger for an agent of kind `harness`, with defaults.
-    fn ledger_for(harness: tenaz_core::ledger::HarnessKind) -> tenaz_core::ledger::Ledger {
-        let config = tenaz_core::ledger::ModelConfig {
-            harness,
-            harness_version: "1".into(),
-            model: "engine/m".into(),
-            provider: Some("engine".into()),
-            id: "m".into(),
-            base_url: None,
-            context_window: 65_536,
-            input: vec!["text".into()],
-            thinking: None,
-            role_models: BTreeMap::new(),
-        };
-        tenaz_core::ledger::Ledger::new(
-            "t".into(),
-            "b".into(),
-            "s".into(),
-            "0".into(),
-            config,
-            tenaz_core::params::RunParams::default(),
-            vec![],
-        )
-    }
-
     /// The proxy of a dsh or Qwen Code run refuses that agent's summary
     /// request before it reaches the engine (there is none here).
     #[tokio::test]
@@ -871,7 +880,7 @@ mod tests {
                 tenaz_core::cache_report::CacheReport::new(),
                 None,
                 &project,
-                &ledger_for(harness),
+                &crate::testing::ledger_for(harness),
             )
             .await
             .unwrap();
@@ -903,7 +912,7 @@ mod tests {
         ] {
             let mut proxy =
                 tenaz_proxy::Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
-            super::set_up_for_run(&mut proxy, &ledger_for(harness));
+            super::set_up_for_run(&mut proxy, &crate::testing::ledger_for(harness));
             assert_eq!(proxy.compaction_prompt_opening, None, "{harness}");
         }
     }

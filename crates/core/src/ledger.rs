@@ -131,6 +131,15 @@ impl HarnessKind {
     /// so a `dsh` on PATH is not taken for it.
     pub const AGENTS: [Self; 4] = [Self::Fx, Self::Pi, Self::OpenCode, Self::Qwen];
 
+    /// Whether the agent is given the user's own MCP servers (ADR 0032):
+    /// Pi runs with `--no-mcp` and dsh is given no MCP server.
+    pub fn takes_mcp_servers(self) -> bool {
+        match self {
+            Self::Pi | Self::Dsh => false,
+            Self::Fx | Self::OpenCode | Self::Qwen | Self::Acp | Self::Fake => true,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Fx => "fx",
@@ -214,6 +223,10 @@ pub struct Launch {
     /// Media job time limit, in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_timeout_sec: Option<u64>,
+    /// The user's own MCP servers by name, offered to the agent next to
+    /// the media tools (ADR 0032).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp_servers: BTreeMap<String, String>,
     /// Keep one of the run's models loaded at a time and swap them before
     /// each session (ADR 0015).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -858,6 +871,25 @@ mod tests {
         assert!(off.get("swapModels").is_none(), "{off}");
         let read: Launch = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(!read.swap_models);
+    }
+
+    #[test]
+    fn mcp_servers_are_pinned_as_mcp_servers_and_left_out_when_none() {
+        let some = Launch {
+            mcp_servers: BTreeMap::from([("blender".to_owned(), "http://h/".to_owned())]),
+            ..Launch::default()
+        };
+        let json = serde_json::to_value(&some).unwrap();
+        assert_eq!(
+            json["mcpServers"],
+            serde_json::json!({"blender": "http://h/"})
+        );
+        let back: Launch = serde_json::from_value(json).unwrap();
+        assert_eq!(back.mcp_servers, some.mcp_servers);
+        let none = serde_json::to_value(Launch::default()).unwrap();
+        assert!(none.get("mcpServers").is_none(), "{none}");
+        let read: Launch = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(read.mcp_servers.is_empty());
     }
 
     #[test]

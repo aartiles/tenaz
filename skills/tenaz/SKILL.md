@@ -108,6 +108,10 @@ Leave out the plan: Tenaz makes its own. Keep it to one page.
    user's repository. In a repository with commits it works on a new branch in
    a worktree and prints that directory: pass it as `--project` from then on.
    `init` refuses uncommitted changes; ask the user before committing theirs.
+   `--mcp name=url` offers the agent an MCP server of the user's own that
+   speaks HTTP (repeat it for more; fx, OpenCode, Qwen Code or `--harness
+   acp`, not Pi or dsh). The user starts that server; `tenaz run --no-mcp`
+   drops the pinned ones.
 2. `tenaz run --project <dir>` in the background. Do not wait on it in the
    foreground and do not start a second one on the same project.
 3. Check `tenaz status --project <dir> --json` now and then, not in a tight

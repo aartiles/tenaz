@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `--mcp name=url`, at `init` and `run`, offers the agent an MCP server of
+  your own over HTTP, such as Blender Lab's server for a running Blender
+  (ADR 0032). It is pinned in `run.json` as `launch.mcpServers`; `run
+  --no-mcp` drops the pinned ones. fx, OpenCode, Qwen Code and `--harness
+  acp` get them; `init` and `run` refuse them with Pi or dsh.
+
 ### Changed
 
 - After `verify` or a heavy job ends, Tenaz also stops the processes it

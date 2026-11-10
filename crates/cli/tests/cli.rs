@@ -269,6 +269,51 @@ fn swap_models_is_pinned_and_checked_again_by_run() {
     );
 }
 
+/// `init --mcp` pins the servers in run.json, and an `init` that would
+/// give them to Pi creates nothing.
+#[test]
+fn mcp_servers_are_pinned_by_init_and_refused_for_pi_before_anything_is_made() {
+    let work = tempfile::tempdir().unwrap();
+    let brief = work.path().join("brief.md");
+    std::fs::write(&brief, "# Brief\n").unwrap();
+    let init = |project: &std::path::Path, harness: &str| {
+        tenaz()
+            .args(["init", "--project"])
+            .arg(project)
+            .arg("--brief")
+            .arg(&brief)
+            .args(["--harness", harness, "--model", "m", "--provider", "p"])
+            .args(["--mcp", "blender=http://127.0.0.1:9191/"])
+            .output()
+            .unwrap()
+    };
+    let ledger = |project: &std::path::Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(project.join(".tenaz/run.json")).unwrap())
+            .unwrap()
+    };
+    let project = work.path().join("project");
+    let made = init(&project, "fake");
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    assert_eq!(
+        ledger(&project)["launch"]["mcpServers"],
+        serde_json::json!({ "blender": "http://127.0.0.1:9191/" })
+    );
+
+    let refused_dir = work.path().join("refused");
+    let refused = init(&refused_dir, "pi");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("pi is not given") && stderr.contains("drop --mcp"),
+        "{stderr}"
+    );
+    assert!(!refused_dir.join(".tenaz").exists());
+}
+
 /// A `HOME` whose `~/.pi/agent/models.json` lists `sushi/Qwen3.8` and
 /// `sushi/Critic`, a stand-in `pi` that answers `--version` (all init
 /// needs), and a brief, under `work`.

@@ -34,7 +34,8 @@ pub type Connector = Arc<dyn Fn(&SessionSpec) -> DynConnectTo<Client> + Send + S
 /// The command-line arguments of one session's agent process.
 pub type ArgsFor = Arc<dyn Fn(&SessionSpec) -> Vec<String> + Send + Sync>;
 
-/// An MCP server the runner hosts and offers to every session.
+/// An MCP server offered to every session: the runner's media server or
+/// one of the user's own (ADR 0032).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpEndpoint {
     pub name: String,

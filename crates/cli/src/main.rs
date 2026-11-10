@@ -2,6 +2,8 @@
 
 mod commands;
 mod detect;
+#[cfg(test)]
+mod testing;
 mod watch;
 mod wiring;
 mod wizard;

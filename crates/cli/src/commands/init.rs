@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, ModelConfig, swap_refusal};
+use tenaz_core::mcp_servers::{check_servers, parse_mcp_servers};
 use tenaz_core::orchestrator::{InitOptions, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
@@ -169,6 +170,10 @@ pub(crate) struct InitArgs {
     /// Media job time limit, in seconds (default 1800).
     #[arg(long)]
     pub(crate) media_timeout: Option<u64>,
+    /// An MCP server of your own the agent is offered, `name=url` (MCP over
+    /// HTTP); repeat for more. Refused with Pi or dsh.
+    #[arg(long = "mcp")]
+    pub(crate) mcp_servers: Vec<String>,
     /// Ask for what is missing even when stdin is not a terminal.
     #[arg(long)]
     pub(crate) interactive: bool,
@@ -225,16 +230,8 @@ impl InitArgs {
             ("engine", self.engine.map(|e| e.flag().to_owned())),
             ("engine-start", self.engine_start.clone()),
             ("engine-stop", self.engine_stop.clone()),
-            ("comfyui", self.comfyui.clone()),
         ]);
-        flags.extend(self.workflows.iter().map(|w| ("workflow", Some(w.clone()))));
-        flags.extend([
-            ("images", self.images.clone()),
-            ("image-model", self.image_model.clone()),
-            ("meshes", self.meshes.clone()),
-            ("mesh-model", self.mesh_model.clone()),
-            ("media-timeout", self.media_timeout.map(|t| t.to_string())),
-        ]);
+        flags.extend(self.tool_flags());
         let switches = [
             ("vision", self.vision),
             ("no-proxy", self.no_proxy),
@@ -255,6 +252,21 @@ impl InitArgs {
         );
         words.extend(flag_words(place));
         words.join(" ")
+    }
+
+    /// The media and MCP flags, in the order `command_line` gives them.
+    fn tool_flags(&self) -> Vec<(&'static str, Option<String>)> {
+        let mut flags = vec![("comfyui", self.comfyui.clone())];
+        flags.extend(self.workflows.iter().map(|w| ("workflow", Some(w.clone()))));
+        flags.extend([
+            ("images", self.images.clone()),
+            ("image-model", self.image_model.clone()),
+            ("meshes", self.meshes.clone()),
+            ("mesh-model", self.mesh_model.clone()),
+            ("media-timeout", self.media_timeout.map(|t| t.to_string())),
+        ]);
+        flags.extend(self.mcp_servers.iter().map(|m| ("mcp", Some(m.clone()))));
+        flags
     }
 }
 
@@ -281,6 +293,8 @@ pub(crate) struct InitPlan {
     pub(crate) role_picks: BTreeMap<Role, RolePick>,
     pub(crate) provider: String,
     pub(crate) api: EngineApi,
+    /// The `--mcp` servers by name, checked (ADR 0032).
+    pub(crate) mcp_servers: BTreeMap<String, String>,
     /// The goal typed in the wizard, written as the brief.
     pub(crate) brief_text: Option<String>,
     /// The answers, as flags: brief, base URL, context window, vision,
@@ -322,6 +336,7 @@ impl InitPlan {
         if let Some(why) = swap_refusal(api, args.swap_models, !role_picks.is_empty()) {
             anyhow::bail!("{why}");
         }
+        let mcp_servers = mcp_servers_for(&args.mcp_servers, harness)?;
         Ok(Self {
             project,
             harness,
@@ -330,10 +345,23 @@ impl InitPlan {
             role_picks,
             provider,
             api,
+            mcp_servers,
             brief_text,
             args,
         })
     }
+}
+
+/// The `--mcp` servers, refused when `harness` would not see them.
+pub(crate) fn mcp_servers_for(
+    specs: &[String],
+    harness: HarnessKind,
+) -> anyhow::Result<BTreeMap<String, String>> {
+    let servers = parse_mcp_servers(specs)?;
+    check_servers(&servers, harness).map_err(|why| {
+        anyhow::anyhow!("{why}; drop --mcp or use --harness fx, opencode, qwen or acp")
+    })?;
+    Ok(servers)
 }
 
 /// The engine API: `--engine`, else the API of the `engine` that answered,
@@ -522,6 +550,7 @@ fn launch(plan: &InitPlan) -> anyhow::Result<Launch> {
         meshes_url: plan.args.meshes.clone(),
         mesh_model: plan.args.mesh_model.clone(),
         media_timeout_sec: plan.args.media_timeout,
+        mcp_servers: plan.mcp_servers.clone(),
     })
 }
 
@@ -731,6 +760,24 @@ mod tests {
     }
 
     #[test]
+    fn init_pins_the_mcp_servers_and_gives_them_back_on_its_command_line() {
+        let line = with(&[
+            "--mcp",
+            "blender=http://127.0.0.1:9191/",
+            "--mcp",
+            "docs=https://d/mcp",
+        ]);
+        let pinned = launch(&plan(&line, None)).unwrap();
+        assert_eq!(pinned.mcp_servers.len(), 2);
+        assert_eq!(pinned.mcp_servers["blender"], "http://127.0.0.1:9191/");
+        let command = init_args(&line).command_line();
+        assert!(
+            command.ends_with("--mcp blender=http://127.0.0.1:9191/ --mcp docs=https://d/mcp"),
+            "{command}"
+        );
+    }
+
+    #[test]
     fn the_command_line_leaves_out_defaults_and_keeps_in_place() {
         let args = init_args(&[
             "tenaz",
@@ -885,6 +932,21 @@ mod tests {
             .err()
             .map(|e| e.to_string())
             .unwrap_or_default()
+    }
+
+    /// A bad `--mcp`, or one the harness would not see, stops `init`
+    /// before it creates anything.
+    #[test]
+    fn the_plan_refuses_a_bad_mcp_server_or_one_pi_and_dsh_would_not_see() {
+        assert!(plan_error(&["--mcp", "blender"]).contains("name=url"));
+        for harness in ["pi", "dsh"] {
+            let why = plan_error(&["--harness", harness, "--mcp", "b=http://h/"]);
+            assert!(
+                why.starts_with(&format!("{harness} is not given")) && why.contains("drop --mcp"),
+                "{why}"
+            );
+        }
+        assert_eq!(plan_error(&["--mcp", "b=http://h/"]), "");
     }
 
     #[test]

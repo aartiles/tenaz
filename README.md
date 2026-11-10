@@ -522,6 +522,36 @@ by `--media-timeout` (1800 s by default): TRELLIS.2 at 1024 took about
 7 minutes on an M5 Mac. A run may have an image engine, a 3D engine or
 both, on the same server or not. Pi gets no media tools.
 
+### MCP servers of your own
+
+`--mcp name=url` offers the agent an MCP server you run, over HTTP: for
+example Blender Lab's server for a running Blender, `--mcp
+blender=http://127.0.0.1:9191/`. Repeat it for more servers. `init` pins
+them; `tenaz run --mcp` replaces them and `tenaz run --no-mcp` drops them
+([ADR 0032](docs/adr/0032-mcp-servers-of-your-own.md)). You start and stop
+the server; Tenaz only passes its address on. fx, OpenCode, Qwen Code and
+`--harness acp` get them; `init` and `run` refuse them with Pi or
+dsh. fx allows each call `--media-timeout` (1800 s by default); the
+limit is written for OpenCode and Qwen Code too, but not checked there
+(see Known gaps in [COMPATIBILITY](docs/COMPATIBILITY.md)). A call does
+not free the LLM, as an image does.
+`verify` sees only files, so when the server keeps state, such as
+Blender's scene, have the brief ask for it to be saved to a file
+`verify` checks.
+
+For Blender, install the add-on from Blender Lab's `mcp-<version>.zip`
+(`blender -c extension install-file mcp-1.0.3.zip --repo=user_default
+--enable`) and its server from `blender-<version>.mcpb` (a zip; `uv tool
+install` on its folder), then start both:
+
+```bash
+blender -b --online-mode -c blender_mcp
+```
+
+```bash
+blender-mcp --transport http --port 9191
+```
+
 ### Protocol, prompts and skills
 
 The protocol in `.tenaz/protocol.md` and the prompts in `.tenaz/prompts/`

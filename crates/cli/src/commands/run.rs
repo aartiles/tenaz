@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, Phase, swap_refusal};
+use tenaz_core::mcp_servers::{check_servers, parse_mcp_servers};
 use tenaz_core::orchestrator::{RunOptions, Runner};
 use tokio_util::sync::CancellationToken;
 
@@ -78,6 +79,12 @@ pub(crate) struct RunArgs {
     /// Media job time limit, in seconds.
     #[arg(long)]
     media_timeout: Option<u64>,
+    /// MCP servers of your own, `name=url`; replaces the pinned ones.
+    #[arg(long = "mcp")]
+    mcp_servers: Vec<String>,
+    /// Drop the pinned --mcp servers.
+    #[arg(long, conflicts_with = "mcp_servers")]
+    no_mcp: bool,
 }
 
 impl RunArgs {
@@ -107,17 +114,31 @@ impl RunArgs {
         replace(&mut next.meshes_url, self.meshes.as_ref());
         replace(&mut next.mesh_model, self.mesh_model.as_ref());
         replace(&mut next.media_timeout_sec, self.media_timeout.as_ref());
+        if self.no_mcp {
+            next.mcp_servers.clear();
+        } else if !self.mcp_servers.is_empty() {
+            next.mcp_servers = parse_mcp_servers(&self.mcp_servers)?;
+        }
         Ok(next)
     }
 
     /// The run's pinned launch with these flags applied, refused when it
-    /// swaps models the run cannot swap.
+    /// swaps models the run cannot swap or names MCP servers its harness
+    /// would not see.
     fn launch_for(&self, ledger: &tenaz_core::ledger::Ledger) -> anyhow::Result<Launch> {
         let launch = self.apply(&ledger.launch, ledger.config.harness)?;
         let role_models = !ledger.config.role_models.is_empty();
         if let Some(why) = swap_refusal(launch.engine, launch.swap_models, role_models) {
             anyhow::bail!("{why}; tenaz run --no-swap-models turns swapping off");
         }
+        check_servers(&launch.mcp_servers, ledger.config.harness).map_err(|why| {
+            let fix = if self.mcp_servers.is_empty() {
+                "tenaz run --no-mcp drops the pinned servers"
+            } else {
+                "drop --mcp: a run keeps the harness init gave it"
+            };
+            anyhow::anyhow!("{why}; {fix}")
+        })?;
         Ok(launch)
     }
 }
@@ -234,7 +255,10 @@ fn spawn_signal_handler(stop: CancellationToken) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use clap::Parser as _;
+    use tenaz_core::mcp_servers::McpServerError;
 
     use super::*;
 
@@ -300,6 +324,105 @@ mod tests {
         assert_eq!(
             bin(&["tenaz", "run", "--fx-bin", "/opt/fx"]),
             Some("/pinned/qwen".to_owned())
+        );
+    }
+
+    fn servers(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(n, u)| ((*n).to_owned(), (*u).to_owned()))
+            .collect()
+    }
+
+    /// The servers `line` leaves the run with when `pinned` were pinned.
+    fn mcp_after(
+        line: &[&str],
+        pinned: &[(&str, &str)],
+    ) -> anyhow::Result<BTreeMap<String, String>> {
+        let launch = Launch {
+            mcp_servers: servers(pinned),
+            ..Launch::default()
+        };
+        Ok(run_args(line).apply(&launch, HarnessKind::Fx)?.mcp_servers)
+    }
+
+    const PINNED: [(&str, &str); 1] = [("old", "http://o/")];
+
+    #[test]
+    fn run_keeps_the_pinned_mcp_servers_without_a_flag() {
+        assert_eq!(
+            mcp_after(&["tenaz", "run"], &PINNED).unwrap(),
+            servers(&PINNED)
+        );
+    }
+
+    #[test]
+    fn run_mcp_replaces_the_pinned_servers() {
+        let line = ["tenaz", "run", "--mcp", "blender=http://127.0.0.1:9191/"];
+        assert_eq!(
+            mcp_after(&line, &PINNED).unwrap(),
+            servers(&[("blender", "http://127.0.0.1:9191/")])
+        );
+    }
+
+    #[test]
+    fn run_no_mcp_clears_the_pinned_servers_and_conflicts_with_mcp() {
+        assert!(
+            mcp_after(&["tenaz", "run", "--no-mcp"], &PINNED)
+                .unwrap()
+                .is_empty()
+        );
+        let both = ["tenaz", "run", "--mcp", "a=http://h/", "--no-mcp"];
+        assert!(crate::Cli::try_parse_from(both).is_err());
+    }
+
+    #[test]
+    fn run_refuses_a_bad_mcp_server() {
+        let error = mcp_after(&["tenaz", "run", "--mcp", "media=http://m/"], &[]).unwrap_err();
+        assert_eq!(error.to_string(), McpServerError::Reserved.to_string());
+    }
+
+    #[test]
+    fn run_refuses_mcp_servers_on_a_harness_that_would_not_see_them() {
+        let pinned_on = |harness| {
+            let mut ledger = crate::testing::ledger_for(harness);
+            ledger.launch.mcp_servers = servers(&PINNED);
+            ledger
+        };
+        let run = run_args(&["tenaz", "run"]);
+        let cleared = run_args(&["tenaz", "run", "--no-mcp"]);
+        let given = run_args(&["tenaz", "run", "--mcp", "a=http://h/"]);
+        for harness in [HarnessKind::Dsh, HarnessKind::Pi] {
+            let why = run.launch_for(&pinned_on(harness)).unwrap_err().to_string();
+            assert!(
+                why.starts_with(&format!("{harness} is not given")) && why.contains("--no-mcp"),
+                "{why}"
+            );
+            assert!(cleared.launch_for(&pinned_on(harness)).is_ok());
+            let why = given
+                .launch_for(&crate::testing::ledger_for(harness))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                why.ends_with("drop --mcp: a run keeps the harness init gave it"),
+                "{why}"
+            );
+        }
+        assert!(run.launch_for(&pinned_on(HarnessKind::Fx)).is_ok());
+    }
+
+    /// A server edited into `run.json` by hand is checked again at `run`.
+    #[test]
+    fn run_checks_the_pinned_servers_again() {
+        let mut ledger = crate::testing::ledger_for(HarnessKind::Fx);
+        ledger.launch.mcp_servers = servers(&[("media", "http://m/")]);
+        let why = run_args(&["tenaz", "run"]).launch_for(&ledger).unwrap_err();
+        assert_eq!(
+            why.to_string(),
+            format!(
+                "{}; tenaz run --no-mcp drops the pinned servers",
+                McpServerError::Reserved
+            )
         );
     }
 }
