@@ -6,6 +6,7 @@ use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
+use clap::ValueEnum as _;
 use tenaz_core::ledger::{EngineApi, HarnessKind, Launch, ModelConfig, swap_refusal};
 use tenaz_core::mcp_servers::{check_servers, parse_mcp_servers};
 use tenaz_core::orchestrator::{InitOptions, init};
@@ -359,9 +360,25 @@ pub(crate) fn mcp_servers_for(
 ) -> anyhow::Result<BTreeMap<String, String>> {
     let servers = parse_mcp_servers(specs)?;
     check_servers(&servers, harness).map_err(|why| {
-        anyhow::anyhow!("{why}; drop --mcp or use --harness fx, opencode, qwen or acp")
+        anyhow::anyhow!("{why}; drop --mcp or use --harness {}", mcp_harness_names())
     })?;
     Ok(servers)
+}
+
+/// The `--harness` values whose agent is given the user's own MCP servers,
+/// as a hint reads them: "fx, opencode, qwen or acp".
+fn mcp_harness_names() -> String {
+    let names: Vec<String> = HarnessArg::value_variants()
+        .iter()
+        // fake is the test harness, not one to suggest.
+        .filter(|arg| **arg != HarnessArg::Fake && arg.kind().takes_mcp_servers())
+        .filter_map(clap::ValueEnum::to_possible_value)
+        .map(|value| value.get_name().to_owned())
+        .collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        _ => names.concat(),
+    }
 }
 
 /// The engine API: `--engine`, else the API of the `engine` that answered,

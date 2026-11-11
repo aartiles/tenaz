@@ -8,18 +8,24 @@ use crate::ledger::HarnessKind;
 /// The name of Tenaz's own media server, which a user's server cannot take.
 pub const MEDIA_SERVER: &str = "media";
 
-/// Why a `--mcp` value was refused.
+/// Why an MCP server was refused. The errors a server pinned in `run.json`
+/// can meet (`BadName`, `Reserved`, `BadUrl`, `NotPassed`) name the server,
+/// not the flag; `NotAPair` and `Twice` only come from `--mcp`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum McpServerError {
     #[error("--mcp expects name=url, got {0}")]
     NotAPair(String),
-    #[error("--mcp name {0:?} may only hold letters, digits, '-' and '_', and must not be empty")]
+    #[error(
+        "MCP server name {0:?} may only hold letters, digits, '-' and '_', and must not be empty"
+    )]
     BadName(String),
-    #[error("--mcp name {MEDIA_SERVER:?} is Tenaz's own media server; pick another")]
+    #[error("MCP server name {MEDIA_SERVER:?} is Tenaz's own media server; pick another")]
     Reserved,
-    #[error("--mcp {0} is given twice")]
+    #[error("MCP server {0} is given twice")]
     Twice(String),
-    #[error("--mcp {name} needs an http:// or https:// URL with a host and no spaces, got {url:?}")]
+    #[error(
+        "MCP server {name} needs an http:// or https:// URL with a host and no spaces, got {url:?}"
+    )]
     BadUrl { name: String, url: String },
     #[error("{0} is not given MCP servers of your own (ADR 0032)")]
     NotPassed(HarnessKind),

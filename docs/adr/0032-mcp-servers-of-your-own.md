@@ -23,8 +23,8 @@ add-on, and serves MCP over stdio or HTTP (`blender-mcp --transport http
 ### A. `--mcp name=url` for HTTP servers
 
 - `init` pins the servers in `run.json` (`launch.mcpServers`); `run
-  --mcp` replaces them and `run --no-mcp` clears them, as `--workflow`
-  does.
+  --mcp` replaces them, as `run --workflow` does, and `run --no-mcp`
+  clears them.
 - They join the media server in the list Tenaz already gives each agent:
   fx, OpenCode and Qwen Code in their own configuration, the generic ACP
   agent in `session/new` and `acp-session.json`. Nothing new is written

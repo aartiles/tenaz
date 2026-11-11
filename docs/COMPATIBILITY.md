@@ -24,7 +24,7 @@ below; this page is about the real ones.
 | | OpenAI Images API (`--images`, `POST /v1/images/generations`): mlx-serve, Rapid-MLX, mlx-omni-server, LocalAI, Atomic Chat and others | Tested against a mock, and by hand against mlx-serve 26.10.3 (see Known gaps). Sends `model`, `prompt`, `size`, `n` and `response_format: b64_json`, plus `seed` and `negative_prompt`, which servers that do not know them may ignore. Frees the image model after a job through `POST /v1/unload-model` where the server has it (mlx-serve), also on the LLM's own origin, where the LLM stays loaded. |
 | | Image-to-3D API (`--meshes`, `POST /v1/3d/generations`): mlx-serve 26.11.1 | Tested against a mock, and by hand through the adapter against mlx-serve 26.11.1 with Idol and TRELLIS.2 at 512 (see Known gaps). Sends `model`, the picture as base64 `image`, and `resolution`, `seed`, `steps` and `mode` when given. Frees the 3D model after each job through `POST /v1/unload-model`. |
 | | TTS, STT, video | Not built. |
-| MCP | Your own servers over HTTP (`--mcp name=url`): Blender Lab's MCP server 1.0.3 | One paused run with fx 0.0.16 and Qwen3.8-Flash-Next on Sushi (see Known gaps). Pi and dsh are refused. |
+| MCP | Your own servers over HTTP (`--mcp name=url`): Blender Lab's MCP server 1.0.3 | A full run with fx 0.0.16 and Qwen3.8-Flash-Next on Sushi, and a paused one before it (see Known gaps). Pi and dsh are refused. |
 
 ## What the model needs
 
@@ -625,20 +625,27 @@ above), so a 32k context is the practical floor (`contextFloor`).
   against Qwen Code 0.26.6's sources (its tool names and that it sends
   `kind`) and unit tests; no run has used it yet. OpenCode's `kind` was
   not checked: no OpenCode session recorded it.
-- **MCP servers of your own** (`--mcp`, ADR 0032). One run on
-  2026-11-10 with fx 0.0.16, Qwen3.8-Flash-Next on Sushi and Blender Lab's
-  MCP server 1.0.3 (`blender-mcp --transport http`, its add-on in a
-  background Blender 5.2.1): a small animated scene saved to `scene.blend`,
-  which `verify` opened with a separate background Blender. fx listed the
-  server's tools; four of five builders built the scene with
-  `execute_blender_code` and looked at it with `get_objects_summary`; the
-  reviewers checked the saved file from the shell. Paused by hand after
-  15 sessions with 5 of 10 tasks done, each at the first attempt, so the
-  animation, the render and the final review were not reached. Not
-  checked: OpenCode, Qwen Code and `--harness acp` with such a server; a
-  server that is down when the run starts or stops mid-run; the time
-  limit on a long call. With Sushi and Blender together, free memory fell
-  to 0.1 GiB and 2.6 GiB were swapped in.
+- **MCP servers of your own** (`--mcp`, ADR 0032). Two runs on
+  2026-11-10 with fx 0.0.16, Qwen3.8-Flash-Next on Sushi 1.6.0 and Blender
+  Lab's MCP server 1.0.3 (`blender-mcp --transport http`, its add-on in a
+  background Blender 5.2.1), each building a scene in that Blender and
+  saving it to a `.blend` that `verify` opened with a separate Blender.
+  - A small animated scene, paused by hand after 15 sessions with 5 of 10
+    tasks done: fx listed the server's tools, and four of five builders
+    built with `execute_blender_code`.
+  - An animated pagoda, which ran to the end in 13.4 hours: 16 tasks, 70
+    sessions, a rendered film. Builders made 83 calls through the server
+    and ran a Blender of their own about 300 times for checks and
+    renders. When the run was paused and resumed, the server was gone; a
+    builder started Blender and the server again itself, and reached it
+    through a small HTTP client it wrote, not through fx's MCP tools.
+
+  Not checked: OpenCode, Qwen Code and `--harness acp` with such a
+  server; a server that stops mid-call; the time limit on a long call.
+  With Sushi and Blender together memory ran short: in the pagoda run
+  three sessions ended out of memory and 286 GiB were swapped in. A
+  token in a server's URL is kept in `run.json` and shown in `init`'s
+  command line.
 - **OpenCode and Qwen Code: not checked.** Media tools over MCP and their
   time limit (OpenCode's MCP `timeout` may only bound listing the tools),
   pinned skills, `--model-for`, pause and resume, a run in the OS sandbox,

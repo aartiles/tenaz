@@ -366,14 +366,19 @@ mod tests {
     }
 
     #[test]
-    fn run_no_mcp_clears_the_pinned_servers_and_conflicts_with_mcp() {
+    fn run_no_mcp_clears_the_pinned_servers() {
         assert!(
             mcp_after(&["tenaz", "run", "--no-mcp"], &PINNED)
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn run_no_mcp_conflicts_with_mcp() {
         let both = ["tenaz", "run", "--mcp", "a=http://h/", "--no-mcp"];
-        assert!(crate::Cli::try_parse_from(both).is_err());
+        let error = crate::Cli::try_parse_from(both).err().unwrap();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -382,33 +387,63 @@ mod tests {
         assert_eq!(error.to_string(), McpServerError::Reserved.to_string());
     }
 
+    /// A ledger for `harness` with two servers pinned.
+    fn pinned_on(harness: HarnessKind) -> tenaz_core::ledger::Ledger {
+        let mut ledger = crate::testing::ledger_for(harness);
+        ledger.launch.mcp_servers = servers(&PINNED);
+        ledger
+    }
+
     #[test]
-    fn run_refuses_mcp_servers_on_a_harness_that_would_not_see_them() {
-        let pinned_on = |harness| {
-            let mut ledger = crate::testing::ledger_for(harness);
-            ledger.launch.mcp_servers = servers(&PINNED);
-            ledger
-        };
-        let run = run_args(&["tenaz", "run"]);
-        let cleared = run_args(&["tenaz", "run", "--no-mcp"]);
-        let given = run_args(&["tenaz", "run", "--mcp", "a=http://h/"]);
+    fn pinned_servers_on_pi_or_dsh_are_refused_with_the_no_mcp_hint() {
         for harness in [HarnessKind::Dsh, HarnessKind::Pi] {
-            let why = run.launch_for(&pinned_on(harness)).unwrap_err().to_string();
-            assert!(
-                why.starts_with(&format!("{harness} is not given")) && why.contains("--no-mcp"),
-                "{why}"
-            );
-            assert!(cleared.launch_for(&pinned_on(harness)).is_ok());
-            let why = given
-                .launch_for(&crate::testing::ledger_for(harness))
-                .unwrap_err()
-                .to_string();
-            assert!(
-                why.ends_with("drop --mcp: a run keeps the harness init gave it"),
-                "{why}"
+            let why = run_args(&["tenaz", "run"])
+                .launch_for(&pinned_on(harness))
+                .unwrap_err();
+            assert_eq!(
+                why.to_string(),
+                format!(
+                    "{}; tenaz run --no-mcp drops the pinned servers",
+                    McpServerError::NotPassed(harness)
+                ),
+                "{harness}"
             );
         }
-        assert!(run.launch_for(&pinned_on(HarnessKind::Fx)).is_ok());
+    }
+
+    #[test]
+    fn no_mcp_lets_a_pi_or_dsh_run_start() {
+        let cleared = run_args(&["tenaz", "run", "--no-mcp"]);
+        for harness in [HarnessKind::Dsh, HarnessKind::Pi] {
+            assert!(cleared.launch_for(&pinned_on(harness)).is_ok(), "{harness}");
+        }
+    }
+
+    #[test]
+    fn mcp_given_to_pi_or_dsh_is_refused_with_drop_mcp() {
+        let given = run_args(&["tenaz", "run", "--mcp", "a=http://h/"]);
+        for harness in [HarnessKind::Dsh, HarnessKind::Pi] {
+            let why = given
+                .launch_for(&crate::testing::ledger_for(harness))
+                .unwrap_err();
+            assert_eq!(
+                why.to_string(),
+                format!(
+                    "{}; drop --mcp: a run keeps the harness init gave it",
+                    McpServerError::NotPassed(harness)
+                ),
+                "{harness}"
+            );
+        }
+    }
+
+    #[test]
+    fn pinned_servers_on_fx_are_kept() {
+        assert!(
+            run_args(&["tenaz", "run"])
+                .launch_for(&pinned_on(HarnessKind::Fx))
+                .is_ok()
+        );
     }
 
     /// A server edited into `run.json` by hand is checked again at `run`.
@@ -423,6 +458,19 @@ mod tests {
                 "{}; tenaz run --no-mcp drops the pinned servers",
                 McpServerError::Reserved
             )
+        );
+    }
+
+    /// The error names the pinned server, not `--mcp`, which was not given.
+    #[test]
+    fn a_bad_pinned_server_is_named_without_the_flag() {
+        let mut ledger = crate::testing::ledger_for(HarnessKind::Fx);
+        ledger.launch.mcp_servers = servers(&[("b", "ftp://x")]);
+        let why = run_args(&["tenaz", "run"]).launch_for(&ledger).unwrap_err();
+        assert_eq!(
+            why.to_string(),
+            "MCP server b needs an http:// or https:// URL with a host and no spaces, \
+             got \"ftp://x\"; tenaz run --no-mcp drops the pinned servers"
         );
     }
 }

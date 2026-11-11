@@ -87,8 +87,13 @@ fn init_pins_the_mcp_servers_and_gives_them_back_on_its_command_line() {
         "docs=https://d/mcp",
     ]);
     let pinned = launch(&plan(&line, None)).unwrap();
-    assert_eq!(pinned.mcp_servers.len(), 2);
-    assert_eq!(pinned.mcp_servers["blender"], "http://127.0.0.1:9191/");
+    assert_eq!(
+        pinned.mcp_servers,
+        BTreeMap::from([
+            ("blender".to_owned(), "http://127.0.0.1:9191/".to_owned()),
+            ("docs".to_owned(), "https://d/mcp".to_owned()),
+        ])
+    );
     let command = init_args(&line).command_line();
     assert!(
         command.ends_with("--mcp blender=http://127.0.0.1:9191/ --mcp docs=https://d/mcp"),
@@ -261,7 +266,7 @@ fn the_plan_refuses_a_bad_mcp_server_or_one_pi_and_dsh_would_not_see() {
     for harness in ["pi", "dsh"] {
         let why = plan_error(&["--harness", harness, "--mcp", "b=http://h/"]);
         assert!(
-            why.starts_with(&format!("{harness} is not given")) && why.contains("drop --mcp"),
+            why.ends_with("; drop --mcp or use --harness fx, opencode, qwen or acp"),
             "{why}"
         );
     }

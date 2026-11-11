@@ -372,7 +372,13 @@ fn check_before_asking(args: &InitArgs) -> anyhow::Result<()> {
             doctor::git_fix(doctor::Os::from_name(std::env::consts::OS)).join(" ")
         );
     }
-    // Without --harness the agent is picked later, and checked then.
+    check_mcp_before_asking(args)
+}
+
+/// `--mcp` servers that are malformed, or that `--harness` would not see.
+/// Without --harness the agent is picked later, and checked then; fx
+/// stands in for it here, so only the servers themselves are checked.
+fn check_mcp_before_asking(args: &InitArgs) -> anyhow::Result<()> {
     let harness = args.harness.map_or(HarnessKind::Fx, HarnessArg::kind);
     crate::commands::init::mcp_servers_for(&args.mcp_servers, harness)?;
     Ok(())
@@ -890,6 +896,8 @@ fn slug(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use tenaz_core::mcp_servers::McpServerError;
+
     use super::*;
 
     fn init_args(line: &[&str]) -> InitArgs {
@@ -900,18 +908,38 @@ mod tests {
         *args
     }
 
-    /// A malformed `--mcp`, or one `--harness` would not see, stops the
-    /// wizard before its first question; without `--harness` the agent is
-    /// checked once picked. Needs git on PATH, as Tenaz does.
+    fn mcp_check(line: &[&str]) -> Result<(), String> {
+        check_mcp_before_asking(&init_args(line)).map_err(|e| e.to_string())
+    }
+
+    /// The wizard runs this check after the git check, before its first
+    /// question; that wiring is not tested.
     #[test]
-    fn the_wizard_checks_mcp_servers_before_asking() {
-        let check =
-            |line: &[&str]| check_before_asking(&init_args(line)).map_err(|e| e.to_string());
-        let malformed = check(&["tenaz", "init", "--mcp", "blender"]).unwrap_err();
-        assert!(malformed.contains("name=url"), "{malformed}");
-        let pi = check(&["tenaz", "init", "--harness", "pi", "--mcp", "b=http://h/"]).unwrap_err();
-        assert!(pi.starts_with("pi is not given"), "{pi}");
-        assert_eq!(check(&["tenaz", "init", "--mcp", "b=http://h/"]), Ok(()));
+    fn the_wizard_refuses_a_malformed_mcp_before_asking() {
+        assert_eq!(
+            mcp_check(&["tenaz", "init", "--mcp", "blender"]),
+            Err(McpServerError::NotAPair("blender".into()).to_string())
+        );
+    }
+
+    #[test]
+    fn the_wizard_refuses_mcp_for_a_harness_that_would_not_see_it() {
+        assert_eq!(
+            mcp_check(&["tenaz", "init", "--harness", "pi", "--mcp", "b=http://h/"]),
+            Err(format!(
+                "{}; drop --mcp or use --harness fx, opencode, qwen or acp",
+                McpServerError::NotPassed(HarnessKind::Pi)
+            ))
+        );
+    }
+
+    /// Without --harness the agent is picked later and checked then.
+    #[test]
+    fn the_wizard_lets_mcp_through_before_the_agent_is_picked() {
+        assert_eq!(
+            mcp_check(&["tenaz", "init", "--mcp", "b=http://h/"]),
+            Ok(())
+        );
     }
 
     fn prompter(input: &str) -> Prompter<&[u8], Vec<u8>> {
