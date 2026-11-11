@@ -125,6 +125,24 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **Bootstrap prepared by a frontier agent.** The skill now asks the agent
+  driving Tenaz to write the brief, initialise the run, and write the spec,
+  map, verify, notes and task cards in the run's worktree before `run`.
+  Scenarios with the scripted harness, snapshot VCS and fake verify cover
+  validation of a prepared bootstrap, building without `Role::Bootstrap`
+  sessions, and repair of invalid files before building. On 2026-11-11, a
+  frontier agent prepared a Tenaz Explainer variant for Tenaz 0.7.0
+  (`ebf6daa`), fx 0.0.16 and Qwen3.8-27B 4-bit on mlx-serve 26.11.2,
+  with a 65536-token window and a 42598-token builder budget. Preflight
+  passed; all three bootstrap steps validated without bootstrap sessions,
+  and two tasks were built and reviewed. The third was generating images
+  when inspected. Two builder attempts reached the output limit before
+  the second task passed. This checks the handoff to real tools, not the
+  completed video. Invalid bootstrap repair is still tested with fakes
+  only. Whether external cards make construction easier or faster is not
+  measured; the model, runtime and image backend also differ from the
+  historical run.
+
 - **What verify leaves in a session of its own is found by its age,
   group, parent and directory** (ADR 0031). A process `verify` or a
   heavy job started is stopped afterwards only if it was born while the

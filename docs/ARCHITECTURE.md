@@ -78,7 +78,10 @@ and the crates above it. `tenaz-adapters` has a `testing` feature too:
 module starts and stops the process groups that `verify` and heavy jobs
 run in, and what they left in a session of their own (ADR 0031).
 `orchestrator` is the application service: phases (bootstrap in three
-steps, see ADR 0003; loop; final),
+steps, see ADR 0003; loop; final). Each bootstrap step validates its files
+before opening a session. A complete bootstrap written by the delegating
+agent after `init` uses this path without local bootstrap sessions; invalid
+files still need local repair. The orchestrator also owns
 the session wrapper with engine retries, capacity caps and continuations
 (which one comes next is decided by the pure `orchestrator::recovery`),
 and the check that a prompt fits its role's budget before the session

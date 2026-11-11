@@ -2,6 +2,7 @@
 //! git, no shell (ADR 0005).
 
 mod conflict;
+mod external_bootstrap;
 mod harness_exit;
 mod job;
 mod paused_continuation;

@@ -1,14 +1,15 @@
 ---
 name: tenaz
-description: Delegate a long, verifiable coding goal to Tenaz, which plans it and drives a local model session by session until the goal is met, on its own branch. Use when the user asks to hand work to Tenaz or to a local model, or to run a goal unattended for hours, and when they want to install Tenaz, set it up or check why it is not ready (tenaz doctor, tenaz demo); not for small edits or work that needs judgment at every step.
+description: Delegate a long, verifiable coding goal to Tenaz, which validates your bootstrap and drives a local model session by session until the goal is met, on its own branch. Use when the user asks to hand work to Tenaz or to a local model, or to run a goal unattended for hours, and when they want to install Tenaz, set it up or check why it is not ready (tenaz doctor, tenaz demo); not for small edits or work that needs judgment at every step.
 ---
 
 # Delegating a goal to Tenaz
 
-Tenaz runs a coding agent on a local model for hours: it plans the goal,
-splits it into tasks, verifies each one with a `verify` script it writes, and
-commits. You stay the one who decides what to build and whether the result
-is good enough. `tenaz --help` has the commands, flags and exit codes; this
+Prepare the brief and bootstrap yourself, then let Tenaz run a coding
+agent on a local model for hours to build the tasks, verify them and commit.
+Tenaz can also plan with the local model when you leave the bootstrap to it.
+You stay the one who decides what to build and whether the result is good
+enough. `tenaz --help` has the commands, flags and exit codes; this
 file is about the judgment around them. If a command named here is not in
 `tenaz --help`, the installed Tenaz is older than this skill: tell the user
 to update it the way they installed it.
@@ -90,8 +91,8 @@ names (README, "Any other ACP agent").
 
 ## Write the brief
 
-The brief is all the local model gets besides the code, and it is smaller
-than you. Read the code first, then write a brief that says:
+Inspect the project instructions, source, interfaces, dependencies and tests
+first. Write a brief that says:
 
 - the goal as observable behaviour: what a person can run and see when it is
   done;
@@ -100,11 +101,12 @@ than you. Read the code first, then write a brief that says:
 - constraints that are not obvious from the code: versions, platforms,
   performance limits, style rules that matter.
 
-Leave out the plan: Tenaz makes its own. Keep it to one page.
+Keep it to one page. Put the concrete plan in the bootstrap after `init`.
+Write the brief outside the repository so it does not dirty the checkout.
 
-## Run it
+## Initialise the run
 
-1. `tenaz init --project <repo> --brief brief.md --model <id> ...` from the
+1. `tenaz init --project <repo> --brief <brief-path> --model <id> ...` from the
    user's repository. In a repository with commits it works on a new branch in
    a worktree and prints that directory: pass it as `--project` from then on.
    `init` refuses uncommitted changes; ask the user before committing theirs.
@@ -112,12 +114,77 @@ Leave out the plan: Tenaz makes its own. Keep it to one page.
    speaks HTTP (repeat it for more; fx, OpenCode, Qwen Code or `--harness
    acp`, not Pi or dsh). The user starts that server; `tenaz run --no-mcp`
    drops the pinned ones.
-2. `tenaz run --project <dir>` in the background. Do not wait on it in the
+2. Before starting `run`, prepare the bootstrap below in the directory
+   `init` printed. For a repository with commits, confirm it with
+   `git worktree list`; do not guess the directory from the goal name. For a
+   new project, use the project directory `init` initialised.
+
+## Prepare the bootstrap
+
+Do this before the first `run`, while no runner is active. You write only
+the bootstrap, leaving implementation to the local model.
+
+1. Run `tenaz status --project <dir>` (text output). Read `Model`, any
+   `Role models` entry for `builder`, and `Context budget`. Confirm the
+   builder's model and configured context window from setup; with Pi,
+   account for the window taken from `models.json`. Do not size tasks until
+   these are known. Use the reported builder budget, not the full window.
+2. Read the run's `.tenaz/protocol.md` and `.tenaz/prompts/bootstrap.md`.
+   These pinned files define the current formats. In an existing project,
+   follow the existing-project rules: map only the affected code, keep the
+   current stack, and plan only as many tasks as the change needs.
+3. Write `.tenaz/spec.md` with one observable requirement per `- R1: ...`
+   line. Preserve the brief's constraints. Use `(manual: why)` for a
+   requirement that needs human judgment. Write `.tenaz/map.md` with the
+   affected files, their purpose and key exports, and exact run and test
+   commands. Distinguish existing code from planned changes.
+4. Write the executable `verify` and short `.tenaz/notes/BOOTSTRAP.md`.
+   In an existing project use `.tenaz/verify`, wrapping its own test suite;
+   put new behaviour checks in that suite. In a new project use root
+   `verify`, with checks in `checks/`. Follow the protocol's `--all`,
+   `--task <ID>`, exit code and final JSON contract. Bootstrap `T000.`
+   checks must test something true now: existing tests or an actual tooling
+   smoke check. Run `--all` twice from the run directory with
+   `CI=1 NO_COLOR=1`; both runs must pass with the same final JSON.
+   This proves only the initial baseline. Future requirements stay in
+   task acceptance criteria; builders add their real `<TASK>.` checks
+   while implementing them. Do not add constant-success checks, count
+   future checks as passed, or weaken existing tests to get a green baseline.
+5. Write `.tenaz/tasks/T001.md`, `T002.md`, and so on in the protocol's
+   frontmatter and `Goal`, `Acceptance`, `Context` format. Start at
+   `status: todo`; list requirement IDs in `requires`, real prerequisites
+   in `depends`, and concrete source and test paths in `files`. Cover every
+   non-manual requirement. In `Context`, resolve design decisions now:
+   name functions, interfaces and data shapes, error behaviour, dependencies
+   and versions, and which earlier task supplies what. Give exact acceptance
+   behaviour and the check IDs the builder will add. Do not leave the local
+   model to choose the stack, architecture or interfaces you can settle.
+   Keep shared decisions in `BOOTSTRAP.md` (about 15 lines).
+6. Estimate each card's required reading and writing, including called code
+   and tests. Keep it within about two thirds of the builder context budget
+   (roughly four characters per token), leaving room for prompts, tool
+   output and turns. Aim for 1–4 files, about 50–300 changed lines and at
+   most three acceptance bullets; split larger work before starting. For a
+   new project, reach a minimal end-to-end version early.
+7. Check requirement coverage, dependency order and the baseline once more.
+   Leave `run.json`, `journal.jsonl`, pinned prompts and protocol untouched.
+   Do not set phases, checkpoints or task statuses to skip validation.
+
+## Run it
+
+1. `tenaz run --project <dir>` in the background. Do not wait on it in the
    foreground and do not start a second one on the same project.
-3. Check `tenaz status --project <dir> --json` now and then, not in a tight
+2. Check `tenaz status --project <dir> --json` now and then, not in a tight
    loop: sessions take minutes. `state` says `running`, `paused`, `blocked`,
    `interrupted`, `complete` or `complete_with_gaps`.
-4. When `run` exits, its code says how it ended (`tenaz run --help`).
+3. When `run` exits, its code says how it ended (`tenaz run --help`).
+
+`run` still performs its normal preflight and validates each bootstrap
+step. A valid prepared step opens no bootstrap session; with all three
+valid, the local model starts building after preflight. Missing or invalid
+files follow the existing local bootstrap repair and retry path, which can
+block. To let the local model prepare the whole bootstrap instead, skip
+"Prepare the bootstrap" and run immediately after `init`.
 
 When it is blocked, read `blocked_reason` and the newest notes in
 `.tenaz/notes/`. A reason that starts `prompt too large:` names the

@@ -50,8 +50,9 @@ built, the checks, the engine numbers and what went wrong):
 
 You write the goal as a short brief. The **bootstrap** turns it into
 numbered requirements, a `verify` script and a list of small tasks, in three
-sessions, one step each, so no session has to plan everything at once. Each
-task then gets its own session: the agent builds it, Tenaz runs `verify`,
+local sessions, one step each, unless an agent has already prepared valid
+bootstrap files (see [Delegate from another agent](#delegate-from-another-agent)).
+Each task then gets its own session: the agent builds it, Tenaz runs `verify`,
 and a fresh session of the same model, or of the one `--model-for` gives
 the reviewer, reviews the diff. A review asks for changes only for a
 problem that matters for the requirements. A task that
@@ -278,13 +279,32 @@ it best; a run takes hours.
 
 A frontier agent (Claude Code, Codex and the like) can hand a long goal to
 Tenaz, keep working on other things, and check the result when the run is
-done. The local model does the hours of work; the frontier agent writes the
-brief and reviews what comes back.
+done. The frontier agent inspects the project, writes the brief, runs
+`tenaz init`, and prepares the bootstrap in the worktree `init` prints:
+`.tenaz/spec.md`, `.tenaz/map.md`, executable `verify` (`.tenaz/verify` in
+an existing project), `.tenaz/notes/BOOTSTRAP.md` and `.tenaz/tasks/*.md`.
+Before sizing cards it reads the builder's model and context budget with
+`tenaz status --project <worktree>`. Cards pin files, interfaces, decisions,
+dependencies and acceptance checks so the local model can build them.
+
+Then it starts `tenaz run --project <worktree>`. Tenaz performs preflight
+and validates every bootstrap step; valid steps need no local bootstrap
+session. An invalid step follows the normal local repair path and can
+block. No ledger edits or extra flags are needed. Leave the files unwritten
+to keep the local bootstrap flow. The frontier agent reviews the result.
+
+The initial `verify --all` must pass twice with identical final JSON,
+checking only a real baseline: existing tests or tooling smoke checks.
+It does not prove future requirements. Builders add those checks as they
+implement each task; do not use placeholder checks that always pass.
+The handoff has been tried with real tools; full completion and any benefit
+to construction remain [unverified](docs/COMPATIBILITY.md#known-gaps).
 
 Tenaz ships a companion [Agent Skill](skills/tenaz/SKILL.md) for that.
 It tells the agent how to install and set up Tenaz with `tenaz doctor`,
-when to delegate and when not to, how to write the brief, how to start and
-follow the run, and how to check the result before reporting it. Install
+when to delegate and when not to, how to write the brief and bootstrap,
+how to start and follow the run, and how to check the result before
+reporting it. Install
 it with [skills](https://skills.sh), which asks which agents to add it to:
 
 ```bash

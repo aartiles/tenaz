@@ -6,6 +6,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Tenaz skill now has the delegating agent prepare the brief and full
+  bootstrap, sized to the local builder model's context budget. The runner
+  validates those files before building, using its existing path that skips
+  valid bootstrap steps. Local bootstrap remains available.
+
 ## [0.7.0] - 2026-11-11
 
 ### Added
