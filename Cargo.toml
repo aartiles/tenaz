@@ -20,7 +20,7 @@ tenaz-pi = { path = "crates/pi" }
 tenaz-mcp = { path = "crates/mcp" }
 
 agent-client-protocol = "3.4"
-rmcp = { version = "3.5", features = ["server", "transport-streamable-http-server", "macros"] }
+rmcp = { version = "3.9", features = ["server", "transport-streamable-http-server", "macros"] }
 tokio = { version = "1.53", features = ["full"] }
 tokio-util = "0.7"
 axum = "0.8"

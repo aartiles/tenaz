@@ -61,6 +61,15 @@ uses [Semantic Versioning](https://semver.org/).
   one, the builder follows the spec. In two runs a check of a game's
   first frame opened a door first, and only the final review caught it.
 
+### Security
+
+- rmcp, the MCP library behind the media server, goes from 3.5.1 to 3.9.0
+  for RUSTSEC-2026-0461: an unbounded tool cache in its HTTP server, which
+  only this machine can reach (the server listens on 127.0.0.1). The
+  upgrade also clears RUSTSEC-2026-0457 (the OAuth client) and
+  RUSTSEC-2026-0462 (the HTTP client), which Tenaz does not ship; only its
+  tests use the client.
+
 ## [0.6.0] - 2026-11-08
 
 ### Added
