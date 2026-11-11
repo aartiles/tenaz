@@ -39,6 +39,7 @@ Pure modules, each unit-tested without I/O:
 | `leftover` | Which processes `verify` or a heavy job left running in a session of their own, from `ps` and `lsof` output, and the sweep that stops them (ADR 0031). |
 | `watchdog` | Loop, repeat, idle, big-output, context, turn, compaction, tool-time, provider-error and outside-write rules; emits steer, abort or interrupt (stop the turn, prompt again). |
 | `novelty` | Whether a tool call reads something new for the idle rule: a read tool's new arguments, or a path a shell command or another tool's `path` names for the first time (ADR 0029). |
+| `mcp_servers` | The user's own MCP servers (`--mcp name=url`): parsing them, and which harnesses are given them (ADR 0032). |
 | `mesh` | The `generate_3d` tool's paths, which must stay inside the project, what counts as a GLB, and 3D model names (ADR 0020). |
 | `write_scope` | Where a session may write without the sandbox, and whether a write tool's target is outside it (ADR 0008). |
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal, refused request). |

@@ -251,6 +251,8 @@ fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         supports_images: config.supports_images(),
         effort: tenaz_acp::dsh::effort(config.thinking.as_deref()).map(str::to_owned),
     };
+    // The user's own servers never get here: init and run refuse them for
+    // dsh (tenaz_core::mcp_servers::check_servers).
     if !inputs.mcp_endpoints.is_empty() {
         tracing::warn!("dsh is not given the media tools");
     }
@@ -404,11 +406,12 @@ mod tests {
         build_with(dir, kind, &extras).map(|_| ())
     }
 
-    /// What a test gives the harness besides its kind: skills, the
-    /// sandbox launcher (`wrapper`) and the user's caches.
+    /// What a test gives the harness besides its kind: skills, MCP
+    /// servers, the sandbox launcher (`wrapper`) and the user's caches.
     #[derive(Default)]
     struct Extras<'a> {
         skills: &'a [SkillPin],
+        mcp_endpoints: &'a [McpEndpoint],
         wrapper: &'a [String],
         caches: &'a [(String, String)],
     }
@@ -444,7 +447,7 @@ mod tests {
             options: &options,
             media_timeout: Duration::from_secs(60),
             base_url: "http://127.0.0.1:4001/v1".into(),
-            mcp_endpoints: &[],
+            mcp_endpoints: extras.mcp_endpoints,
             skills: extras.skills,
             agent_skills: false,
             verify_path: ".tenaz/verify",
@@ -642,6 +645,40 @@ mod tests {
         let session = json(&file);
         assert_eq!(session["model"], "m");
         assert_eq!(session["baseUrl"], "http://127.0.0.1:4001/v1");
+    }
+
+    /// A server of the user's own reaches each agent's configuration with
+    /// the media time limit, as the media server does (ADR 0032).
+    #[test]
+    fn the_run_s_mcp_servers_reach_each_agent_s_configuration() {
+        let endpoints = [McpEndpoint {
+            name: "blender".into(),
+            url: "http://127.0.0.1:9191/".into(),
+        }];
+        let extras = Extras {
+            mcp_endpoints: &endpoints,
+            ..Extras::default()
+        };
+        let configured = |kind, file: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            build_with(dir.path(), kind, &extras).unwrap();
+            json(&Project::new(dir.path()).private_dir().join(file))
+        };
+        let fx = configured(HarnessKind::Fx, "fx-home/.fx/mcp.json");
+        assert_eq!(fx["mcp"]["blender"]["url"], "http://127.0.0.1:9191/");
+        assert_eq!(fx["mcp"]["blender"]["operation_timeout_ms"], 60_000);
+        let opencode = configured(HarnessKind::OpenCode, "opencode-home/opencode.json");
+        assert_eq!(opencode["mcp"]["blender"]["url"], "http://127.0.0.1:9191/");
+        let qwen = configured(HarnessKind::Qwen, "qwen-home/.qwen/settings.json");
+        assert_eq!(
+            qwen["mcpServers"]["blender"]["httpUrl"],
+            "http://127.0.0.1:9191/"
+        );
+        let acp = configured(HarnessKind::Acp, "acp-session.json");
+        assert_eq!(
+            acp["mcpServers"],
+            serde_json::json!([{ "name": "blender", "url": "http://127.0.0.1:9191/" }])
+        );
     }
 
     #[test]

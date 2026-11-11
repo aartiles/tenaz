@@ -12,6 +12,7 @@ pub mod job;
 pub mod lease;
 pub mod ledger;
 pub mod leftover;
+pub mod mcp_servers;
 pub mod memory;
 pub mod mesh;
 pub mod metrics;

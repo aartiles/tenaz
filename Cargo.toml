@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.91"
 repository = "https://github.com/aartiles/tenaz"
@@ -20,7 +20,7 @@ tenaz-pi = { path = "crates/pi" }
 tenaz-mcp = { path = "crates/mcp" }
 
 agent-client-protocol = "3.4"
-rmcp = { version = "3.5", features = ["server", "transport-streamable-http-server", "macros"] }
+rmcp = { version = "3.9", features = ["server", "transport-streamable-http-server", "macros"] }
 tokio = { version = "1.53", features = ["full"] }
 tokio-util = "0.7"
 axum = "0.8"

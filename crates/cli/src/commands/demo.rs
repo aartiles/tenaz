@@ -51,7 +51,8 @@ pub(crate) async fn execute(project: PathBuf) -> anyhow::Result<ExitCode> {
     else {
         anyhow::bail!("the demo's run line did not parse as run");
     };
-    let code = run::execute(*args).await?;
+    // Boxed: the run's future is too large to keep inline in the demo's.
+    let code = Box::pin(run::execute(*args)).await?;
     let look = [
         (format!("tenaz status --project {dir}"), "how it ended"),
         (format!("git -C {dir} log --oneline"), "one commit per step"),
