@@ -4,6 +4,7 @@
 use crate::ledger::{Inflight, JournalRecord, SessionRecord};
 use crate::memory::MemoryWindow;
 use crate::metrics::{RequestRecord, engine_summary};
+use crate::orchestrator::phases::PlannerSession;
 use crate::orchestrator::{RunError, Runner};
 use crate::ownership;
 use crate::ports::{SessionModel, Vcs};
@@ -53,7 +54,14 @@ impl Runner {
                     .task
                     .as_ref()
                     .filter(|_| started.role == Role::Builder),
-                replan_before: started.ctx.replan_before.as_ref(),
+                planner: started
+                    .ctx
+                    .planner_before
+                    .as_ref()
+                    .map(|before| PlannerSession {
+                        role: started.role,
+                        before,
+                    }),
             })
             .await?;
         let left = self.after_harness(&started, requests).await?;

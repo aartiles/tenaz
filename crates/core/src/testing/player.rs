@@ -280,6 +280,10 @@ impl Player {
             self.write_check(task).await;
             return self.finish("Added the check.");
         }
+        if prompt.contains(crate::orchestrator::INVALID_CARDS) {
+            let named = format!("- T005: amends `{}`", super::UNDECLARED);
+            return self.fix_invalid_cards(prompt.contains(&named)).await;
+        }
         if prompt.contains(crate::orchestrator::REFUSED_REOPENS) {
             return self.drop_refused_reopen().await;
         }

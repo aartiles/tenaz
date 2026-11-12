@@ -10,8 +10,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, resume, run};
 use crate::ledger::{JournalRecord, Phase, TaskOutcome};
+use crate::orchestrator::INVALID_CARDS_NOTE;
 use crate::project::Project;
-use crate::testing::{Routing, ScriptedConflict, ScriptedHarness, VirtualClock};
+use crate::testing::{Routing, ScriptedConflict, ScriptedHarness, UNDECLARED, VirtualClock};
 
 /// Plays the fake goal with T003's first builder declaring a conflict with
 /// `check`; the project, its log and the work directory.
@@ -220,6 +221,24 @@ fn accepted_t005(project: &Project) -> bool {
     })
 }
 
+/// The labels of the sessions whose watchdog noted `kind`, once per note.
+fn noted(project: &Project, kind: &str) -> Vec<String> {
+    project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) => Some(s),
+            _ => None,
+        })
+        .flat_map(|s| {
+            s.watchdog
+                .iter()
+                .filter(|e| e.kind == kind)
+                .map(|_| s.label.clone())
+        })
+        .collect()
+}
+
 fn rejected(project: &Project) -> bool {
     project
         .journal()
@@ -366,6 +385,19 @@ async fn a_resumed_run_with_no_task_ready_replans_again() {
 async fn the_next_replan_is_told_why_the_last_was_rejected() {
     let (_work, project, log) =
         declaring_routed("T001.exists", Routing::AmendUndeclaredFirst).await;
+    let first_replan = project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-replan") => Some(s.label.clone()),
+            _ => None,
+        })
+        .expect("a replan ran");
+    assert_eq!(
+        noted(&project, INVALID_CARDS_NOTE),
+        [first_replan],
+        "the first replan is told once, then left as it was: {log}"
+    );
     assert!(rejected(&project), "{log}");
     assert!(accepted_t005(&project), "{log}");
     assert_eq!(
@@ -377,7 +409,7 @@ async fn the_next_replan_is_told_why_the_last_was_rejected() {
     let told = format!("## {}", crate::orchestrator::REJECTED_REPLAN_TITLE);
     assert_eq!(replans.matches(&told).count(), 1, "{replans}");
     assert!(
-        replans.contains("- T005: amends `T002.exists`"),
+        replans.contains(&format!("- T005: amends `{UNDECLARED}`")),
         "{replans}"
     );
 }
@@ -439,6 +471,39 @@ async fn a_rejection_out_of_the_recent_journal_still_reaches_the_replan() {
     assert_eq!(
         project.load_ledger().unwrap().phase,
         Phase::Complete,
+        "{log}"
+    );
+}
+
+/// A replan that leaves cards Tenaz would throw away is told why before
+/// it ends (ADR 0033): here it amends a check no conflict names, fixes it
+/// when told, and its cards are kept the first time.
+#[tokio::test(start_paused = true)]
+async fn a_replan_fixes_its_cards_when_told_before_it_ends() {
+    let (_work, project, log) =
+        declaring_routed("T001.exists", Routing::AmendUndeclaredFixedWhenTold).await;
+    let asked = noted(&project, INVALID_CARDS_NOTE);
+    assert!(
+        matches!(asked.as_slice(), [label] if label.ends_with("-replan")),
+        "{asked:?}"
+    );
+    assert!(!rejected(&project), "{log}");
+    assert!(accepted_t005(&project), "{log}");
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+}
+
+/// A replan whose cards are fine is not told they are invalid.
+#[tokio::test(start_paused = true)]
+async fn a_replan_with_valid_cards_is_not_told_they_are_invalid() {
+    let (_work, project, log) = declaring_routed("T001.exists", Routing::Reopen).await;
+    assert!(accepted_t005(&project), "no replan was kept: {log}");
+    assert_eq!(
+        noted(&project, INVALID_CARDS_NOTE),
+        Vec::<String>::new(),
         "{log}"
     );
 }

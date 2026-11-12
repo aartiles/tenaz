@@ -324,6 +324,17 @@ impl Project {
     }
 
     pub fn load_backlog(&self) -> LoadedBacklog {
+        let mut loaded = self.load_cards();
+        loaded.conflicts = self.conflicts(&loaded.backlog);
+        loaded
+            .errors
+            .extend(conflict::amend_errors(&loaded.backlog, &loaded.conflicts));
+        loaded
+    }
+
+    /// The task cards and the problems in them, before their `amends` are
+    /// checked against the conflicts that stand (`load_backlog` does).
+    pub(crate) fn load_cards(&self) -> LoadedBacklog {
         let dir = self.tasks_dir();
         let Ok(entries) = fs::read_dir(&dir) else {
             return LoadedBacklog {
@@ -341,15 +352,10 @@ impl Project {
             })
             .collect();
         files.sort();
-        let mut loaded = Backlog::load(
+        Backlog::load(
             files.iter().map(|(n, t)| (n.as_str(), t.as_str())),
             &self.requirements(),
-        );
-        loaded.conflicts = self.conflicts(&loaded.backlog);
-        loaded
-            .errors
-            .extend(conflict::amend_errors(&loaded.backlog, &loaded.conflicts));
-        loaded
+        )
     }
 
     /// The conflicts that stand (`Conflict::stands_in`, ADR 0009 and 0018):

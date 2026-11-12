@@ -24,8 +24,10 @@ mod record;
 mod requests;
 
 pub(crate) use harness::HarnessRun;
+#[cfg(test)]
+pub(crate) use harness::INVALID_CARDS_NOTE;
 #[cfg(any(test, feature = "testing"))]
-pub(crate) use harness::REFUSED_REOPENS;
+pub(crate) use harness::{INVALID_CARDS, REFUSED_REOPENS};
 use reasons::{PromptLimit, give_up_reason, retry_notice, retry_reason};
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
@@ -40,11 +42,12 @@ pub(crate) struct SessionCtx {
     pub turns: Option<u32>,
     /// A card's token budget; the run's default otherwise.
     pub context_tokens: Option<u64>,
-    /// A replan's backlog from before it. A blocked task it sets back to
-    /// `todo` that Tenaz would block again is pointed out before the
-    /// session ends, once per harness session: a continuation or a retry
-    /// of the replan is asked again.
-    pub replan_before: Option<Backlog>,
+    /// A split's or replan's backlog from before it. Cards Tenaz would
+    /// throw away, and a blocked task a replan sets back to `todo` that
+    /// Tenaz would block again, are pointed out before the session ends,
+    /// once each per harness session: a continuation or a retry of the
+    /// session is asked again.
+    pub planner_before: Option<Backlog>,
 }
 
 /// A finished session: its journal record plus the raw metrics.

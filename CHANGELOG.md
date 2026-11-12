@@ -12,6 +12,9 @@ uses [Semantic Versioning](https://semver.org/).
   bootstrap, sized to the local builder model's context budget. The runner
   validates those files before building, using its existing path that skips
   valid bootstrap steps. Local bootstrap remains available.
+- A split or replan that leaves cards Tenaz would throw away is told the
+  errors before it ends, and gets one more turn to fix them (ADR 0033).
+  Cards still wrong after that are thrown away, as before.
 - A replan is now told why the last replan was rejected: its briefing
   lists the errors under "Why the last replan was rejected", until a
   replan is accepted. Before, it saw at most a bare `replan-rejected`

@@ -23,7 +23,7 @@ mod review;
 mod task;
 mod task_loop;
 
-pub(crate) use planner::refused_reopens_of;
+pub(crate) use planner::{PlannerSession, refused_reopens_of};
 
 /// What a session's prompt adds to the role prompt, spec and map.
 #[derive(Default)]
@@ -223,7 +223,7 @@ impl Runner {
 
 /// Cuts `text` to the whole lines that fit in `limit` bytes and says how
 /// many lines were left out, for a list such as a diff's file stat.
-fn clip_lines(text: &str, limit: usize) -> String {
+pub(crate) fn clip_lines(text: &str, limit: usize) -> String {
     if text.len() <= limit {
         return text.to_owned();
     }

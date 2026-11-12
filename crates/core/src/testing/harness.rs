@@ -314,6 +314,10 @@ pub struct ScriptedConflict {
     pub routing: Routing,
 }
 
+/// A check of a done task that the script's conflicts never name: the
+/// `amends` a replan routed `AmendUndeclaredFirst` writes first.
+pub const UNDECLARED: &str = "T002.exists";
+
 /// What the scripted replan does with the blocked task.
 #[derive(Clone, Copy, Debug)]
 pub enum Routing {
@@ -336,6 +340,10 @@ pub enum Routing {
     /// last replan was rejected" has `T005` amend a check no conflict
     /// names, and is rejected.
     AmendUndeclaredFirst,
+    /// As `AmendUndeclaredFirst`, but the replan fixes `T005`'s `amends`
+    /// and reopens the task when told, before it ends, that its cards
+    /// would be thrown away (ADR 0033).
+    AmendUndeclaredFixedWhenTold,
 }
 
 /// The first builder session of `task`, or every one, writes its job

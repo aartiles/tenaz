@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::backlog::Backlog;
 use crate::metrics::RequestRecord;
-use crate::orchestrator::phases::refused_reopens_of;
+use crate::orchestrator::phases::{PlannerSession, clip_lines, refused_reopens_of};
 use crate::orchestrator::{RunError, Runner};
 use crate::ports::{Clock, PermissionDecision, Session, SessionModel, SessionSpec};
+use crate::role::Role;
 use crate::session::{SessionEvent, SessionMetrics};
 use crate::task::TaskId;
 use crate::verify::retarget;
@@ -47,10 +47,12 @@ pub(crate) struct HarnessRun<'a> {
     /// `./verify --task` runs no passing check of it gets one more prompt
     /// asking for them.
     pub own_checks: Option<&'a TaskId>,
-    /// A replan's backlog from before it: a session that answered every
-    /// prompt having set a blocked task back to `todo` that Tenaz would
-    /// block again gets one more prompt saying so (ADR 0018).
-    pub replan_before: Option<&'a Backlog>,
+    /// A split's or replan's role and backlog from before it: a session
+    /// that answered every prompt having left cards Tenaz would throw away
+    /// gets one more prompt naming why (ADR 0033), and a replan that set a
+    /// blocked task back to `todo` that Tenaz would block again gets one
+    /// more prompt saying so (ADR 0018).
+    pub planner: Option<PlannerSession<'a>>,
 }
 
 /// What the session loop does after an event or a wake-up.
@@ -68,6 +70,14 @@ enum Woke {
     Killed,
 }
 
+/// A planner session and the prompts it was already sent after answering
+/// every prompt; each is sent at most once per harness session.
+struct PlannerFollowUps<'a> {
+    session: PlannerSession<'a>,
+    asked_cards: bool,
+    asked_reopens: bool,
+}
+
 /// A running session and what the loop keeps about it.
 struct SessionLoop<'a> {
     runner: &'a Runner,
@@ -76,8 +86,8 @@ struct SessionLoop<'a> {
     /// Sent so far.
     prompt_index: usize,
     own_checks: Option<&'a TaskId>,
-    /// Taken by the one prompt about refused reopens.
-    replan_before: Option<&'a Backlog>,
+    /// A planner session's follow-ups (`HarnessRun::planner`).
+    planner: Option<PlannerFollowUps<'a>>,
     session: Box<dyn Session>,
     watchdog: Watchdog,
     clock: Arc<dyn Clock>,
@@ -141,7 +151,11 @@ impl Runner {
             prompts: run.prompts,
             prompt_index: 0,
             own_checks: run.own_checks,
-            replan_before: run.replan_before,
+            planner: run.planner.map(|session| PlannerFollowUps {
+                session,
+                asked_cards: false,
+                asked_reopens: false,
+            }),
             session,
             watchdog,
             clock,
@@ -208,7 +222,11 @@ impl SessionLoop<'_> {
     /// judges it then (`refused_reopens_of`). `None` when it set none, or
     /// after the first time in this session.
     fn refused_reopens_prompt(&mut self) -> Option<String> {
-        let before = self.replan_before.take()?;
+        let planner = self.planner.as_mut()?;
+        if planner.asked_reopens || planner.session.role != Role::Replan {
+            return None;
+        }
+        let before = planner.session.before;
         let project = &self.runner.project;
         let after = project.load_backlog().backlog;
         let refused: Vec<String> = refused_reopens_of(before, &after, |b| project.conflicts(b))
@@ -218,6 +236,7 @@ impl SessionLoop<'_> {
         if refused.is_empty() {
             return None;
         }
+        planner.asked_reopens = true;
         let refused = refused.join(", ");
         self.runner.log(&format!(
             "  {}: {refused} set back to todo, but Tenaz would block each again; asking once more",
@@ -226,12 +245,42 @@ impl SessionLoop<'_> {
         Some(refused_reopens(&refused))
     }
 
-    /// The one more prompt a session that answered every prompt gets, with
-    /// the watchdog's name for it: a builder's missing checks, or a
-    /// replan's refused reopens. A session has at most one of the two.
+    /// The prompt for a split or replan session that answered every prompt
+    /// having left cards Tenaz would throw away when it ends: the errors,
+    /// judged as Tenaz judges them then (`Runner::planner_errors`), so the
+    /// session fixes them while it still holds its plan (ADR 0033). `None`
+    /// when the cards are fine, or after the first time in this session.
+    fn invalid_cards_prompt(&mut self) -> Option<String> {
+        let planner = self.planner.as_mut()?;
+        if planner.asked_cards {
+            return None;
+        }
+        let (_, errors) = self.runner.planner_errors(planner.session);
+        if errors.is_empty() {
+            return None;
+        }
+        planner.asked_cards = true;
+        let limit = self.runner.params.note_clip_bytes;
+        self.runner.log(&format!(
+            "  {}: its cards would be thrown away ({} errors: {}); asking once more",
+            self.label,
+            errors.len(),
+            clip_lines(&errors.join("; "), limit)
+        ));
+        Some(invalid_cards(&errors, limit))
+    }
+
+    /// The next prompt a session that answered every prompt gets, with the
+    /// watchdog's name for it: a builder's missing checks; a planner's
+    /// cards Tenaz would throw away; a replan's refused reopens. A builder
+    /// gets at most the first; a planner may get the other two, one after
+    /// the other.
     async fn follow_up(&mut self) -> Option<(&'static str, String)> {
         if let Some(message) = self.own_checks_prompt().await {
             return Some(("own-checks", message));
+        }
+        if let Some(message) = self.invalid_cards_prompt() {
+            return Some((INVALID_CARDS_NOTE, message));
         }
         self.refused_reopens_prompt()
             .map(|message| ("refused-reopens", message))
@@ -467,6 +516,24 @@ fn no_own_checks(task: &TaskId, summary: &str) -> String {
     )
 }
 
+/// What the prompt about cards Tenaz would throw away says first; the
+/// scripted harness knows it by this.
+pub(crate) const INVALID_CARDS: &str =
+    "When this session ends, Tenaz throws away all your changes to the task cards";
+
+/// The watchdog's name for that prompt in the session's record.
+pub(crate) const INVALID_CARDS_NOTE: &str = "invalid-cards";
+
+/// The prompt for a planner session whose cards have `errors`, the list
+/// cut to `limit` bytes.
+fn invalid_cards(errors: &[String], limit: usize) -> String {
+    let listed: Vec<String> = errors.iter().map(|e| format!("- {e}")).collect();
+    format!(
+        "[orchestrator] {INVALID_CARDS}, as they stand now, because:\n{}\nFix each, keep the rest of your plan, update your notes, and stop.",
+        clip_lines(&listed.join("\n"), limit)
+    )
+}
+
 /// What the prompt about refused reopens says first; the scripted harness
 /// knows it by this.
 pub(crate) const REFUSED_REOPENS: &str = "when this session ends Tenaz blocks each again";
@@ -533,5 +600,27 @@ fn describe(action: &Action) -> String {
         Action::Interrupt { .. } => {
             "tool call over its time limit; stopped, the session goes on".to_owned()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each error is on a line of its own, and a long list is cut.
+    #[test]
+    fn the_invalid_cards_prompt_lists_each_error() {
+        let errors = [
+            "card T002 was deleted".to_owned(),
+            "T005: amends `T001.x`".to_owned(),
+        ];
+        let prompt = invalid_cards(&errors, 1_000);
+        assert!(
+            prompt.contains("because:\n- card T002 was deleted\n- T005: amends `T001.x`\n"),
+            "{prompt}"
+        );
+        let clipped = invalid_cards(&errors, 30);
+        assert!(clipped.contains("- card T002 was deleted"), "{clipped}");
+        assert!(!clipped.contains("T001.x"), "{clipped}");
     }
 }

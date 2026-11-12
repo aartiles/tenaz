@@ -24,9 +24,13 @@ pub use init::{InitOptions, Templates, init};
 pub(crate) use phases::{CONFLICTS_TITLE, REJECTED_REPLAN_TITLE};
 pub use preflight::TOOL_PROBE_FILE;
 pub use sampler::Sampler;
-/// The scripted harness knows the prompt about refused reopens by it.
+/// Scenarios find the prompt about invalid cards in a session record by it.
+#[cfg(test)]
+pub(crate) use session::INVALID_CARDS_NOTE;
+/// The scripted harness knows the prompts about invalid cards and refused
+/// reopens by these.
 #[cfg(any(test, feature = "testing"))]
-pub(crate) use session::REFUSED_REOPENS;
+pub(crate) use session::{INVALID_CARDS, REFUSED_REOPENS};
 pub use status::{TOOL_REPAIRS, status_json, status_text};
 
 use crate::lease::LeaseError;
