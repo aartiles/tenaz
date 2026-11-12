@@ -9,6 +9,7 @@ use crate::metrics::RequestRecord;
 use crate::orchestrator::phases::{PlannerSession, clip_lines};
 use crate::orchestrator::{RunError, Runner};
 use crate::ports::{Clock, PermissionDecision, Session, SessionModel, SessionSpec};
+use crate::project::conflict_path;
 use crate::role::Role;
 use crate::session::{SessionEvent, SessionMetrics};
 use crate::task::TaskId;
@@ -45,8 +46,9 @@ pub(crate) struct HarnessRun<'a> {
     pub persist: bool,
     /// A builder's task: a session that answered every prompt while
     /// `./verify --task` runs no passing check of it gets one more prompt
-    /// asking for them.
-    pub own_checks: Option<&'a TaskId>,
+    /// asking for them; one that left a conflict file while its attempt
+    /// would pass gets one more saying the file does not stand (ADR 0034).
+    pub builder_task: Option<&'a TaskId>,
     /// A split's or replan's role and backlog from before it: a session
     /// that answered every prompt having left cards Tenaz would throw away
     /// gets one more prompt naming why (ADR 0033), and a replan that set a
@@ -70,6 +72,14 @@ enum Woke {
     Killed,
 }
 
+/// A builder session's task and the prompts it was already sent after
+/// answering every prompt; each is sent at most once per harness session.
+struct BuilderFollowUps<'a> {
+    task: &'a TaskId,
+    asked_checks: bool,
+    asked_conflict: bool,
+}
+
 /// A planner session and the prompts it was already sent after answering
 /// every prompt; each is sent at most once per harness session.
 struct PlannerFollowUps<'a> {
@@ -85,7 +95,8 @@ struct SessionLoop<'a> {
     prompts: &'a [String],
     /// Sent so far.
     prompt_index: usize,
-    own_checks: Option<&'a TaskId>,
+    /// A builder session's follow-ups (`HarnessRun::builder_task`).
+    builder: Option<BuilderFollowUps<'a>>,
     /// A planner session's follow-ups (`HarnessRun::planner`).
     planner: Option<PlannerFollowUps<'a>>,
     session: Box<dyn Session>,
@@ -150,7 +161,11 @@ impl Runner {
             label: run.label,
             prompts: run.prompts,
             prompt_index: 0,
-            own_checks: run.own_checks,
+            builder: run.builder_task.map(|task| BuilderFollowUps {
+                task,
+                asked_checks: false,
+                asked_conflict: false,
+            }),
             planner: run.planner.map(|session| PlannerFollowUps {
                 session,
                 asked_cards: false,
@@ -192,17 +207,55 @@ impl SessionLoop<'_> {
         Some(actions)
     }
 
-    /// The prompt for a builder session that answered every prompt while
-    /// `./verify --task` runs no passing check of its task; `None` when it
-    /// does, or after the first time. The attempt would fail on that alone,
-    /// and the session still holds what it learned, so it adds them now.
-    /// A builder that declared a conflict stopped as it was told: asking it
-    /// for a passing check would talk it out of the conflict (ADR 0009).
-    async fn own_checks_prompt(&mut self) -> Option<String> {
-        let task = self.own_checks.take()?;
+    /// The next prompt for a builder session that answered every prompt:
+    /// about the conflict file of its task, when it left one; else about
+    /// its missing checks. A builder that declared a conflict is never
+    /// asked for checks: asking it for a passing check would talk it out
+    /// of the conflict (ADR 0009).
+    async fn builder_follow_up(&mut self) -> Option<(&'static str, String)> {
+        let task = self.builder.as_ref()?.task;
         if self.runner.project.conflict_text(task.as_str()).is_some() {
+            return self
+                .passing_conflict_prompt(task)
+                .await
+                .map(|message| (PASSING_CONFLICT_NOTE, message));
+        }
+        self.own_checks_prompt(task)
+            .await
+            .map(|message| ("own-checks", message))
+    }
+
+    /// The prompt for a builder that left a conflict file of `task` while
+    /// its attempt would pass as Tenaz judges it (`Runner::verify_attempt`):
+    /// a conflict is read only when the attempt fails, so the file does not
+    /// stand, and the builder is told while it still holds its work (ADR
+    /// 0034). `None` when the attempt would fail, so the conflict is read,
+    /// or after the first time in this session.
+    async fn passing_conflict_prompt(&mut self, task: &TaskId) -> Option<String> {
+        if self.builder.as_ref()?.asked_conflict {
             return None;
         }
+        if self.runner.verify_attempt(task).await.failure.is_some() {
+            return None;
+        }
+        self.builder.as_mut()?.asked_conflict = true;
+        self.runner.log(&format!(
+            "  {}: {} left while the attempt passes, so it does not stand; asking once more",
+            self.label,
+            conflict_path(task.as_str())
+        ));
+        Some(passing_conflict(task))
+    }
+
+    /// The prompt for a builder session while `./verify --task` runs no
+    /// passing check of `task`: the attempt would fail on that alone, and
+    /// the session still holds what it learned, so it adds them now. `None`
+    /// when it does, or after the first time in this session.
+    async fn own_checks_prompt(&mut self, task: &TaskId) -> Option<String> {
+        if self.builder.as_ref()?.asked_checks {
+            return None;
+        }
+        self.builder.as_mut()?.asked_checks = true;
         let own = self.runner.run_verify(&["--task", task.as_str()]).await;
         if own.passed() > 0 {
             return None;
@@ -259,13 +312,13 @@ impl SessionLoop<'_> {
     }
 
     /// The next prompt a session that answered every prompt gets, with the
-    /// watchdog's name for it: a builder's missing checks; a planner's
-    /// cards Tenaz would throw away; a replan's refused reopens. A builder
-    /// gets at most the first; a planner may get the other two, one after
+    /// watchdog's name for it: a builder's conflict that does not stand, or
+    /// its missing checks; a planner's cards Tenaz would throw away; a
+    /// replan's refused reopens. A planner may get the last two, one after
     /// the other.
     async fn follow_up(&mut self) -> Option<(&'static str, String)> {
-        if let Some(message) = self.own_checks_prompt().await {
-            return Some(("own-checks", message));
+        if let Some(follow_up) = self.builder_follow_up().await {
+            return Some(follow_up);
         }
         self.planner_follow_up()
     }
@@ -497,6 +550,22 @@ fn explain_early_end(metrics: &mut SessionMetrics, code: Option<i32>, stderr_log
 fn no_own_checks(task: &TaskId, summary: &str) -> String {
     format!(
         "[orchestrator] `./verify --task {task}` runs no passing check with ID prefix `{task}.`, so this attempt fails however the rest went. Add the card's acceptance checks to `verify` with IDs `{task}.<name>`, run `./verify --task {task}` until they pass, then stop.\n\n{summary}"
+    )
+}
+
+/// What the prompt about a conflict that does not stand says; the scripted
+/// harness knows it by this.
+pub(crate) const PASSING_CONFLICT: &str = "a conflict stands only when the attempt fails `verify`";
+
+/// The watchdog's name for that prompt in the session's record.
+pub(crate) const PASSING_CONFLICT_NOTE: &str = "passing-conflict";
+
+/// The prompt for a builder that left a conflict file of `task` while its
+/// attempt passes `verify` (ADR 0034).
+fn passing_conflict(task: &TaskId) -> String {
+    let path = conflict_path(task.as_str());
+    format!(
+        "[orchestrator] You left `{path}`, but this attempt passes `verify`, and {PASSING_CONFLICT}: as things stand Tenaz removes the file when {task} is done, and no card may amend the checks it names. If {task} cannot be done as its card and the spec say without changing those checks, make {task}'s checks test what the card asks, even though they then fail, keep the file, and stop: {task} is blocked, this attempt's work is undone, and a replan may amend those checks. Otherwise delete the file, say in your notes what, if anything, the card asks that the work does not do, and stop."
     )
 }
 

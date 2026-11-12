@@ -4,7 +4,7 @@ use crate::briefing;
 use crate::ledger::{JournalRecord, SessionRecord, Verdict};
 use crate::orchestrator::session::SessionCtx;
 use crate::orchestrator::{RunError, Runner};
-use crate::project::{only_minor_findings, verdict_in};
+use crate::project::{conflict_path, only_minor_findings, verdict_in};
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId};
 use crate::util::CODE_BYTES_PER_TOKEN;
@@ -186,6 +186,7 @@ impl Runner {
             self.project.note(task.as_str()).unwrap_or_default(),
         ));
         extra.extend(self.amends_section(input.card));
+        extra.extend(self.passing_conflict_section(task));
         if !diff.images.is_empty() {
             let images: Vec<_> = diff.images.iter().map(|path| format!("- {path}")).collect();
             let images = clip_lines(&images.join("\n"), self.params.stat_clip_bytes);
@@ -217,6 +218,20 @@ impl Runner {
                 ..PromptParts::default()
             },
         )
+    }
+
+    /// The section that tells the reviewer a conflict file the builder left
+    /// does not stand, since this attempt passes `verify` (ADR 0034); `None`
+    /// without one.
+    fn passing_conflict_section(&self, task: &TaskId) -> Option<(String, String)> {
+        self.project.conflict_text(task.as_str())?;
+        let path = conflict_path(task.as_str());
+        Some((
+            "Conflict file".to_owned(),
+            format!(
+                "The builder left `{path}`, but this attempt passes `verify`, so it does not stand for this attempt, and no card may amend the checks it names. Judge the work against the card and the spec as if the file were not there: what the card asks and the work does not do is a MAJOR finding, even though the builder left the file."
+            ),
+        ))
     }
 
     /// The review file's verdict and text. A reviewer that gave its verdict

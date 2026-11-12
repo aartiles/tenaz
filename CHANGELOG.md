@@ -12,6 +12,11 @@ uses [Semantic Versioning](https://semver.org/).
   bootstrap, sized to the local builder model's context budget. The runner
   validates those files before building, using its existing path that skips
   valid bootstrap steps. Local bootstrap remains available.
+- A builder that leaves `.tenaz/conflicts/<TASK>.md` on an attempt that
+  passes `verify` is told before its session ends that the file does not
+  stand, and the reviewer is told too; its removal when the task is done
+  is logged (ADR 0034). Before, it was removed in silence, and in a run
+  the reviewer accepted a task believing its conflict stood.
 - fx, OpenCode and Qwen Code now get the user's Playwright and npm caches,
   as dsh does, since `verify` runs with the user's own `HOME`. Before, a
   Playwright check failed for the agent and passed for Tenaz, and in a

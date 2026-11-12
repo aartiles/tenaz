@@ -67,7 +67,9 @@ until that card is built, then starts again with no attempts (ADR 0018).
 A replan that reopens it with no such card is told, before it ends, that
 Tenaz will block it again. A split or replan whose cards Tenaz would throw
 away, such as a card amending a check no conflict names, is told why
-before it ends and may fix them (ADR 0033).
+before it ends and may fix them (ADR 0033). A conflict file left on an
+attempt that passes does not stand: the builder is told before it ends,
+and the reviewer is told too (ADR 0034).
 Work too heavy for a session, such as a long render, is declared
 by the builder in `.tenaz/jobs/<TASK>.json`; Tenaz runs it between
 sessions, with the engine's memory freed where it can, for at most

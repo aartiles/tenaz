@@ -264,6 +264,23 @@ impl Player {
         self.emit(SessionEvent::Settled { aborted: false });
     }
 
+    /// Answers a prompt the orchestrator sends a session that answered
+    /// every prompt: a conflict that does not stand, cards Tenaz would
+    /// throw away, or refused reopens. True when it was one.
+    async fn answered_follow_up(&mut self, prompt: &str) -> bool {
+        if prompt.contains(crate::orchestrator::PASSING_CONFLICT) {
+            self.answer_passing_conflict().await;
+        } else if prompt.contains(crate::orchestrator::INVALID_CARDS) {
+            let named = format!("- T005: amends `{}`", super::UNDECLARED);
+            self.fix_invalid_cards(prompt.contains(&named)).await;
+        } else if prompt.contains(crate::orchestrator::REFUSED_REOPENS) {
+            self.drop_refused_reopen().await;
+        } else {
+            return false;
+        }
+        true
+    }
+
     pub(super) async fn play(mut self, prompt: &str) {
         if let Some(task) = prompt
             .split("runs no passing check with ID prefix `")
@@ -280,12 +297,8 @@ impl Player {
             self.write_check(task).await;
             return self.finish("Added the check.");
         }
-        if prompt.contains(crate::orchestrator::INVALID_CARDS) {
-            let named = format!("- T005: amends `{}`", super::UNDECLARED);
-            return self.fix_invalid_cards(prompt.contains(&named)).await;
-        }
-        if prompt.contains(crate::orchestrator::REFUSED_REOPENS) {
-            return self.drop_refused_reopen().await;
+        if self.answered_follow_up(prompt).await {
+            return;
         }
         let Some(role) = field(prompt, "Role").map(str::to_owned) else {
             return self.preflight(prompt);
@@ -913,6 +926,7 @@ impl Player {
             return self.outgrow().await;
         }
         self.tamper_card(task).await;
+        self.declare_passing_conflict(task).await;
         self.finish("Done.");
     }
 

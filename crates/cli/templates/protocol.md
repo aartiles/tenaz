@@ -123,10 +123,13 @@ Which requirement each check serves, what you measured, and why the card
 and the check cannot both pass.
 ```
 
-The file is read only when the attempt fails `verify`. It stands when every
-check it names belongs to a done task other than yours; then the
-orchestrator blocks the task at once and starts a replan. One that does not
-stand is removed, and the attempt fails as any other. A replan may add a
+The file is read only when the attempt fails `verify`: do not make your
+checks pass around the conflict. If your attempt passes while the file is
+there, you are told before the session ends; a file left in place is
+removed when the task is done. It stands when every check it names
+belongs to a done task other than yours; then the orchestrator blocks the
+task at once and starts a replan. One that does not stand is removed, and
+the attempt fails as any other. A replan may add a
 card with `amends: [T016a.look-cues]`, naming only checks of a conflict
 that stood, and either drop the blocked task or set it back to `todo`
 with the amending card in its `depends`. The builder of that card may

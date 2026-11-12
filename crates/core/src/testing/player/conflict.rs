@@ -3,7 +3,7 @@
 
 use super::{Player, card};
 use crate::task::{TaskCard, set_card_fields};
-use crate::testing::{Routing, ScriptedConflict, UNDECLARED};
+use crate::testing::{Routing, ScriptedConflict, ScriptedPassingConflict, UNDECLARED};
 
 impl Player {
     /// The first session of the script's conflict task declares its
@@ -92,6 +92,39 @@ impl Player {
         let dropped = set_card_fields(&card, &[("status", "dropped".to_owned())]);
         self.write_tool(&path, &dropped, false).await;
         self.finish("Dropped.");
+    }
+
+    /// The first builder session of the script's passing-conflict task,
+    /// having done its work, also declares a conflict (ADR 0034).
+    pub(super) async fn declare_passing_conflict(&mut self, task: &str) {
+        let Some(ScriptedPassingConflict {
+            task: at, check, ..
+        }) = self.script.passing_conflict.clone()
+        else {
+            return;
+        };
+        if self.first(Some(&at), "passing-conflict", task) {
+            let text = format!("---\nchecks: [{check}]\n---\n{task} needs {check} changed.\n");
+            self.write_tool(&format!(".tenaz/conflicts/{task}.md"), &text, false)
+                .await;
+        }
+    }
+
+    /// Told that its conflict does not stand while its attempt passes, a
+    /// builder whose script says so makes its task's check fail, so the
+    /// conflict stands; any other leaves everything as it is.
+    pub(super) async fn answer_passing_conflict(&mut self) {
+        let Some(ScriptedPassingConflict {
+            task,
+            fails_when_told: true,
+            ..
+        }) = self.script.passing_conflict.clone()
+        else {
+            return self.finish("Left as it is.");
+        };
+        self.write_tool(&format!("checks/{task}.exists.sh"), "exit 1\n", false)
+            .await;
+        self.finish("The check now tests what the card asks, and fails.");
     }
 
     /// Told before it ends that its cards would be thrown away for its

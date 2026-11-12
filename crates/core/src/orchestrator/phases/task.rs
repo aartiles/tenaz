@@ -10,10 +10,10 @@ use crate::orchestrator::{RunError, Runner};
 use crate::project::conflict_path;
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId, TaskStatus};
-use crate::verify::{VerifyOutcome, judge_attempt};
+use crate::verify::VerifyOutcome;
 
-use super::PromptParts;
 use super::review::{Review, ReviewInput};
+use super::{AttemptVerify, PromptParts};
 
 /// A task card as an attempt loads it: parsed, and its text.
 pub(super) struct LoadedCard {
@@ -357,9 +357,11 @@ impl Runner {
             stopped,
             outgrown,
         } = work;
-        let all = self.run_verify(&["--all"]).await;
-        let own = self.run_verify(&["--task", task.id.as_str()]).await;
-        let verify_failure = judge_attempt(task.id.as_str(), &all, &own, self.ledger.passed_checks);
+        let AttemptVerify {
+            all,
+            own,
+            failure: verify_failure,
+        } = self.verify_attempt(&task.id).await;
         if let (Some(stopped), None) = (&stopped, &verify_failure) {
             self.record_stopped(attempt, stopped);
         }
@@ -446,8 +448,15 @@ impl Runner {
         attempt: u32,
         reviewed: bool,
     ) -> Result<(), RunError> {
-        // A task that passed was in nobody's way.
-        self.project.remove(&conflict_path(task.id.as_str()))?;
+        // A task that passed was in nobody's way (ADR 0034).
+        let path = conflict_path(task.id.as_str());
+        if self.project.conflict_text(task.id.as_str()).is_some() {
+            self.log(&format!(
+                "  {}: {path} removed: the attempt passed, so it does not stand",
+                task.id
+            ));
+        }
+        self.project.remove(&path)?;
         self.checkpoint_task(
             &task.id,
             TaskStatus::Done,

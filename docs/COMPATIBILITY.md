@@ -285,6 +285,14 @@ above), so a 32k context is the practical floor (`contextFloor`).
   after `tenaz run --resume`, the next replan was told, dropped the task
   and gave its work to a new card, which was built in one attempt. The
   replan itself ran out of turns; its cards were kept.
+- **A conflict left on a passing attempt** (ADR 0034). In the Hardball 3D
+  run T003's builder found R23 needs `T002.state` changed, wrote the
+  conflict, and made its own check pass without it. The reviewer accepted
+  T003 believing the conflict stood; Tenaz removed it in silence when
+  T003 was done, so no replan could amend `T002.state`, and four replans
+  were rejected trying. The builder and the reviewer are now told it does
+  not stand. Tested with the scripted harness only, not yet in a run with
+  a real model.
 - **A planner told why its cards are rejected.** In the Hardball 3D run
   (2026-11-11 and 12, fx 0.0.16, Qwen3.8-Flash-Next on Sushi 1.6.0) four
   replans in a row wrote a card that amends `T002.state`, which no

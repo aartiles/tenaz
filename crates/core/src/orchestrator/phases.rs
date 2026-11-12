@@ -11,7 +11,7 @@ use crate::role::Role;
 use crate::spec;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
-use crate::verify::{VerifyOutcome, interpret, retarget};
+use crate::verify::{VerifyOutcome, interpret, judge_attempt, retarget};
 
 use super::{RunError, Runner};
 
@@ -50,6 +50,14 @@ pub(crate) const CONFLICTS_TITLE: &str = "Declared conflicts";
 /// were thrown away; the replan prompt refers to it by this title.
 pub(crate) const REJECTED_REPLAN_TITLE: &str = "Why the last replan was rejected";
 
+/// `verify` on an attempt's work (`Runner::verify_attempt`).
+pub(crate) struct AttemptVerify {
+    pub all: VerifyOutcome,
+    pub own: VerifyOutcome,
+    /// Why the attempt fails; `None` when it passes.
+    pub failure: Option<String>,
+}
+
 impl Runner {
     /// The files changed from `from` to `to` (the working tree when
     /// `None`), as `git diff --stat` lists them, cut to `statClipBytes` at
@@ -74,6 +82,17 @@ impl Runner {
             self.params.verify_timeout_sec,
             self.params.verify_clip_bytes,
         )
+    }
+
+    /// `verify` on `task`'s work, judged as an attempt is: the whole suite,
+    /// then the task's own checks, and why the attempt fails
+    /// (`judge_attempt`). The one place both the end of an attempt and the
+    /// builder's follow-up before it (ADR 0034) judge it.
+    pub(crate) async fn verify_attempt(&self, task: &TaskId) -> AttemptVerify {
+        let all = self.run_verify(&["--all"]).await;
+        let own = self.run_verify(&["--task", task.as_str()]).await;
+        let failure = judge_attempt(task.as_str(), &all, &own, self.ledger.passed_checks);
+        AttemptVerify { all, own, failure }
     }
 
     /// The commit the current task started from.

@@ -10,9 +10,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, resume, run};
 use crate::ledger::{JournalRecord, Phase, TaskOutcome};
-use crate::orchestrator::{INVALID_CARDS_NOTE, REFUSED_REOPENS_NOTE};
+use crate::orchestrator::{INVALID_CARDS_NOTE, PASSING_CONFLICT_NOTE, REFUSED_REOPENS_NOTE};
 use crate::project::Project;
-use crate::testing::{Routing, ScriptedConflict, ScriptedHarness, UNDECLARED, VirtualClock};
+use crate::testing::{
+    Routing, ScriptedConflict, ScriptedHarness, ScriptedPassingConflict, UNDECLARED, VirtualClock,
+};
 
 /// Plays the fake goal with T003's first builder declaring a conflict with
 /// `check`; the project, its log and the work directory.
@@ -553,4 +555,87 @@ async fn a_rejected_replan_writes_no_statuses() {
     assert!(rejected(&project), "{log}");
     assert!(!log.contains("it stays blocked"), "{log}");
     assert_eq!(status(&project, "T003"), "blocked", "{log}");
+}
+
+/// Plays the fake goal with T003's first builder doing its work and also
+/// declaring a conflict with T001.exists; told it does not stand, it makes
+/// T003's check fail when `fails_when_told`.
+async fn passing_conflict(fails_when_told: bool) -> (tempfile::TempDir, Project, String) {
+    play(
+        ScriptedHarness {
+            passing_conflict: Some(ScriptedPassingConflict {
+                task: "T003".into(),
+                check: "T001.exists".into(),
+                fails_when_told,
+            }),
+            ..Default::default()
+        },
+        |_| {},
+    )
+    .await
+}
+
+fn conflicts_journaled(project: &Project) -> usize {
+    project
+        .journal()
+        .iter()
+        .filter(|e| matches!(e.record, JournalRecord::Conflict { .. }))
+        .count()
+}
+
+/// A conflict left on an attempt that passes does not stand (ADR 0034):
+/// the builder is told once before it ends, the reviewer is told, and the
+/// file's removal when the task is done is logged.
+#[tokio::test(start_paused = true)]
+async fn a_conflict_left_on_a_passing_attempt_is_pointed_out() {
+    let (_work, project, log) = passing_conflict(false).await;
+    let told = noted(&project, PASSING_CONFLICT_NOTE);
+    assert!(
+        matches!(told.as_slice(), [label] if label.ends_with("-builder-T003")),
+        "{told:?}"
+    );
+    let reviews = prompts(&project, "reviewer-T003");
+    assert!(reviews.contains("## Conflict file"), "{reviews}");
+    let other = prompts(&project, "reviewer-T001");
+    assert!(!other.is_empty(), "T001 was not reviewed: {log}");
+    assert!(!other.contains("## Conflict file"), "{other}");
+    assert!(
+        log.contains(".tenaz/conflicts/T003.md removed: the attempt passed"),
+        "{log}"
+    );
+    assert_eq!(status(&project, "T003"), "done", "{log}");
+    assert_eq!(conflicts_journaled(&project), 0, "{log}");
+}
+
+/// Told that its conflict does not stand, a builder whose check now tests
+/// what the card asks fails the attempt, and the conflict stands: the task
+/// is blocked and a replan runs.
+#[tokio::test(start_paused = true)]
+async fn a_builder_told_its_conflict_does_not_stand_may_make_it_stand() {
+    let (_work, project, log) = passing_conflict(true).await;
+    let told = noted(&project, PASSING_CONFLICT_NOTE);
+    assert!(
+        matches!(told.as_slice(), [label] if label.ends_with("-builder-T003")),
+        "{told:?}"
+    );
+    assert_eq!(conflicts_journaled(&project), 1, "{log}");
+    assert!(log.contains("T003 declares a conflict"), "{log}");
+    assert_eq!(status(&project, "T003"), "blocked", "{log}");
+    assert!(
+        !prompts(&project, "replan").is_empty(),
+        "no replan ran: {log}"
+    );
+}
+
+/// A conflict declared on an attempt that fails is read, not pointed out:
+/// the builder stopped as it was told (ADR 0009).
+#[tokio::test(start_paused = true)]
+async fn a_conflict_on_a_failing_attempt_is_not_pointed_out() {
+    let (_work, project, log) = declaring("T001.exists").await;
+    assert_eq!(conflicts_journaled(&project), 1, "{log}");
+    assert_eq!(
+        noted(&project, PASSING_CONFLICT_NOTE),
+        Vec::<String>::new(),
+        "{log}"
+    );
 }

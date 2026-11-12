@@ -47,7 +47,7 @@ impl Runner {
                 model,
                 watch: None,
                 persist: false,
-                own_checks: None,
+                builder_task: None,
                 planner: None,
             })
             .await?;

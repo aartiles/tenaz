@@ -79,6 +79,9 @@ pub struct ScriptedHarness {
     pub crash_on_checks_task: Option<String>,
     /// A builder that declares a conflict, and the replan that resolves it.
     pub conflict: Option<ScriptedConflict>,
+    /// The first builder session of this task does its work, so the
+    /// attempt passes, and also declares a conflict (ADR 0034).
+    pub passing_conflict: Option<ScriptedPassingConflict>,
     /// A builder that declares a heavy job.
     pub job: Option<ScriptedJob>,
     /// The engine runs out of memory in the first builder session of this
@@ -312,6 +315,17 @@ pub struct ScriptedConflict {
     pub task: String,
     pub check: String,
     pub routing: Routing,
+}
+
+/// A builder that declares a conflict with `check` on an attempt that
+/// passes, and how it answers when told the conflict does not stand.
+#[derive(Clone, Debug)]
+pub struct ScriptedPassingConflict {
+    pub task: String,
+    pub check: String,
+    /// Makes its task's check fail, so the conflict stands; else leaves
+    /// everything as it is.
+    pub fails_when_told: bool,
 }
 
 /// A check of a done task that the script's conflicts never name: the

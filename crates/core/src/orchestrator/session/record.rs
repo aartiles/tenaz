@@ -49,7 +49,7 @@ impl Runner {
                 model: started.model.clone(),
                 watch: Some(started.watch),
                 persist: true,
-                own_checks: started
+                builder_task: started
                     .ctx
                     .task
                     .as_ref()
