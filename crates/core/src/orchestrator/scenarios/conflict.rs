@@ -563,11 +563,11 @@ async fn a_rejected_replan_writes_no_statuses() {
 async fn passing_conflict(fails_when_told: bool) -> (tempfile::TempDir, Project, String) {
     play(
         ScriptedHarness {
-            passing_conflict: Some(ScriptedPassingConflict {
+            passing_conflict: Some(Box::new(ScriptedPassingConflict {
                 task: "T003".into(),
                 check: "T001.exists".into(),
                 fails_when_told,
-            }),
+            })),
             ..Default::default()
         },
         |_| {},

@@ -298,7 +298,9 @@ block. No ledger edits or extra flags are needed. Leave the files unwritten
 to keep the local bootstrap flow. The frontier agent reviews the result.
 
 The initial `verify --all` must pass twice with identical final JSON,
-checking only a real baseline: existing tests or tooling smoke checks.
+and leave the files git tracks or does not ignore as it found them (ADR
+0035). It checks only a real baseline: existing tests or tooling smoke
+checks.
 It does not prove future requirements. Builders add those checks as they
 implement each task; do not use placeholder checks that always pass.
 The handoff has been tried with real tools; full completion and any benefit

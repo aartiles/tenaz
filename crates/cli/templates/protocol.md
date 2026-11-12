@@ -76,6 +76,11 @@ file; the code of its checks goes in `checks/`, never in a folder named
 - Checks are deterministic, need no network, clean up after themselves, and
   finish within 120 seconds in total, unless `.tenaz/brief.md` sets another
   limit.
+- `verify` leaves the working tree as it found it: what checks produce goes
+  under a folder `.gitignore` lists (for example `artifacts/`), never into
+  files git tracks; untrack such files already committed
+  (`git rm --cached <path>`). An attempt after which it changed such
+  files fails.
 - A check tests behaviour (run the program and assert on its output or
   state), not merely that a file exists.
 - Never delete or weaken an existing check to make it pass. If a check is

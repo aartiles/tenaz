@@ -1,5 +1,6 @@
 //! The project repository through the `git` command line.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -50,27 +51,7 @@ impl GitRepo {
         env: &[(&str, &Path)],
         stdin: Option<&str>,
     ) -> Result<String, VcsError> {
-        use std::io::Write as _;
-        let mut command = self.command();
-        command.args(args);
-        for (key, value) in env {
-            command.env(key, value);
-        }
-        let output = match stdin {
-            None => command.output(),
-            Some(text) => command
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    if let Some(mut pipe) = child.stdin.take() {
-                        pipe.write_all(text.as_bytes())?;
-                    }
-                    child.wait_with_output()
-                }),
-        }
-        .map_err(|e| VcsError(format!("git {}: {e}", args.join(" "))))?;
+        let output = self.output_with(args, env, stdin)?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
@@ -86,6 +67,37 @@ impl GitRepo {
                 }
             )))
         }
+    }
+
+    /// Runs git with extra environment and, optionally, stdin, whatever
+    /// its status; an error only when it cannot run.
+    fn output_with(
+        &self,
+        args: &[&str],
+        env: &[(&str, &Path)],
+        stdin: Option<&str>,
+    ) -> Result<std::process::Output, VcsError> {
+        use std::io::Write as _;
+        let mut command = self.command();
+        command.args(args);
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        match stdin {
+            None => command.output(),
+            Some(text) => command
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .and_then(|mut child| {
+                    if let Some(mut pipe) = child.stdin.take() {
+                        pipe.write_all(text.as_bytes())?;
+                    }
+                    child.wait_with_output()
+                }),
+        }
+        .map_err(|e| VcsError(format!("git {}: {e}", args.join(" "))))
     }
 
     fn ok(&self, args: &[&str]) -> bool {
@@ -398,6 +410,30 @@ impl Vcs for GitRepo {
 
     fn in_head(&self, path: &str) -> bool {
         self.ok(&["cat-file", "-e", &format!("HEAD:{path}")])
+    }
+
+    /// `git check-ignore`, which exits 1 when it ignores none of them.
+    fn ignored(&self, paths: &[String]) -> Result<BTreeSet<String>, VcsError> {
+        if paths.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let mut input = paths.join("\0");
+        input.push('\0');
+        let args = ["check-ignore", "-z", "--stdin"];
+        let output = self.output_with(&args, &[], Some(&input))?;
+        match output.status.code() {
+            Some(0) => Ok(String::from_utf8_lossy(&output.stdout)
+                .split('\0')
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned)
+                .collect()),
+            Some(1) => Ok(BTreeSet::new()),
+            _ => Err(VcsError(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))),
+        }
     }
 
     fn head_content(&self, path: &str) -> Option<String> {

@@ -12,6 +12,7 @@ use crate::ledger::{JournalEntry, JournalRecord, Ledger, Verdict};
 use crate::role::Role;
 use crate::spec::{Requirement, parse_requirements};
 use crate::task::{TaskId, TaskStatus, set_card_fields};
+use crate::util::sha256_hex;
 
 /// The original request, copied at `init`.
 pub const BRIEF: &str = ".tenaz/brief.md";
@@ -180,6 +181,12 @@ impl Project {
 
     pub fn read(&self, relative: &str) -> io::Result<String> {
         fs::read_to_string(self.path(relative))
+    }
+
+    /// A hash of the bytes of the file at `relative`; `None` when it cannot
+    /// be read, as when it was deleted.
+    pub fn content_hash(&self, relative: &str) -> Option<String> {
+        fs::read(self.path(relative)).ok().map(sha256_hex)
     }
 
     pub fn read_if(&self, relative: &str) -> Option<String> {

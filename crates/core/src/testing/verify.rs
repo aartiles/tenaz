@@ -41,11 +41,32 @@ impl ScriptedVerify {
         match text.trim() {
             "exit 0" => true,
             "exit 1" => false,
-            line => match line.strip_prefix("test -f ") {
-                Some(path) => self.root.join(path).is_file(),
-                None => panic!("ScriptedVerify cannot judge {}: {line}", check.display()),
-            },
+            line => {
+                if let Some(path) = line.strip_prefix("test -f ") {
+                    self.root.join(path).is_file()
+                } else if let Some(path) = line.strip_prefix("stamp ") {
+                    self.stamp(path)
+                } else {
+                    panic!("ScriptedVerify cannot judge {}: {line}", check.display())
+                }
+            }
         }
+    }
+
+    /// Writes the file at `path` with a count of the runs that wrote it,
+    /// so its content differs on each run, as a screenshot's bytes may;
+    /// the check passes.
+    fn stamp(&self, path: &str) -> bool {
+        let file = self.root.join(path);
+        let runs: u64 = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+            .unwrap_or(0);
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir).expect("the stamp's folder is made");
+        }
+        std::fs::write(&file, format!("{}\n", runs + 1)).expect("the stamp is written");
+        true
     }
 
     /// The checks `verify` would run, in the shell's glob order. A glob that
@@ -129,6 +150,18 @@ mod tests {
             .run(args, Duration::from_secs(1))
             .await;
         serde_json::from_str(raw.stdout.trim()).unwrap()
+    }
+
+    /// A `stamp` check passes and writes its file with new content on each
+    /// run, as a check that renders a screenshot may.
+    #[tokio::test]
+    async fn a_stamp_check_rewrites_its_file_on_each_run() {
+        let dir = project(&[("T001.shot.sh", "stamp out/T001.png\n")]);
+        let shot = dir.path().join("out/T001.png");
+        assert_eq!(report(dir.path(), &["--all"]).await["ok"], true);
+        let first = std::fs::read_to_string(&shot).unwrap();
+        report(dir.path(), &["--all"]).await;
+        assert_ne!(std::fs::read_to_string(&shot).unwrap(), first);
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 //! A repository kept as snapshots of the files, in memory: `Vcs` without
 //! git. `vcs_contract` holds it to what `GitRepo` does.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -44,9 +44,24 @@ impl SnapshotVcs {
     }
 
     /// The files git would see: everything under the root but `.git` and
-    /// what a `.gitignore` leaves out.
+    /// what a `.gitignore` leaves out, which never leaves out a file HEAD
+    /// tracks.
     fn worktree(&self) -> Tree {
-        self.listing().files
+        let head = Self::head_tree(&self.state());
+        self.worktree_with(&head)
+    }
+
+    /// As [`Self::worktree`], with `head` the files HEAD tracks.
+    fn worktree_with(&self, head: &Tree) -> Tree {
+        let mut files = self.listing().files;
+        for path in head.keys() {
+            if !files.contains_key(path)
+                && let Ok(bytes) = std::fs::read(self.root.join(path))
+            {
+                files.insert(path.clone(), bytes);
+            }
+        }
+        files
     }
 
     fn listing(&self) -> Listing {
@@ -116,7 +131,8 @@ impl SnapshotVcs {
     fn check_out(&self, target: &Tree, paths: &[&str], keep: &Tree) -> Result<(), VcsError> {
         let selected = |path: &str| paths.is_empty() || paths.iter().any(|p| under(path, p));
         let listing = self.listing();
-        for path in listing.files.keys().filter(|p| selected(p)) {
+        // A file HEAD tracks goes too, even when a `.gitignore` matches it.
+        for path in self.worktree().keys().filter(|p| selected(p)) {
             if !target.contains_key(path) && !keep.contains_key(path) {
                 self.remove(path)?;
             }
@@ -355,6 +371,17 @@ impl Vcs for SnapshotVcs {
             .collect())
     }
 
+    /// The files on disk the working tree leaves out. There is no index
+    /// here, so a committed file is never ignored.
+    fn ignored(&self, paths: &[String]) -> Result<BTreeSet<String>, VcsError> {
+        let worktree = self.worktree();
+        Ok(paths
+            .iter()
+            .filter(|p| self.root.join(p).is_file() && !worktree.contains_key(*p))
+            .cloned()
+            .collect())
+    }
+
     fn in_head(&self, path: &str) -> bool {
         Self::head_tree(&self.state())
             .keys()
@@ -435,7 +462,7 @@ impl Vcs for SnapshotVcs {
         } else {
             // Untracked files are not in a diff against the working tree.
             let head = Self::head_tree(&state);
-            self.worktree()
+            self.worktree_with(&head)
                 .into_iter()
                 .filter(|(p, _)| head.contains_key(p))
                 .collect()

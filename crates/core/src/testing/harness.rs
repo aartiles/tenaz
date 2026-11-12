@@ -81,7 +81,13 @@ pub struct ScriptedHarness {
     pub conflict: Option<ScriptedConflict>,
     /// The first builder session of this task does its work, so the
     /// attempt passes, and also declares a conflict (ADR 0034).
-    pub passing_conflict: Option<ScriptedPassingConflict>,
+    /// Boxed, as the script is held in the futures of whole runs.
+    pub passing_conflict: Option<Box<ScriptedPassingConflict>>,
+    /// This task's check (`T000` is the bootstrap's) writes `out/<task>.png`
+    /// on every run of `verify`, with new content each time; a session told
+    /// that `verify` changed the working tree moves it to `shots/`, which
+    /// it lists in `.gitignore` (ADR 0035).
+    pub stamping_task: Option<String>,
     /// A builder that declares a heavy job.
     pub job: Option<ScriptedJob>,
     /// The engine runs out of memory in the first builder session of this
@@ -243,6 +249,7 @@ impl Session for ScriptedSession {
             prompts: self.prompts,
             call: 0,
             script: self.script.clone(),
+            told_writes: false,
         };
         let prompt = text;
         self.play = Some(tokio::spawn(async move { player.play(&prompt).await }));

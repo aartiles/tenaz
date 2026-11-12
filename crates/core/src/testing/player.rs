@@ -11,6 +11,7 @@ use crate::session::{SessionEvent, StopReason, Usage};
 
 mod conflict;
 mod preflight;
+mod stamp;
 
 /// One tool call of the scripted model: the tool, its arguments, what it
 /// returns, and the prompt tokens of the reply that made it (`None`: a few
@@ -42,10 +43,12 @@ pub(super) struct Player {
     pub(super) prompts: u32,
     pub(super) call: u32,
     pub(super) script: ScriptedHarness,
+    /// The prompt says `verify` changed the working tree (ADR 0035).
+    pub(super) told_writes: bool,
 }
 
 /// Whether the script's `script_field` names `task`.
-fn names(script_field: Option<&str>, task: &str) -> bool {
+pub(super) fn names(script_field: Option<&str>, task: &str) -> bool {
     script_field == Some(task)
 }
 
@@ -282,6 +285,7 @@ impl Player {
     }
 
     pub(super) async fn play(mut self, prompt: &str) {
+        self.told_writes = prompt.contains(crate::verify::WROTE_THE_TREE);
         if let Some(task) = prompt
             .split("runs no passing check with ID prefix `")
             .nth(1)
@@ -691,8 +695,10 @@ impl Player {
             .clone()
             .unwrap_or_else(|| "verify".to_owned());
         self.write_tool(&verify, VERIFY, true).await;
-        self.write_tool("checks/T000.smoke.sh", "exit 0\n", false)
-            .await;
+        if !self.stamp_check("T000").await {
+            self.write_tool("checks/T000.smoke.sh", "exit 0\n", false)
+                .await;
+        }
         self.write_tool(".tenaz/notes/BOOTSTRAP.md", "Fake stack.\n", false)
             .await;
     }
@@ -916,7 +922,9 @@ impl Player {
                 self.write_check("T001").await;
             }
         }
-        self.write_check(task).await;
+        if !self.stamp_check(task).await {
+            self.write_check(task).await;
+        }
         self.write_notes(task).await;
         if names(self.script.alternating_task.as_deref(), task) {
             return self.alternate(task).await;

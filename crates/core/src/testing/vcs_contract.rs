@@ -22,7 +22,8 @@ macro_rules! vcs_contract_tests {
             diffs_leave_out_tenaz_but_its_verify,
             diffs_mark_added_and_deleted_files,
             a_reset_to_head_keeps_head_a_commit,
-            ignored_files_are_left_alone);
+            ignored_files_are_left_alone,
+            a_tracked_file_is_never_ignored);
     };
     (@each $make:expr; $($check:ident),*) => {
         $(
@@ -208,6 +209,9 @@ pub fn ignored_files_are_left_alone(make: MakeVcs<'_>) {
     // Anchored at the root only: this one is not ignored.
     write(dir.path(), "src/target/y", "y\n");
     assert_eq!(vcs.changed_paths().unwrap(), ["src/target/y"]);
+    let paths = ["target/debug/x", "src/build/z", "src/target/y", "a.txt"].map(String::from);
+    let ignored: Vec<String> = vcs.ignored(&paths).unwrap().into_iter().collect();
+    assert_eq!(ignored, ["src/build/z", "target/debug/x"]);
     std::fs::remove_dir_all(dir.path().join("src/target")).unwrap();
     assert_eq!(vcs.commit_all("nothing").unwrap(), base);
     vcs.reset_hard(&base).unwrap();
@@ -216,4 +220,21 @@ pub fn ignored_files_are_left_alone(make: MakeVcs<'_>) {
     let kept = dir.path().join(".tenaz/private/sessions");
     assert!(kept.exists(), "an empty ignored folder stays");
     assert!(dir.path().join("src/build/z").exists());
+}
+
+/// A file HEAD tracks stays tracked when a `.gitignore` matches it: a
+/// change to it is a change, git does not call it ignored, and a reset to
+/// a commit without it removes it.
+pub fn a_tracked_file_is_never_ignored(make: MakeVcs<'_>) {
+    let (dir, vcs) = repo(make);
+    let base = vcs.head().unwrap();
+    write(dir.path(), "out/x.png", "1\n");
+    vcs.commit_all("out").unwrap();
+    write(dir.path(), ".gitignore", "out/\n");
+    vcs.commit_all("ignore out").unwrap();
+    write(dir.path(), "out/x.png", "2\n");
+    assert_eq!(vcs.changed_paths().unwrap(), ["out/x.png"]);
+    assert!(vcs.ignored(&["out/x.png".to_owned()]).unwrap().is_empty());
+    vcs.reset_hard(&base).unwrap();
+    assert!(!dir.path().join("out/x.png").exists(), "a reset removes it");
 }

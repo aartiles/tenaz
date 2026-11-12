@@ -99,7 +99,7 @@ impl Player {
     pub(super) async fn declare_passing_conflict(&mut self, task: &str) {
         let Some(ScriptedPassingConflict {
             task: at, check, ..
-        }) = self.script.passing_conflict.clone()
+        }) = self.script.passing_conflict.as_deref().cloned()
         else {
             return;
         };
@@ -118,7 +118,7 @@ impl Player {
             task,
             fails_when_told: true,
             ..
-        }) = self.script.passing_conflict.clone()
+        }) = self.script.passing_conflict.as_deref().cloned()
         else {
             return self.finish("Left as it is.");
         };

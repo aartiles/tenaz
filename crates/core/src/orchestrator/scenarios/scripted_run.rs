@@ -15,6 +15,7 @@ use crate::ledger::{JournalRecord, SessionRecord, TaskOutcome, Verdict};
 use crate::orchestrator::Deps;
 use crate::project::Project;
 use crate::testing::{ScriptedHarness, VirtualClock};
+use crate::verify::WROTE_THE_TREE;
 
 /// A scripted run played to its end, and what it journaled.
 struct Played {
@@ -876,4 +877,57 @@ async fn a_retried_builder_s_list_of_changes_is_clipped() {
         changes.trim_start().starts_with("[... clipped"),
         "{retried}"
     );
+}
+
+/// An attempt whose `verify` writes into the working tree fails, and the
+/// next builder is told what and why (ADR 0035): here T003's check writes
+/// `out/T003.png` with new bytes on each run, which the failed attempt's
+/// commit tracks by then; the builder told why writes it under `shots/`,
+/// which it lists in `.gitignore`.
+#[tokio::test(start_paused = true)]
+async fn an_attempt_whose_verify_writes_the_tree_fails() {
+    let run = Played::with(ScriptedHarness {
+        stamping_task: Some("T003".into()),
+        ..Default::default()
+    })
+    .await;
+    let told = format!("{WROTE_THE_TREE}: out/T003.png");
+    let builders = run.prompts("builder-T003");
+    assert_eq!(builders.len(), 2, "{}", run.log);
+    assert!(!builders[0].contains(&told), "{}", builders[0]);
+    assert!(builders[1].contains(&told), "{}", builders[1]);
+    assert!(
+        run.has(|r| matches!(r, JournalRecord::Task { task, outcome: TaskOutcome::Done, attempts: Some(2), .. } if task.as_str() == "T003")),
+        "{}",
+        run.log
+    );
+}
+
+/// A bootstrap whose `verify` writes into the working tree is not
+/// accepted (ADR 0035): the session told why writes under a folder it
+/// lists in `.gitignore`, and is accepted.
+#[tokio::test(start_paused = true)]
+async fn a_bootstrap_whose_verify_writes_the_tree_is_not_accepted() {
+    let run = Played::with(ScriptedHarness {
+        stamping_task: Some("T000".into()),
+        ..Default::default()
+    })
+    .await;
+    let told = format!("{WROTE_THE_TREE}: out/T000.png");
+    let rejected = run
+        .records
+        .iter()
+        .filter(|r| {
+            matches!(r, JournalRecord::BootstrapValidation { errors, .. }
+                if errors.iter().any(|e| e.contains(&told)))
+        })
+        .count();
+    assert_eq!(rejected, 1, "{}", run.log);
+    let bootstraps = run.prompts("bootstrap");
+    assert!(
+        bootstraps.last().is_some_and(|last| last.contains(&told)),
+        "the session after the rejection is told why"
+    );
+    let phase = run.project.load_ledger().unwrap().phase;
+    assert_eq!(phase, crate::ledger::Phase::Complete, "{}", run.log);
 }

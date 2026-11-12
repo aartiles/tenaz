@@ -2,6 +2,8 @@
 //! at the project root, or `.tenaz/verify` in an existing project), exit code
 //! 0 on success, and one JSON object as the last line of stdout.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::util::{clip, strip_ansi, tail};
@@ -89,6 +91,60 @@ pub fn judge_attempt(
             own.summary
         )
     })
+}
+
+/// The files of the working tree that differ from HEAD, each with a hash
+/// of its bytes on disk (`None` when there are none to commit: deleted, or
+/// ignored once out of the index): the state `verify` must leave as it
+/// found it (ADR 0035).
+pub type TreeState = BTreeMap<String, Option<String>>;
+
+/// What the error about a `verify` that changed the tree starts with; the
+/// scripted harness knows it by this.
+pub const WROTE_THE_TREE: &str = "./verify changed files that git tracks or does not ignore";
+
+/// Why `verify` may not leave the tree as it did, from the state `before`
+/// it to the one `after`: it added, changed or put back as HEAD has them
+/// files outside `.tenaz/` (`written_by`). The first ten are named. `None`
+/// when it left them as they were.
+pub fn writes_error(before: &TreeState, after: &TreeState) -> Option<String> {
+    const NAMED: usize = 10;
+    let written = written_by(before, after);
+    if written.is_empty() {
+        return None;
+    }
+    let named = written
+        .iter()
+        .take(NAMED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = match written.len().saturating_sub(NAMED) {
+        0 => String::new(),
+        more => format!(" and {more} more"),
+    };
+    Some(format!(
+        "{WROTE_THE_TREE}: {named}{more}. Checks must leave the working tree as they found it: write what they produce (screenshots, reports) under a folder `.gitignore` lists, and untrack such files already committed (`git rm --cached <path>`)."
+    ))
+}
+
+/// The paths outside `.tenaz/` that differ from `before` to `after`, in
+/// order: added, changed or put back as HEAD has them.
+fn written_by(before: &TreeState, after: &TreeState) -> Vec<String> {
+    let mut written: Vec<String> = after
+        .iter()
+        .filter(|(path, hash)| before.get(*path) != Some(*hash))
+        .map(|(path, _)| path.clone())
+        .chain(
+            before
+                .keys()
+                .filter(|path| !after.contains_key(*path))
+                .cloned(),
+        )
+        .filter(|path| !path.starts_with(".tenaz/"))
+        .collect();
+    written.sort();
+    written
 }
 
 impl VerifyOutcome {
@@ -209,6 +265,104 @@ pub fn retarget(text: &str, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tree(entries: &[(&str, Option<&str>)]) -> TreeState {
+        entries
+            .iter()
+            .map(|(path, hash)| ((*path).to_owned(), hash.map(str::to_owned)))
+            .collect()
+    }
+
+    /// The tree before `verify`: the builder's own edit, a screenshot, and
+    /// a file it deleted.
+    fn before() -> TreeState {
+        tree(&[
+            ("src/a.js", Some("1")),
+            ("shot.png", Some("2")),
+            ("gone.txt", None),
+        ])
+    }
+
+    /// What `verify` added or changed is written, in order.
+    #[test]
+    fn verify_wrote_what_it_added_or_changed() {
+        let after = tree(&[
+            ("src/a.js", Some("1")),
+            ("shot.png", Some("3")),
+            ("gone.txt", None),
+            ("new.png", Some("4")),
+        ]);
+        assert_eq!(written_by(&before(), &after), ["new.png", "shot.png"]);
+    }
+
+    /// A file `verify` put back as HEAD has it, or brought back after the
+    /// builder deleted it, is written.
+    #[test]
+    fn verify_wrote_what_it_put_back() {
+        let after = tree(&[("shot.png", Some("2")), ("gone.txt", None)]);
+        assert_eq!(written_by(&before(), &after), ["src/a.js"]);
+        let brought_back = tree(&[
+            ("src/a.js", Some("1")),
+            ("shot.png", Some("2")),
+            ("gone.txt", Some("6")),
+        ]);
+        assert_eq!(written_by(&before(), &brought_back), ["gone.txt"]);
+    }
+
+    /// A file the builder left that `verify` deletes is written.
+    #[test]
+    fn verify_wrote_what_it_deleted() {
+        let after = tree(&[
+            ("src/a.js", None),
+            ("shot.png", Some("2")),
+            ("gone.txt", None),
+        ]);
+        assert_eq!(written_by(&before(), &after), ["src/a.js"]);
+    }
+
+    /// A path under `.tenaz/` that `verify` adds or puts back is Tenaz's.
+    #[test]
+    fn verify_may_put_back_what_is_under_tenaz() {
+        let mut before = before();
+        before.insert(".tenaz/private/x".to_owned(), Some("5".to_owned()));
+        let after = tree(&[
+            ("src/a.js", Some("1")),
+            ("shot.png", Some("2")),
+            ("gone.txt", None),
+        ]);
+        assert_eq!(writes_error(&before, &after), None);
+    }
+
+    /// A tree `verify` left as it was has nothing written, and no error.
+    #[test]
+    fn verify_that_leaves_the_tree_wrote_nothing() {
+        assert_eq!(writes_error(&before(), &before()), None);
+    }
+
+    /// What `verify` writes under `.tenaz/` is Tenaz's, not the project's.
+    #[test]
+    fn verify_may_write_under_tenaz() {
+        let after = tree(&[
+            ("src/a.js", Some("1")),
+            ("shot.png", Some("2")),
+            ("gone.txt", None),
+            (".tenaz/private/x", Some("5")),
+        ]);
+        assert_eq!(writes_error(&before(), &after), None);
+    }
+
+    /// The error names the first ten paths and counts the rest.
+    #[test]
+    fn the_writes_error_names_ten_paths() {
+        let after: TreeState = (0..12)
+            .map(|n| (format!("out/{n:02}.png"), Some(n.to_string())))
+            .collect();
+        let error = writes_error(&TreeState::new(), &after).expect("an error");
+        assert!(error.starts_with(WROTE_THE_TREE), "{error}");
+        assert!(error.contains("out/00.png, out/01.png"), "{error}");
+        assert!(error.contains("out/09.png and 2 more."), "{error}");
+        assert!(!error.contains("out/10.png"), "{error}");
+    }
 
     #[test]
     fn fewer_passing_checks_than_the_last_checkpoint_fail() {

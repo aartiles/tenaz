@@ -11,7 +11,7 @@ use crate::role::Role;
 use crate::spec;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
-use crate::verify::{VerifyOutcome, interpret, judge_attempt, retarget};
+use crate::verify::{TreeState, VerifyOutcome, interpret, judge_attempt, retarget, writes_error};
 
 use super::{RunError, Runner};
 
@@ -86,13 +86,53 @@ impl Runner {
 
     /// `verify` on `task`'s work, judged as an attempt is: the whole suite,
     /// then the task's own checks, and why the attempt fails
-    /// (`judge_attempt`). The one place both the end of an attempt and the
-    /// builder's follow-up before it (ADR 0034) judge it.
+    /// (`judge_attempt`), or, when it passes, that `verify` changed the
+    /// working tree (`tree_writes`, ADR 0035). The one place both the end
+    /// of an attempt and the builder's follow-up before it (ADR 0034)
+    /// judge it.
     pub(crate) async fn verify_attempt(&self, task: &TaskId) -> AttemptVerify {
+        let before = self.tree_state();
         let all = self.run_verify(&["--all"]).await;
         let own = self.run_verify(&["--task", task.as_str()]).await;
-        let failure = judge_attempt(task.as_str(), &all, &own, self.ledger.passed_checks);
+        let failure = judge_attempt(task.as_str(), &all, &own, self.ledger.passed_checks)
+            .or_else(|| self.tree_writes(before.as_ref()));
         AttemptVerify { all, own, failure }
+    }
+
+    /// The working tree as `verify` must leave it (`TreeState`, ADR 0035);
+    /// `None`, logged, when git cannot say what changed.
+    pub(crate) fn tree_state(&self) -> Option<TreeState> {
+        let vcs = &self.deps.vcs;
+        let read = vcs
+            .changed_paths()
+            .and_then(|changed| Ok((vcs.ignored(&changed)?, changed)));
+        let (ignored, changed) = match read {
+            Ok(read) => read,
+            Err(e) => {
+                self.log(&format!(
+                    "  cannot tell whether verify changed the working tree: {e}"
+                ));
+                return None;
+            }
+        };
+        Some(
+            changed
+                .into_iter()
+                .map(|path| {
+                    let hash = (!ignored.contains(&path))
+                        .then(|| self.project.content_hash(&path))
+                        .flatten();
+                    (path, hash)
+                })
+                .collect(),
+        )
+    }
+
+    /// Why `verify`, run since the tree was `before`, may not leave it as
+    /// it is now (`writes_error`); `None` when it left it as it was, or git
+    /// cannot say on either side.
+    pub(crate) fn tree_writes(&self, before: Option<&TreeState>) -> Option<String> {
+        writes_error(before?, &self.tree_state()?)
     }
 
     /// The commit the current task started from.

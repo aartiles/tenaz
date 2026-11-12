@@ -12,6 +12,14 @@ uses [Semantic Versioning](https://semver.org/).
   bootstrap, sized to the local builder model's context budget. The runner
   validates those files before building, using its existing path that skips
   valid bootstrap steps. Local bootstrap remains available.
+- `verify` must leave the working tree as it found it: an attempt, or a
+  bootstrap, after which Tenaz's own `verify` run changed files that git
+  tracks or does not ignore fails, naming them (ADR 0035). Before, a check
+  that rewrote a tracked screenshot dirtied every session, was committed
+  again and again, and put other tasks' screenshots in each reviewer's
+  images. A run already started with such checks fails its next attempt
+  until a builder moves their output under a folder `.gitignore` lists
+  and untracks what was committed (`git rm --cached`).
 - A builder that leaves `.tenaz/conflicts/<TASK>.md` on an attempt that
   passes `verify` is told before its session ends that the file does not
   stand, and the reviewer is told too; its removal when the task is done

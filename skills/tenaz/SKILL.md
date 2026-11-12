@@ -145,7 +145,9 @@ the bootstrap, leaving implementation to the local model.
    `--task <ID>`, exit code and final JSON contract. Bootstrap `T000.`
    checks must test something true now: existing tests or an actual tooling
    smoke check. Run `--all` twice from the run directory with
-   `CI=1 NO_COLOR=1`; both runs must pass with the same final JSON.
+   `CI=1 NO_COLOR=1`; both runs must pass with the same final JSON and
+   leave the files `git status` lists unchanged. List in `.gitignore` the
+   folder where checks write what they produce (screenshots, reports).
    This proves only the initial baseline. Future requirements stay in
    task acceptance criteria; builders add their real `<TASK>.` checks
    while implementing them. Do not add constant-success checks, count

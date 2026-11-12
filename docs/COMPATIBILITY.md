@@ -285,6 +285,15 @@ above), so a 32k context is the practical floor (`contextFloor`).
   after `tenaz run --resume`, the next replan was told, dropped the task
   and gave its work to a new card, which was built in one attempt. The
   replan itself ran out of turns; its cards were kept.
+- **`verify` that writes the working tree** (ADR 0035). In the Hardball
+  3D run the checks wrote screenshots into `artifacts/`, which git tracked
+  and whose bytes changed on each run: `T001.smoke.png` was committed 18
+  times, most sessions ended with "reverted out-of-role changes:
+  artifacts/…", and each reviewer was told to look at 5 to 11 screenshots,
+  most of other tasks. Tenaz now fails an attempt or a bootstrap whose
+  `verify` changes such files. It sees a change only when the bytes
+  differ, and only in its own `verify` runs, not the agent's. Tested with
+  the scripted harness only, not yet in a run with a real model.
 - **A conflict left on a passing attempt** (ADR 0034). In the Hardball 3D
   run T003's builder found R23 needs `T002.state` changed, wrote the
   conflict, and made its own check pass without it. The reviewer accepted
