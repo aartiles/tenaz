@@ -23,7 +23,7 @@ mod review;
 mod task;
 mod task_loop;
 
-pub(crate) use planner::{PlannerSession, refused_reopens_of};
+pub(crate) use planner::PlannerSession;
 
 /// What a session's prompt adds to the role prompt, spec and map.
 #[derive(Default)]

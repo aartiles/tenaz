@@ -30,7 +30,10 @@ impl Player {
 
     /// The first replan shown the conflict adds `T005`, which amends the
     /// check in the way and does the blocked task's work, and drops the
-    /// blocked task, or reopens it to wait for `T005` (ADR 0018).
+    /// blocked task, or reopens it to wait for `T005` (ADR 0018). As its
+    /// routing says, `T005` may amend `UNDECLARED` instead: before the
+    /// replan is told why the last one was rejected, or always, with the
+    /// blocked task reopened behind it.
     pub(super) async fn amend(&mut self, prompt: &str) -> bool {
         let Some(ScriptedConflict { check, routing, .. }) = self.script.conflict.clone() else {
             return false;
@@ -38,6 +41,15 @@ impl Player {
         let shown = format!("## {}", crate::orchestrator::CONFLICTS_TITLE);
         if !prompt.contains(&shown) || self.cwd.join(".tenaz/tasks/T005.md").exists() {
             return false;
+        }
+        if matches!(
+            routing,
+            Routing::ReopenAndAmendUndeclared | Routing::ReopenAndAmendUndeclaredIgnored
+        ) {
+            self.write_amending(UNDECLARED, routing).await;
+            self.route(routing).await;
+            self.finish("Reopened behind a check no conflict names.");
+            return true;
         }
         let told = format!("## {}", crate::orchestrator::REJECTED_REPLAN_TITLE);
         let undeclared_first = matches!(
@@ -72,7 +84,7 @@ impl Player {
         else {
             return self.finish("Left as it is.");
         };
-        let routed_to = card("T005", &["R3"], &["T001"], None);
+        let routed_to = plain_t005();
         self.write_tool(".tenaz/tasks/T005.md", &routed_to, false)
             .await;
         let path = format!(".tenaz/tasks/{task}.md");
@@ -83,21 +95,33 @@ impl Player {
     }
 
     /// Told before it ends that its cards would be thrown away for its
-    /// amend of `UNDECLARED` (`names_undeclared`), a replan whose routing
-    /// says so amends the declared check and routes the blocked task as
-    /// `Reopen` does; any other leaves its cards as they are.
+    /// amend of `UNDECLARED` (`names_undeclared`), a replan routed
+    /// `AmendUndeclaredFixedWhenTold` amends the declared check instead and
+    /// routes the blocked task as `Reopen` does; one routed
+    /// `ReopenAndAmendUndeclared` drops that `amends` and keeps its reopen;
+    /// any other leaves its cards as they are.
     pub(super) async fn fix_invalid_cards(&mut self, names_undeclared: bool) {
-        let Some(ScriptedConflict {
-            check,
-            routing: routing @ Routing::AmendUndeclaredFixedWhenTold,
-            ..
-        }) = self.script.conflict.clone().filter(|_| names_undeclared)
-        else {
-            return self.finish("Left as it is.");
-        };
-        self.write_amending(&check, routing).await;
-        self.route(routing).await;
-        self.finish("Fixed the cards.");
+        let conflict = self.script.conflict.clone().filter(|_| names_undeclared);
+        match conflict {
+            Some(ScriptedConflict {
+                check,
+                routing: routing @ Routing::AmendUndeclaredFixedWhenTold,
+                ..
+            }) => {
+                self.write_amending(&check, routing).await;
+                self.route(routing).await;
+                self.finish("Fixed the cards.");
+            }
+            Some(ScriptedConflict {
+                routing: Routing::ReopenAndAmendUndeclared,
+                ..
+            }) => {
+                let plain = plain_t005();
+                self.write_tool(".tenaz/tasks/T005.md", &plain, false).await;
+                self.finish("Dropped the amends.");
+            }
+            _ => self.finish("Left as it is."),
+        }
     }
 
     /// Rewrites the script's blocked card as `routing` says (`routed`).
@@ -117,7 +141,7 @@ impl Player {
             Routing::ReopenAmenderMarkedDone => "done",
             _ => "todo",
         };
-        let amending = card("T005", &["R3"], &["T001"], None).replacen(
+        let amending = plain_t005().replacen(
             "status: todo\n",
             &format!("status: {status}\namends: [{check}]\n"),
             1,
@@ -127,12 +151,19 @@ impl Player {
     }
 }
 
+/// Card `T005`, which does the blocked task's work and amends nothing.
+fn plain_t005() -> String {
+    card("T005", &["R3"], &["T001"], None)
+}
+
 /// The text of blocked card `task` once the replan routed its work to
 /// `T005`.
 fn routed(task: &str, blocked: &str, routing: Routing) -> String {
     match routing {
         Routing::Drop => set_card_fields(blocked, &[("status", "dropped".to_owned())]),
         Routing::ReopenUnlinked
+        | Routing::ReopenAndAmendUndeclared
+        | Routing::ReopenAndAmendUndeclaredIgnored
         | Routing::ReopenWithoutAmend
         | Routing::ReopenWithoutAmendThenDrop => {
             set_card_fields(blocked, &[("status", "todo".to_owned())])

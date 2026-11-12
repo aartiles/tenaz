@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::metrics::RequestRecord;
-use crate::orchestrator::phases::{PlannerSession, clip_lines, refused_reopens_of};
+use crate::orchestrator::phases::{PlannerSession, clip_lines};
 use crate::orchestrator::{RunError, Runner};
 use crate::ports::{Clock, PermissionDecision, Session, SessionModel, SessionSpec};
 use crate::role::Role;
@@ -154,7 +154,9 @@ impl Runner {
             planner: run.planner.map(|session| PlannerFollowUps {
                 session,
                 asked_cards: false,
-                asked_reopens: false,
+                // A split has no reopen to ask about (ADR 0018): once told
+                // about its cards, it is not judged again.
+                asked_reopens: session.role != Role::Replan,
             }),
             session,
             watchdog,
@@ -215,25 +217,36 @@ impl SessionLoop<'_> {
         ))
     }
 
-    /// The prompt for a replan session that answered every prompt having
-    /// set a blocked task back to `todo` while no card still to build
-    /// amends a check of its conflict: Tenaz would block it again when the
-    /// session ends, and the run would find no task ready. Judged as Tenaz
-    /// judges it then (`refused_reopens_of`). `None` when it set none, or
-    /// after the first time in this session.
-    fn refused_reopens_prompt(&mut self) -> Option<String> {
+    /// The next prompt for a split or replan session that answered every
+    /// prompt, from one judgement of its cards as Tenaz judges them when it
+    /// ends (`Runner::judge_planner`): first the errors that would get its
+    /// cards thrown away, so it fixes them while it still holds its plan
+    /// (ADR 0033); then the blocked tasks a replan set back to `todo` that
+    /// Tenaz would block again, so the run does not find no task ready (ADR
+    /// 0018). Each is sent at most once per session.
+    fn planner_follow_up(&mut self) -> Option<(&'static str, String)> {
         let planner = self.planner.as_mut()?;
-        if planner.asked_reopens || planner.session.role != Role::Replan {
+        if planner.asked_cards && planner.asked_reopens {
             return None;
         }
-        let before = planner.session.before;
-        let project = &self.runner.project;
-        let after = project.load_backlog().backlog;
-        let refused: Vec<String> = refused_reopens_of(before, &after, |b| project.conflicts(b))
-            .iter()
+        let judgement = self.runner.judge_planner(planner.session);
+        if !planner.asked_cards && !judgement.errors.is_empty() {
+            planner.asked_cards = true;
+            let errors = &judgement.errors;
+            let limit = self.runner.params.note_clip_bytes;
+            self.runner.log(&format!(
+                "  {}: its cards would be thrown away ({} errors: {}); asking once more",
+                self.label,
+                errors.len(),
+                clip_lines(&errors.join("; "), limit)
+            ));
+            return Some((INVALID_CARDS_NOTE, invalid_cards(errors, limit)));
+        }
+        let refused: Vec<String> = judgement
+            .refused_reopens()
             .map(ToString::to_string)
             .collect();
-        if refused.is_empty() {
+        if planner.asked_reopens || refused.is_empty() {
             return None;
         }
         planner.asked_reopens = true;
@@ -242,32 +255,7 @@ impl SessionLoop<'_> {
             "  {}: {refused} set back to todo, but Tenaz would block each again; asking once more",
             self.label
         ));
-        Some(refused_reopens(&refused))
-    }
-
-    /// The prompt for a split or replan session that answered every prompt
-    /// having left cards Tenaz would throw away when it ends: the errors,
-    /// judged as Tenaz judges them then (`Runner::planner_errors`), so the
-    /// session fixes them while it still holds its plan (ADR 0033). `None`
-    /// when the cards are fine, or after the first time in this session.
-    fn invalid_cards_prompt(&mut self) -> Option<String> {
-        let planner = self.planner.as_mut()?;
-        if planner.asked_cards {
-            return None;
-        }
-        let (_, errors) = self.runner.planner_errors(planner.session);
-        if errors.is_empty() {
-            return None;
-        }
-        planner.asked_cards = true;
-        let limit = self.runner.params.note_clip_bytes;
-        self.runner.log(&format!(
-            "  {}: its cards would be thrown away ({} errors: {}); asking once more",
-            self.label,
-            errors.len(),
-            clip_lines(&errors.join("; "), limit)
-        ));
-        Some(invalid_cards(&errors, limit))
+        Some((REFUSED_REOPENS_NOTE, refused_reopens(&refused)))
     }
 
     /// The next prompt a session that answered every prompt gets, with the
@@ -279,11 +267,7 @@ impl SessionLoop<'_> {
         if let Some(message) = self.own_checks_prompt().await {
             return Some(("own-checks", message));
         }
-        if let Some(message) = self.invalid_cards_prompt() {
-            return Some((INVALID_CARDS_NOTE, message));
-        }
-        self.refused_reopens_prompt()
-            .map(|message| ("refused-reopens", message))
+        self.planner_follow_up()
     }
 
     /// Sends the first prompt, then handles events until the session is
@@ -523,6 +507,10 @@ pub(crate) const INVALID_CARDS: &str =
 
 /// The watchdog's name for that prompt in the session's record.
 pub(crate) const INVALID_CARDS_NOTE: &str = "invalid-cards";
+
+/// The watchdog's name for the prompt about refused reopens in the
+/// session's record.
+pub(crate) const REFUSED_REOPENS_NOTE: &str = "refused-reopens";
 
 /// The prompt for a planner session whose cards have `errors`, the list
 /// cut to `limit` bytes.

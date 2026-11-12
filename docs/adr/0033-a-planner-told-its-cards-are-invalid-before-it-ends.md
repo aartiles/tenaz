@@ -44,12 +44,15 @@ the next replan, about 20 minutes later, and the run may have none left.
 
 ## Decision
 
-Option B. `Runner::planner_errors`
-(`crates/core/src/orchestrator/phases/planner.rs`) judges the cards for
-both the follow-up prompt and the end of the session, so the two cannot
-disagree. The prompt is sent once per harness session, before the one
-about refused reopens; a split gets it too. Its list of errors is cut
-like the notes.
+Option B. `Runner::judge_planner`
+(`crates/core/src/orchestrator/phases/planner.rs`, with the pure
+`judge` in `planner/judge.rs`) judges the cards each time the session has
+answered every prompt, until it has sent the prompts it may get (a split
+gets only the first), and once at the end of the session, so they cannot
+disagree; the end writes the statuses
+that judgement puts right only when it keeps the cards. The prompt is
+sent once per harness session, before the one about refused reopens; a
+split gets it too. Its list of errors is cut like the notes.
 
 ## Consequences
 

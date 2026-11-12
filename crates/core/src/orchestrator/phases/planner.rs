@@ -2,17 +2,19 @@
 //! thrown away; and what becomes of a task out of attempts: split, or
 //! blocked.
 
-use crate::backlog::{Backlog, LoadedBacklog};
-use crate::conflict::{Conflict, amend_errors};
+mod judge;
+
+use crate::conflict::Conflict;
 use crate::ledger::{JournalEntry, JournalRecord, TaskOutcome};
 use crate::orchestrator::session::SessionCtx;
 use crate::orchestrator::{RunError, Runner};
 use crate::project::{conflict_path, note_path};
 use crate::role::Role;
-use crate::spec::{Requirement, coverage};
 use crate::task::{TaskCard, TaskId, TaskStatus};
 
 use super::{CONFLICTS_TITLE, PromptParts, REJECTED_REPLAN_TITLE, clip_lines};
+pub(crate) use judge::PlannerSession;
+use judge::{Judgement, StatusFix, judge};
 
 /// A planner session about one task (split).
 pub(super) struct PlannerTask {
@@ -56,26 +58,26 @@ impl Runner {
             },
         )
         .await?;
-        // Statuses are put right first, so the backlog is judged with the
-        // statuses it will keep: a blocked task the planner marked done is
-        // blocked again, and its conflict stands (ADR 0018).
-        self.undo_status_changes(role, &tasks)?;
-        let (after, errors) = self.planner_errors(PlannerSession {
+        let judgement = self.judge_planner(PlannerSession {
             role,
             before: &tasks,
         });
         let task_id = task.map(|t| t.id.clone());
-        if !errors.is_empty() {
+        if !judgement.errors.is_empty() {
+            let errors = judgement.errors;
+            let logged = format!("{role} rejected: {}", errors.join("; "));
             self.deps.vcs.restore_paths(&before, &[".tenaz/tasks"])?;
-            self.journal(rejected(role, task_id, errors.clone()));
-            self.log(&format!("{role} rejected: {}", errors.join("; ")));
+            self.journal(rejected(role, task_id, errors));
+            self.log(&logged);
             return Ok(false);
         }
+        self.put_statuses_right(role, &judgement)?;
         let suffix = task.map(|t| format!(" {}", t.id)).unwrap_or_default();
         self.deps
             .vcs
             .commit_all(&format!("tenaz: {role}{suffix}"))?;
-        let added: Vec<TaskId> = after
+        let added: Vec<TaskId> = judgement
+            .after
             .ids()
             .filter(|id| !tasks.contains(id))
             .cloned()
@@ -127,11 +129,11 @@ impl Runner {
         )
     }
 
-    /// The cards a planner `session` left and what is wrong with them,
-    /// judged as at its end (`judge_cards`). The one place both the end of
-    /// the session and the prompt before it (ADR 0033) judge them.
-    pub(crate) fn planner_errors(&self, session: PlannerSession<'_>) -> (Backlog, Vec<String>) {
-        judge_cards(
+    /// The cards a planner `session` left, judged (`judge`): the one place
+    /// both the end of the session and the prompts before it (ADR 0018 and
+    /// 0033) judge them.
+    pub(crate) fn judge_planner(&self, session: PlannerSession<'_>) -> Judgement {
+        judge(
             session,
             self.project.load_cards(),
             &self.project.requirements(),
@@ -139,12 +141,10 @@ impl Runner {
         )
     }
 
-    /// Puts right the statuses a `role` session left that it may not set,
-    /// against the backlog as it was `before` (`status_fixes`), and logs a
-    /// reopen that is undone.
-    fn undo_status_changes(&self, role: Role, before: &Backlog) -> Result<(), RunError> {
-        let after = self.project.load_backlog().backlog;
-        for fix in status_fixes(role, before, &after, |b| self.project.conflicts(b)) {
+    /// Writes the statuses `judgement` puts right on the cards a `role`
+    /// session left, and logs a reopen that is undone.
+    fn put_statuses_right(&self, role: Role, judgement: &Judgement) -> Result<(), RunError> {
+        for fix in &judgement.fixes {
             if fix.refused_reopen() {
                 self.log(&format!(
                     "  the {role} set {} back to todo, {UNDONE_REOPEN}",
@@ -367,448 +367,9 @@ fn accepted(role: Role, task: Option<TaskId>, added: Vec<TaskId>) -> JournalReco
 const UNDONE_REOPEN: &str =
     "but no card still to build amends a check of a conflict it declared; it stays blocked";
 
-/// What Tenaz writes on one card a planner left.
-struct CardFix {
-    id: TaskId,
-    fix: StatusFix,
-    /// A replan set it from `blocked` back to `todo` (`reopens`).
-    reopen: bool,
-}
-
-impl CardFix {
-    /// A reopen Tenaz undoes.
-    fn refused_reopen(&self) -> bool {
-        self.reopen && self.fix == StatusFix::Restore(TaskStatus::Blocked)
-    }
-}
-
-/// What Tenaz writes on the cards a `role` session left, `after`, against
-/// the backlog as it was `before`: the statuses it may not set are put
-/// right (`status_fix`), then a replan's reopens are judged against the
-/// conflicts that stand with those statuses (`conflicts_of`, `reopen_fix`,
-/// ADR 0018).
-fn status_fixes(
-    role: Role,
-    before: &Backlog,
-    after: &Backlog,
-    conflicts_of: impl Fn(&Backlog) -> Vec<Conflict>,
-) -> Vec<CardFix> {
-    let reopen = |t: &TaskCard| reopens(role, before.get(&t.id), t);
-    let mut fixes: Vec<CardFix> = after
-        .cards()
-        .filter(|t| !reopen(t))
-        .filter_map(|t| {
-            let fix = status_fix(before.get(&t.id), t)?;
-            Some(CardFix {
-                id: t.id.clone(),
-                fix,
-                reopen: false,
-            })
-        })
-        .collect();
-    let conflicts = conflicts_of(&with_fixes(after, &fixes));
-    fixes.extend(after.cards().filter(|t| reopen(t)).map(|t| CardFix {
-        id: t.id.clone(),
-        fix: reopen_fix(&t.id, &conflicts),
-        reopen: true,
-    }));
-    fixes
-}
-
-/// `backlog` with the statuses `fixes` write.
-fn with_fixes(backlog: &Backlog, fixes: &[CardFix]) -> Backlog {
-    Backlog::from_cards(backlog.cards().map(|t| {
-        let mut card = t.clone();
-        if let Some(f) = fixes.iter().find(|f| f.id == t.id) {
-            card.status = match f.fix {
-                StatusFix::Reset => TaskStatus::Todo,
-                StatusFix::Restore(old) => old,
-            };
-        }
-        card
-    }))
-}
-
-/// A split or replan session whose cards Tenaz judges: its role and the
-/// backlog as it was before it.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PlannerSession<'a> {
-    pub role: Role,
-    pub before: &'a Backlog,
-}
-
-/// The cards a planner `session` left and what is wrong with them, judged
-/// as Tenaz judges them when the session ends: the statuses it may not set
-/// are put right first (`status_fixes`), then each `amends` is checked
-/// against the conflicts that stand with those statuses (`conflicts_of`),
-/// and the requirements left uncovered and the cards deleted are named.
-/// `cards` are the cards as read, before their `amends` are checked
-/// (`Project::load_cards`).
-fn judge_cards(
-    session: PlannerSession<'_>,
-    cards: LoadedBacklog,
-    requirements: &[Requirement],
-    conflicts_of: impl Fn(&Backlog) -> Vec<Conflict>,
-) -> (Backlog, Vec<String>) {
-    let PlannerSession { role, before } = session;
-    let fixes = status_fixes(role, before, &cards.backlog, &conflicts_of);
-    let after = with_fixes(&cards.backlog, &fixes);
-    let mut errors = cards.errors;
-    errors.extend(amend_errors(&after, &conflicts_of(&after)));
-    let cov = coverage(requirements, after.cards(), false);
-    if !cov.missing.is_empty() {
-        errors.push(format!(
-            "requirements left uncovered: {}",
-            cov.missing.join(", ")
-        ));
-    }
-    errors.extend(
-        before
-            .ids()
-            .filter(|id| !after.contains(id))
-            .map(|id| format!("card {id} was deleted")),
-    );
-    (after, errors)
-}
-
-/// The blocked tasks of `before` that a replan, leaving `after`, set back
-/// to `todo` and that Tenaz blocks again when it ends (`status_fixes`).
-pub(crate) fn refused_reopens_of(
-    before: &Backlog,
-    after: &Backlog,
-    conflicts_of: impl Fn(&Backlog) -> Vec<Conflict>,
-) -> Vec<TaskId> {
-    status_fixes(Role::Replan, before, after, conflicts_of)
-        .into_iter()
-        .filter(CardFix::refused_reopen)
-        .map(|f| f.id)
-        .collect()
-}
-
-/// What Tenaz does to a card a planner left.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StatusFix {
-    /// `todo` with no attempts, as a new card starts.
-    Reset,
-    /// Back to the status it had before the planner.
-    Restore(TaskStatus),
-}
-
-/// What to do with card `after`, which was `before` the planner; `None`
-/// keeps it. A new card starts as `todo`; an old one keeps its status
-/// unless the planner may change it (`may_change_status`).
-fn status_fix(before: Option<&TaskCard>, after: &TaskCard) -> Option<StatusFix> {
-    match before {
-        None => (after.status != TaskStatus::Todo).then_some(StatusFix::Reset),
-        Some(old) => {
-            (!may_change_status(old.status, after.status)).then_some(StatusFix::Restore(old.status))
-        }
-    }
-}
-
-/// Whether a `role` session set card `after`, which was `before` it, from
-/// `blocked` back to `todo`, which only a replan may (ADR 0018).
-fn reopens(role: Role, before: Option<&TaskCard>, after: &TaskCard) -> bool {
-    role == Role::Replan
-        && before.is_some_and(|old| old.status == TaskStatus::Blocked)
-        && after.status == TaskStatus::Todo
-}
-
-/// What to do with blocked task `id` that a replan set back to `todo`,
-/// given the `conflicts` that stand once the other statuses are put
-/// right. While its own conflict stands (a card still to build amends one
-/// of its checks), it starts again with no attempts and
-/// `LoadedBacklog::ready` holds it until that card is built (ADR 0018).
-/// Otherwise it is blocked again.
-fn reopen_fix(id: &TaskId, conflicts: &[Conflict]) -> StatusFix {
-    if conflicts.iter().any(|c| &c.task == id) {
-        StatusFix::Reset
-    } else {
-        StatusFix::Restore(TaskStatus::Blocked)
-    }
-}
-
-/// Whether a split or replan session may change a card's status `from`
-/// one `to` another: it may drop a task that is not started or is blocked,
-/// and change nothing else. Blocked to todo is not allowed here: a replan's
-/// reopen is judged apart (`reopen_fix`, ADR 0018).
-fn may_change_status(from: TaskStatus, to: TaskStatus) -> bool {
-    from == to
-        || (to == TaskStatus::Dropped && matches!(from, TaskStatus::Todo | TaskStatus::Blocked))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Every status; a new one fails to compile here until it is listed.
-    fn all() -> [TaskStatus; 6] {
-        use TaskStatus::{Active, Blocked, Done, Dropped, Split, Todo};
-        let all = [Todo, Active, Done, Blocked, Split, Dropped];
-        for status in all {
-            match status {
-                Todo | Active | Done | Blocked | Split | Dropped => {}
-            }
-        }
-        all
-    }
-
-    #[test]
-    fn a_planner_may_drop_only_a_task_not_started_or_blocked() {
-        let droppable: Vec<TaskStatus> = all()
-            .into_iter()
-            .filter(|&from| may_change_status(from, TaskStatus::Dropped))
-            .collect();
-        // A dropped task stays dropped: that is no change.
-        assert_eq!(
-            droppable,
-            [TaskStatus::Todo, TaskStatus::Blocked, TaskStatus::Dropped]
-        );
-    }
-
-    #[test]
-    fn a_planner_may_change_no_other_status() {
-        for from in all() {
-            for to in all().into_iter().filter(|&to| to != TaskStatus::Dropped) {
-                assert_eq!(may_change_status(from, to), from == to, "{from} -> {to}");
-            }
-        }
-    }
-
-    fn card(id: &str, status: &str) -> TaskCard {
-        let text = format!("---\nid: {id}\ntitle: t\nstatus: {status}\n---\n");
-        TaskCard::parse(&format!("{id}.md"), &text).unwrap()
-    }
-
-    fn conflict_of(task: &str) -> Conflict {
-        let id = TaskId::parse(task).unwrap();
-        Conflict::read(&id, "---\nchecks: [T001.runs]\n---\n").unwrap()
-    }
-
-    /// The errors `judge_cards` finds in the cards `after` a `role`
-    /// session left, read with `load_errors`, against `before` = [T001
-    /// done, T002 blocked], with T002's conflict on `T001.runs` standing
-    /// while T002 is blocked.
-    fn judged_by(
-        role: Role,
-        after: Vec<TaskCard>,
-        load_errors: &[&str],
-        requirements: &[Requirement],
-    ) -> (Backlog, Vec<String>) {
-        let before = Backlog::from_cards([card("T001", "done"), card("T002", "blocked")]);
-        let cards = LoadedBacklog {
-            backlog: Backlog::from_cards(after),
-            errors: load_errors.iter().map(|e| (*e).to_owned()).collect(),
-            ..LoadedBacklog::default()
-        };
-        let conflicts = |b: &Backlog| {
-            [conflict_of("T002")]
-                .into_iter()
-                .filter(|c| c.stands_in(b))
-                .collect()
-        };
-        let session = PlannerSession {
-            role,
-            before: &before,
-        };
-        judge_cards(session, cards, requirements, conflicts)
-    }
-
-    /// As `judged_by`, for a replan with no load errors or requirements.
-    fn judged(after: Vec<TaskCard>) -> Vec<String> {
-        judged_by(Role::Replan, after, &[], &[]).1
-    }
-
-    fn amends(check: &str) -> TaskCard {
-        let text = format!("---\nid: T005\ntitle: t\nstatus: todo\namends: [{check}]\n---\n");
-        TaskCard::parse("T005.md", &text).unwrap()
-    }
-
-    /// The statuses a planner may not set are put right before its cards
-    /// are judged: a blocked task it marked done is blocked again, so its
-    /// conflict stands and the card amending its check is fine (ADR 0018).
-    #[test]
-    fn an_amend_is_judged_with_the_statuses_put_right() {
-        let after = vec![
-            card("T001", "done"),
-            card("T002", "done"),
-            amends("T001.runs"),
-        ];
-        assert_eq!(judged(after), Vec::<String>::new());
-    }
-
-    /// An `amends` naming a check no conflict names is an error.
-    #[test]
-    fn an_amend_no_conflict_names_is_an_error() {
-        let after = vec![
-            card("T001", "done"),
-            card("T002", "blocked"),
-            amends("T001.other"),
-        ];
-        assert_eq!(
-            judged(after),
-            ["T005: amends `T001.other`, which no file in .tenaz/conflicts/ names"]
-        );
-    }
-
-    /// A card of the backlog before a replan or split that is gone is an
-    /// error.
-    #[test]
-    fn a_deleted_card_is_an_error() {
-        for role in [Role::Replan, Role::Split] {
-            let (_, errors) = judged_by(role, vec![card("T001", "done")], &[], &[]);
-            assert_eq!(errors, ["card T002 was deleted"], "{role}");
-        }
-    }
-
-    /// A requirement no card covers is an error.
-    #[test]
-    fn an_uncovered_requirement_is_an_error() {
-        let r1 = Requirement {
-            id: "R1".to_owned(),
-            manual: false,
-            text: "r".to_owned(),
-        };
-        let after = vec![card("T001", "done"), card("T002", "blocked")];
-        assert_eq!(
-            judged_by(Role::Replan, after, &[], &[r1]).1,
-            ["requirements left uncovered: R1"]
-        );
-    }
-
-    /// The errors found reading the cards come first, unchanged.
-    #[test]
-    fn an_error_reading_the_cards_is_kept() {
-        let after = vec![card("T001", "done")];
-        assert_eq!(
-            judged_by(Role::Replan, after, &["T009.md: bad"], &[]).1,
-            ["T009.md: bad", "card T002 was deleted"]
-        );
-    }
-
-    /// A split's statuses are put right with its own rules: it may not
-    /// reopen a blocked task, which stays blocked; a replan may, behind the
-    /// card that amends its check (ADR 0018).
-    #[test]
-    fn a_split_may_not_reopen_a_blocked_task() {
-        let reopened = || {
-            vec![
-                card("T001", "done"),
-                card("T002", "todo"),
-                amends("T001.runs"),
-            ]
-        };
-        let status = |role| {
-            let (after, errors) = judged_by(role, reopened(), &[], &[]);
-            assert_eq!(errors, Vec::<String>::new(), "{role}");
-            after.get(&TaskId::parse("T002").unwrap()).unwrap().status
-        };
-        assert_eq!(status(Role::Split), TaskStatus::Blocked);
-        assert_eq!(status(Role::Replan), TaskStatus::Todo);
-    }
-
-    /// A blocked task set back to `todo` is reopened, with no attempts,
-    /// only while its own conflict stands; another task's does not count.
-    #[test]
-    fn a_replan_may_reopen_a_blocked_task_only_while_its_conflict_stands() {
-        let id = TaskId::parse("T002").unwrap();
-        assert_eq!(reopen_fix(&id, &[conflict_of("T002")]), StatusFix::Reset);
-        let blocked_again = StatusFix::Restore(TaskStatus::Blocked);
-        assert_eq!(reopen_fix(&id, &[conflict_of("T003")]), blocked_again);
-        assert_eq!(reopen_fix(&id, &[]), blocked_again);
-    }
-
-    /// A reopen is refused unless a card still to build amends a check of
-    /// its conflict, judged once the statuses a planner may not set are put
-    /// right: an amending card written as `done` still counts. A task with
-    /// no conflict, or one not set back to `todo`, is not a refused reopen.
-    #[test]
-    fn a_reopen_is_refused_without_an_amend_still_to_build() {
-        let amending = |status: &str, check: &str| {
-            let text =
-                format!("---\nid: T005\ntitle: t\nstatus: {status}\namends: [{check}]\n---\n");
-            TaskCard::parse("T005.md", &text).unwrap()
-        };
-        let done = card("T001", "done");
-        let before = Backlog::from_cards([done.clone(), card("T002", "blocked")]);
-        let refused = |reopened: &str, amender: Option<TaskCard>, conflict: bool| {
-            let after = Backlog::from_cards(
-                [done.clone(), card("T002", reopened)]
-                    .into_iter()
-                    .chain(amender),
-            );
-            let conflicts = |b: &Backlog| {
-                [conflict_of("T002")]
-                    .into_iter()
-                    .filter(|c| conflict && c.stands_in(b))
-                    .collect()
-            };
-            refused_reopens_of(&before, &after, conflicts)
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        };
-        let other = Some(amending("todo", "T001.other"));
-        assert_eq!(
-            refused("todo", other, true),
-            ["T002"],
-            "amends another check"
-        );
-        assert_eq!(refused("todo", None, false), ["T002"], "no conflict at all");
-        let runs = |status| Some(amending(status, "T001.runs"));
-        assert!(
-            refused("todo", runs("todo"), true).is_empty(),
-            "behind its amend"
-        );
-        assert!(
-            refused("todo", runs("done"), true).is_empty(),
-            "amend marked done"
-        );
-        assert!(refused("blocked", None, true).is_empty(), "left blocked");
-        assert!(refused("dropped", None, true).is_empty(), "dropped");
-    }
-
-    /// Only a replan reopens, and only from `blocked` to `todo`.
-    #[test]
-    fn only_a_replan_reopens_a_blocked_task() {
-        let (blocked, todo) = (card("T002", "blocked"), card("T002", "todo"));
-        assert!(reopens(Role::Replan, Some(&blocked), &todo));
-        assert!(!reopens(Role::Split, Some(&blocked), &todo));
-        assert!(!reopens(
-            Role::Replan,
-            Some(&card("T002", "dropped")),
-            &todo
-        ));
-        assert!(!reopens(
-            Role::Replan,
-            Some(&blocked),
-            &card("T002", "active")
-        ));
-        assert!(!reopens(Role::Replan, None, &todo), "a new card");
-    }
-
-    /// An old card's status is restored, to what it was, unless the planner
-    /// may change it; a new card starts as `todo`.
-    #[test]
-    fn a_status_a_planner_may_not_set_is_restored() {
-        let fix = |from: &str, to: &str| status_fix(Some(&card("T002", from)), &card("T002", to));
-        assert_eq!(fix("todo", "dropped"), None);
-        assert_eq!(
-            fix("todo", "done"),
-            Some(StatusFix::Restore(TaskStatus::Todo))
-        );
-        assert_eq!(
-            fix("done", "todo"),
-            Some(StatusFix::Restore(TaskStatus::Done))
-        );
-        assert_eq!(
-            fix("blocked", "todo"),
-            Some(StatusFix::Restore(TaskStatus::Blocked))
-        );
-        let new = |status| status_fix(None, &card("T009", status));
-        assert_eq!(new("todo"), None);
-        assert_eq!(new("done"), Some(StatusFix::Reset));
-    }
 
     /// Large enough for every error list below but the clipped one.
     const LIMIT: usize = 1_000;

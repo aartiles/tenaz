@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, resume, run};
 use crate::ledger::{JournalRecord, Phase, TaskOutcome};
-use crate::orchestrator::INVALID_CARDS_NOTE;
+use crate::orchestrator::{INVALID_CARDS_NOTE, REFUSED_REOPENS_NOTE};
 use crate::project::Project;
 use crate::testing::{Routing, ScriptedConflict, ScriptedHarness, UNDECLARED, VirtualClock};
 
@@ -506,4 +506,51 @@ async fn a_replan_with_valid_cards_is_not_told_they_are_invalid() {
         Vec::<String>::new(),
         "{log}"
     );
+}
+
+/// The watchdog's planner notes of the first replan session, in order.
+fn first_replan_notes(project: &Project) -> Vec<String> {
+    project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-replan") => Some(s),
+            _ => None,
+        })
+        .expect("a replan ran")
+        .watchdog
+        .iter()
+        .map(|e| e.kind.clone())
+        .filter(|k| k == INVALID_CARDS_NOTE || k == REFUSED_REOPENS_NOTE)
+        .collect()
+}
+
+/// A replan whose cards are invalid and that reopens a task Tenaz would
+/// block again gets both prompts in one session, the cards first: here it
+/// fixes the cards, keeps the reopen, and is then told about it; its cards
+/// are kept and the reopen undone.
+#[tokio::test(start_paused = true)]
+async fn a_replan_is_told_about_its_cards_then_its_reopen() {
+    let (_work, project, log) =
+        declaring_routed("T001.exists", Routing::ReopenAndAmendUndeclared).await;
+    assert_eq!(
+        first_replan_notes(&project),
+        [INVALID_CARDS_NOTE, REFUSED_REOPENS_NOTE],
+        "{log}"
+    );
+    assert!(accepted_t005(&project), "{log}");
+    assert!(log.contains("it stays blocked"), "{log}");
+    assert_eq!(status(&project, "T003"), "blocked", "{log}");
+}
+
+/// The statuses a planner may not set are written only when its cards are
+/// kept: a replan whose cards are thrown away logs no undone reopen, and
+/// the task it reopened stays blocked.
+#[tokio::test(start_paused = true)]
+async fn a_rejected_replan_writes_no_statuses() {
+    let (_work, project, log) =
+        declaring_routed("T001.exists", Routing::ReopenAndAmendUndeclaredIgnored).await;
+    assert!(rejected(&project), "{log}");
+    assert!(!log.contains("it stays blocked"), "{log}");
+    assert_eq!(status(&project, "T003"), "blocked", "{log}");
 }

@@ -24,10 +24,10 @@ mod record;
 mod requests;
 
 pub(crate) use harness::HarnessRun;
-#[cfg(test)]
-pub(crate) use harness::INVALID_CARDS_NOTE;
 #[cfg(any(test, feature = "testing"))]
 pub(crate) use harness::{INVALID_CARDS, REFUSED_REOPENS};
+#[cfg(test)]
+pub(crate) use harness::{INVALID_CARDS_NOTE, REFUSED_REOPENS_NOTE};
 use reasons::{PromptLimit, give_up_reason, retry_notice, retry_reason};
 
 /// macOS memory pressure level `critical`: no time to raise the budget.

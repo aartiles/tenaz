@@ -344,6 +344,13 @@ pub enum Routing {
     /// and reopens the task when told, before it ends, that its cards
     /// would be thrown away (ADR 0033).
     AmendUndeclaredFixedWhenTold,
+    /// Sets it back to `todo` and has `T005` amend `UNDECLARED`; told its
+    /// cards would be thrown away, it drops that `amends` and keeps the
+    /// reopen, which Tenaz then also points out (ADR 0018 and 0033).
+    ReopenAndAmendUndeclared,
+    /// As `ReopenAndAmendUndeclared`, but it leaves its cards as they are
+    /// when told, and they are thrown away.
+    ReopenAndAmendUndeclaredIgnored,
 }
 
 /// The first builder session of `task`, or every one, writes its job
