@@ -46,6 +46,10 @@ const AMENDS_TITLE: &str = "Checks this card may amend";
 /// The briefing section that shows a replan the conflicts that stood.
 pub(crate) const CONFLICTS_TITLE: &str = "Declared conflicts";
 
+/// The briefing section that tells a replan why the last replan's cards
+/// were thrown away; the replan prompt refers to it by this title.
+pub(crate) const REJECTED_REPLAN_TITLE: &str = "Why the last replan was rejected";
+
 impl Runner {
     /// The files changed from `from` to `to` (the working tree when
     /// `None`), as `git diff --stat` lists them, cut to `statClipBytes` at

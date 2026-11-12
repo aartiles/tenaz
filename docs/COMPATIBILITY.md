@@ -276,6 +276,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   after `tenaz run --resume`, the next replan was told, dropped the task
   and gave its work to a new card, which was built in one attempt. The
   replan itself ran out of turns; its cards were kept.
+- **A replan told why the last one was rejected.** In the Hardball 3D run
+  (2026-11-11 and 12, fx 0.0.16, Qwen3.8-Flash-Next on Sushi 1.6.0) four
+  replans in a row wrote a card that amends `T002.state`, which no
+  conflict named, and each was rejected, the valid amend for the blocked
+  task with it. None was told why: the journal summary named no errors,
+  and later entries pushed it out. The run ended BLOCKED. A replan now
+  gets the last rejected replan's errors in "Why the last replan was
+  rejected". Tested with the scripted harness only, not yet in a run with
+  a real model. Tenaz still throws away all of a replan's cards for one
+  bad card.
 - **`--resume` after no task was ready.** A run blocked with no task
   ready gets one more replan on `--resume`. Tested with a
   scripted-harness scenario, and seen once in that run (2026-11-05):

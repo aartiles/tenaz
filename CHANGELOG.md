@@ -12,6 +12,12 @@ uses [Semantic Versioning](https://semver.org/).
   bootstrap, sized to the local builder model's context budget. The runner
   validates those files before building, using its existing path that skips
   valid bootstrap steps. Local bootstrap remains available.
+- A replan is now told why the last replan was rejected: its briefing
+  lists the errors under "Why the last replan was rejected", until a
+  replan is accepted. Before, it saw at most a bare `replan-rejected`
+  line. In a run with Qwen3.8-Flash-Next, replans wrote the same rejected
+  card four times and the run ended BLOCKED. In a project made before this,
+  `--refresh-templates` adds the prompt's note about that section.
 
 ## [0.7.0] - 2026-11-11
 

@@ -332,6 +332,10 @@ pub enum Routing {
     ReopenWithoutAmendThenDrop,
     /// Sets it to `done`, which a planner may not.
     MarkDone,
+    /// As `Reopen`, but a replan whose briefing has no section "Why the
+    /// last replan was rejected" has `T005` amend a check no conflict
+    /// names, and is rejected.
+    AmendUndeclaredFirst,
 }
 
 /// The first builder session of `task`, or every one, writes its job

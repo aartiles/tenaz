@@ -68,6 +68,12 @@ accepted instead of rejected with "no file in .tenaz/conflicts/ names"
 its check. A reopen is judged last, against the statuses the others
 keep: an amending card the planner wrote as `done` is `todo` by then.
 
+Later (2026-11-12), part of B was added too. In the Hardball 3D run four
+replans in a row were rejected for the same card, and none was told why:
+the journal summary named no errors, and later entries pushed it out of
+the recent journal. A replan now gets the last rejected replan's errors
+in "Why the last replan was rejected", until a replan is accepted.
+
 ## Consequences
 
 - The reopened task waits for every card still to build that amends its

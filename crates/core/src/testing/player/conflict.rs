@@ -44,6 +44,12 @@ impl Player {
         if !prompt.contains(&shown) || self.cwd.join(".tenaz/tasks/T005.md").exists() {
             return false;
         }
+        let told = format!("## {}", crate::orchestrator::REJECTED_REPLAN_TITLE);
+        if matches!(routing, Routing::AmendUndeclaredFirst) && !prompt.contains(&told) {
+            self.write_amending(UNDECLARED, routing).await;
+            self.finish("Amended a check no conflict names.");
+            return true;
+        }
         if !matches!(
             routing,
             Routing::ReopenWithoutAmend | Routing::ReopenWithoutAmendThenDrop
@@ -96,6 +102,9 @@ impl Player {
     }
 }
 
+/// A check of a done task that the script's conflicts never name.
+const UNDECLARED: &str = "T002.exists";
+
 /// The text of blocked card `task` once the replan routed its work to
 /// `T005`.
 fn routed(task: &str, blocked: &str, routing: Routing) -> String {
@@ -107,7 +116,7 @@ fn routed(task: &str, blocked: &str, routing: Routing) -> String {
             set_card_fields(blocked, &[("status", "todo".to_owned())])
         }
         Routing::MarkDone => set_card_fields(blocked, &[("status", "done".to_owned())]),
-        Routing::Reopen | Routing::ReopenAmenderMarkedDone => {
+        Routing::Reopen | Routing::ReopenAmenderMarkedDone | Routing::AmendUndeclaredFirst => {
             let card =
                 TaskCard::parse(&format!("{task}.md"), blocked).expect("the blocked card parses");
             let depends: Vec<String> = card

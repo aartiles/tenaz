@@ -358,3 +358,87 @@ async fn a_resumed_run_with_no_task_ready_replans_again() {
     let log = project.read(".tenaz/private/orchestrator.log").unwrap();
     assert_eq!(status(&project, "T003"), "dropped", "{log}");
 }
+
+/// A replan whose cards were thrown away is followed by one told why:
+/// here the first amends a check no conflict names, and the next, shown
+/// that error, amends the declared check and the run completes.
+#[tokio::test(start_paused = true)]
+async fn the_next_replan_is_told_why_the_last_was_rejected() {
+    let (_work, project, log) =
+        declaring_routed("T001.exists", Routing::AmendUndeclaredFirst).await;
+    assert!(rejected(&project), "{log}");
+    assert!(accepted_t005(&project), "{log}");
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    let replans = prompts(&project, "replan");
+    let told = format!("## {}", crate::orchestrator::REJECTED_REPLAN_TITLE);
+    assert_eq!(replans.matches(&told).count(), 1, "{replans}");
+    assert!(
+        replans.contains("- T005: amends `T002.exists`"),
+        "{replans}"
+    );
+}
+
+/// A rejection older than the recent journal still reaches the replan,
+/// with every error: here it is journaled before the run, whose own
+/// entries push it out of the recent journal by the first replan, as the
+/// test checks. The scripted replan amends a check no conflict names
+/// unless it is told why the last replan was rejected, so it is accepted
+/// at once only when told.
+#[tokio::test(start_paused = true)]
+async fn a_rejection_out_of_the_recent_journal_still_reaches_the_replan() {
+    let harness = ScriptedHarness {
+        conflict: Some(ScriptedConflict {
+            task: "T003".into(),
+            check: "T001.exists".into(),
+            routing: Routing::AmendUndeclaredFirst,
+        }),
+        ..Default::default()
+    };
+    let (_work, project, log) = play(harness, |project| {
+        let at = || "2026-11-12T10:00:00Z".to_owned();
+        let errors = vec![
+            "T009: amends `T002.state`".to_owned(),
+            "card T007 was deleted".to_owned(),
+        ];
+        project
+            .append_journal(at(), JournalRecord::ReplanRejected { task: None, errors })
+            .unwrap();
+    })
+    .await;
+    let replans = prompts(&project, "replan");
+    let recent = replans
+        .split("## Recent orchestrator journal")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .unwrap_or_default();
+    assert!(
+        recent.contains("conflict T003"),
+        "no recent journal: {replans}"
+    );
+    assert!(
+        !recent.contains("replan-rejected"),
+        "the rejection is still in the recent journal: {recent}"
+    );
+    assert!(
+        replans.contains("- T009: amends `T002.state`\n- card T007 was deleted"),
+        "{replans}"
+    );
+    let rejections = project
+        .journal()
+        .iter()
+        .filter(|e| matches!(e.record, JournalRecord::ReplanRejected { .. }))
+        .count();
+    assert_eq!(
+        rejections, 1,
+        "only the one journaled before the run: {log}"
+    );
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+}

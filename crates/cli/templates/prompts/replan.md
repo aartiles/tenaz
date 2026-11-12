@@ -25,6 +25,11 @@ it to `status: todo` and add the amending card to its `depends`. If it
 does not, route around the blocked card another way, or leave it blocked
 and say why in your notes.
 
+When the briefing has a section "Why the last replan was rejected", the
+last replan's changes to the cards were thrown away for the errors it
+lists, so they are not in the task list, even if the planner notes
+describe them. Do not write them again with those errors.
+
 A card you add or rewrite must fit the builder context budget below.
 
 Every requirement except `manual` ones must stay covered by a card that is

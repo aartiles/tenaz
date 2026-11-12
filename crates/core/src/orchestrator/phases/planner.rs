@@ -12,7 +12,7 @@ use crate::role::Role;
 use crate::spec::coverage;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 
-use super::{CONFLICTS_TITLE, PromptParts};
+use super::{CONFLICTS_TITLE, PromptParts, REJECTED_REPLAN_TITLE, clip_lines};
 
 /// A planner session about one task (split).
 pub(super) struct PlannerTask {
@@ -97,12 +97,14 @@ impl Runner {
             }
         }
         extra.push(self.card_sizing());
+        let journal = self.project.journal();
         extra.push((
             "Recent orchestrator journal".to_owned(),
-            self.recent_journal(),
+            recent_journal(&journal),
         ));
         if role == Role::Replan {
             extra.extend(self.conflicts_section());
+            extra.extend(rejection_section(&journal, self.params.note_clip_bytes));
         }
         if let Some(planner) = self.project.note("PLANNER") {
             extra.push(("Previous planner notes".to_owned(), planner));
@@ -120,17 +122,6 @@ impl Runner {
                 ..PromptParts::default()
             },
         )
-    }
-
-    /// The last entries of the journal, oldest first, one line each.
-    fn recent_journal(&self) -> String {
-        let journal = self.project.journal();
-        let skip = journal.len().saturating_sub(RECENT_JOURNAL);
-        journal[skip..]
-            .iter()
-            .map(JournalEntry::summary)
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 
     /// The cards a planner left, after `before`, and what is wrong with them.
@@ -320,6 +311,46 @@ impl Runner {
         self.log(&format!("{} blocked", task.id));
         Ok(())
     }
+}
+
+/// The last entries of `journal`, oldest first, one line each.
+fn recent_journal(journal: &[JournalEntry]) -> String {
+    let skip = journal.len().saturating_sub(RECENT_JOURNAL);
+    journal[skip..]
+        .iter()
+        .map(JournalEntry::summary)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The section that tells a replan, until one is accepted, why the last
+/// replan's changes to the cards were thrown away: its notes may describe
+/// cards that are not in the task list, and the recent journal names the
+/// rejection without its errors, or not at all once later entries push it
+/// out. The errors are cut to `limit` bytes, as notes are. `None` when the
+/// last replan was accepted, or there was none.
+fn rejection_section(journal: &[JournalEntry], limit: usize) -> Option<(String, String)> {
+    let last = journal.iter().rev().find(|entry| {
+        matches!(
+            entry.record,
+            JournalRecord::ReplanRejected { .. } | JournalRecord::ReplanAccepted { .. }
+        )
+    })?;
+    let JournalRecord::ReplanRejected { errors, .. } = &last.record else {
+        return None;
+    };
+    let listed = errors
+        .iter()
+        .map(|e| format!("- {e}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some((
+        REJECTED_REPLAN_TITLE.to_owned(),
+        format!(
+            "Its changes to the cards were thrown away for:\n{}",
+            clip_lines(&listed, limit)
+        ),
+    ))
 }
 
 /// The journal record of a planner session whose cards were thrown away.
@@ -615,5 +646,113 @@ mod tests {
         let new = |status| status_fix(None, &card("T009", status));
         assert_eq!(new("todo"), None);
         assert_eq!(new("done"), Some(StatusFix::Reset));
+    }
+
+    /// Large enough for every error list below but the clipped one.
+    const LIMIT: usize = 1_000;
+
+    fn entry(record: JournalRecord) -> JournalEntry {
+        JournalEntry {
+            at: "2026-11-12T10:00:00Z".to_owned(),
+            record,
+        }
+    }
+
+    fn replan_rejected(errors: &[&str]) -> JournalEntry {
+        entry(JournalRecord::ReplanRejected {
+            task: None,
+            errors: errors.iter().map(|e| (*e).to_owned()).collect(),
+        })
+    }
+
+    fn replan_accepted() -> JournalEntry {
+        entry(JournalRecord::ReplanAccepted {
+            task: None,
+            added: vec![],
+        })
+    }
+
+    fn split_rejected() -> JournalEntry {
+        entry(JournalRecord::SplitRejected {
+            task: None,
+            errors: vec!["card T009 was deleted".to_owned()],
+        })
+    }
+
+    /// Each error of the last replan, rejected after an accepted one, on a
+    /// line of its own under the section's title.
+    #[test]
+    fn a_replan_after_a_rejected_one_is_told_each_error() {
+        let journal = [
+            replan_accepted(),
+            replan_rejected(&["T024: amends `T002.state`", "card T007 was deleted"]),
+        ];
+        let (title, body) = rejection_section(&journal, LIMIT).expect("a section");
+        assert_eq!(title, REJECTED_REPLAN_TITLE);
+        assert!(
+            body.contains("- T024: amends `T002.state`\n- card T007 was deleted"),
+            "{body}"
+        );
+    }
+
+    /// A replan accepted since the rejection has its cards in the task list:
+    /// nothing is left to tell.
+    #[test]
+    fn a_replan_accepted_since_the_rejection_clears_it() {
+        let journal = [
+            replan_rejected(&["card T007 was deleted"]),
+            replan_accepted(),
+        ];
+        assert_eq!(rejection_section(&journal, LIMIT), None);
+    }
+
+    /// With no replan yet there is nothing to tell.
+    #[test]
+    fn a_first_replan_is_told_nothing() {
+        assert_eq!(rejection_section(&[], LIMIT), None);
+    }
+
+    /// Of two rejections in a row, the replan is told the latest.
+    #[test]
+    fn the_latest_of_two_rejections_is_told() {
+        let journal = [replan_rejected(&["old"]), replan_rejected(&["new"])];
+        let (_, body) = rejection_section(&journal, LIMIT).expect("a section");
+        assert!(body.contains("- new") && !body.contains("- old"), "{body}");
+    }
+
+    /// A rejected split is not a rejected replan.
+    #[test]
+    fn a_rejected_split_is_not_told_to_a_replan() {
+        assert_eq!(
+            rejection_section(&[replan_accepted(), split_rejected()], LIMIT),
+            None
+        );
+    }
+
+    /// A split after a rejected replan leaves its errors to tell.
+    #[test]
+    fn a_split_does_not_clear_a_rejected_replan() {
+        let journal = [
+            replan_rejected(&["card T007 was deleted"]),
+            split_rejected(),
+        ];
+        let (_, body) = rejection_section(&journal, LIMIT).expect("a section");
+        assert!(
+            body.contains("- card T007 was deleted") && !body.contains("T009"),
+            "{body}"
+        );
+    }
+
+    /// A long list of errors is cut to the limit, and says how much.
+    #[test]
+    fn a_long_list_of_errors_is_clipped() {
+        let errors: Vec<String> = (0..100)
+            .map(|n| format!("card T{n:03} was deleted"))
+            .collect();
+        let errors: Vec<&str> = errors.iter().map(String::as_str).collect();
+        let (_, body) = rejection_section(&[replan_rejected(&errors)], 200).expect("a section");
+        assert!(body.contains("- card T000 was deleted"), "{body}");
+        assert!(body.contains("[... clipped "), "{body}");
+        assert!(!body.contains("T099"), "{body}");
     }
 }
