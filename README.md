@@ -448,10 +448,13 @@ lists the model, the wizard offers it and the run keeps its settings there
 over ACP, as fx is. Each runs in a `HOME` of its own under
 `.tenaz/private/`, with a configuration Tenaz writes for each session's
 model, so your own settings, plugins, MCP servers and memories stay out of
-the run ([ADR 0019](docs/adr/0019-opencode-and-qwen-code.md)). Qwen Code's
-memory and chat recording are turned off, and the context files it reads
-from its `HOME` are removed before each session, so every session starts
-from the plan and the repository alone. Neither takes a steering message:
+the run ([ADR 0019](docs/adr/0019-opencode-and-qwen-code.md)). fx,
+OpenCode, Qwen Code and dsh each get your Playwright and npm caches
+(`PLAYWRIGHT_BROWSERS_PATH`, `npm_config_cache`), since `verify` runs
+with your own `HOME`. Qwen Code's memory and chat recording are turned
+off, and the context files it reads from its `HOME` are removed before
+each session, so every session starts from the plan and the repository
+alone. Neither takes a steering message:
 a watchdog stops the session without one. On its first run OpenCode
 installs its plugin package (about 60 MB) into that `HOME`, from npm's
 cache when it is there. Each has been tried in one real run, much less
@@ -467,9 +470,7 @@ under `.tenaz/private/dsh-home`, and Tenaz writes a patch there for each
 session's model that points dsh's `acp` profile at the engine proxy
 instead of DeepSeek's own service and turns off dsh's own automatic
 compaction, so Tenaz's context budget ends a session; a summary request
-dsh still sends is refused and ends the session (ADR 0030). dsh gets
-the user's Playwright and npm caches (`PLAYWRIGHT_BROWSERS_PATH`,
-`npm_config_cache`), since `verify` runs with the user's own `HOME`.
+dsh still sends is refused and ends the session (ADR 0030).
 dsh does not ask before its tool calls, and the media tools and pinned
 skills are not offered to it yet.
 The thinking level maps to its reasoning effort (`high` is its `xhigh`).

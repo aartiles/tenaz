@@ -96,6 +96,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   comes from the engine where it reports one (Sushi, vLLM, llama.cpp's
   `/props`, LM Studio's `/api/v0/models`); Ollama does not, so the wizard
   asks. Detection is tested against recorded answers, not live engines.
+- fx, OpenCode, Qwen Code and dsh get the user's Playwright and npm
+  caches (`PLAYWRIGHT_BROWSERS_PATH`, `npm_config_cache`), since `verify`
+  runs with the user's own `HOME`: the user's own settings when set, else
+  `~/Library/Caches/ms-playwright` (or `$XDG_CACHE_HOME`, `~/.cache`) and
+  `~/.npm`. In the Hardball 3D run (2026-11-11 and 12, fx 0.0.16), before
+  fx got them, its Playwright checks failed for the agent while
+  `verify` passed for Tenaz, and 42 of 46 sessions worked around it by
+  running `verify` with `HOME` set by hand, often 10 to 25 turns in.
+  Tested with unit tests and a fake agent that reports its environment;
+  no run has used it with fx, OpenCode or Qwen Code yet.
 - fx runs with an isolated `HOME` under `.tenaz/private/fx-home/`, so your
   own fx settings and MCP servers are not touched. Pi runs with its own
   agent directory, `.tenaz/private/pi-agent/` (`PI_CODING_AGENT_DIR`),
@@ -201,9 +211,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   sandboxed run writes them only while `~/Library/Caches` (or
   `~/.cache`) and `~/.npm` stay in `sandboxAllowWrite`, or the user's
   own paths are added there. A `cache` set in `~/.npmrc` is not read:
-  dsh gets `~/.npm` while `verify` uses that cache. The other agents
-  with a `HOME` of their own (fx, OpenCode, Qwen Code) do not get these
-  caches yet (OpenCode gets npm's). No run has used this yet. What the
+  dsh gets `~/.npm` while `verify` uses that cache; the same holds for
+  fx, OpenCode and Qwen Code. No run has used this yet. What the
   probe showed: dsh did not send permission requests, so its tools run
   without the runner's approval and the watchdog sees a call only once
   it runs; its `usage_update` has no cache counts; it sends its answer after the
@@ -684,8 +693,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   before each session; no run has written one. Neither agent takes a
   steering message: Tenaz steers only fx and Pi, so a watchdog stops their
   sessions without a warning. OpenCode installs its plugin package (about
-  60 MB) into its `HOME` on the first run, from npm's cache in `~/.npm`: a
-  `sandboxAllowWrite` without `~/.npm` should break it. Qwen Code starts
+  60 MB) into its `HOME` on the first run, from the user's npm cache (their
+  own `npm_config_cache` when set, else `~/.npm`): in a sandboxed run, a
+  cache outside `sandboxAllowWrite` should break it. Qwen Code starts
   with a system prompt of about 21k tokens (OpenCode about 7k), so a small
   window fills sooner.
 - **Install script and Homebrew formula.** Both installed `tenaz` 0.1.0

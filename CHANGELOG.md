@@ -12,6 +12,10 @@ uses [Semantic Versioning](https://semver.org/).
   bootstrap, sized to the local builder model's context budget. The runner
   validates those files before building, using its existing path that skips
   valid bootstrap steps. Local bootstrap remains available.
+- fx, OpenCode and Qwen Code now get the user's Playwright and npm caches,
+  as dsh does, since `verify` runs with the user's own `HOME`. Before, a
+  Playwright check failed for the agent and passed for Tenaz, and in a
+  run with fx, 42 of 46 sessions ran `verify` with `HOME` set by hand.
 - A split or replan that leaves cards Tenaz would throw away is told the
   errors before it ends, and gets one more turn to fix them (ADR 0033).
   Cards still wrong after that are thrown away, as before.

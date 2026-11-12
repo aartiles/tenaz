@@ -111,13 +111,15 @@ pub struct OpenCodeLaunch {
     /// The isolated `HOME`, which holds the configuration and everything
     /// `OpenCode` keeps between sessions.
     pub home: PathBuf,
-    /// npm's cache: the user's own, so that the package `OpenCode` installs
-    /// into its configuration folder at start needs no network after the
-    /// first run. `None` leaves it in `home`.
-    pub npm_cache: Option<PathBuf>,
     /// A program and leading arguments `OpenCode` is started through: the
     /// sandbox launcher, when the run is sandboxed.
     pub wrapper: Vec<String>,
+    /// The user's browser and package caches (see
+    /// [`crate::caches::user_caches`]), so that what the agent installs
+    /// is found by `verify`, which runs with the user's own `HOME`. npm's
+    /// is also where the package `OpenCode` installs into its configuration
+    /// folder at start is kept, so it needs no network after the first run.
+    pub caches: Vec<(String, String)>,
 }
 
 impl OpenCodeLaunch {
@@ -125,8 +127,8 @@ impl OpenCodeLaunch {
         Self {
             binary: binary.into(),
             home: home.into(),
-            npm_cache: None,
             wrapper: Vec::new(),
+            caches: Vec::new(),
         }
     }
 
@@ -137,7 +139,8 @@ impl OpenCodeLaunch {
 
     /// The environment: `HOME` and the XDG folders inside `home`, so the
     /// user's own configuration, data and plugins stay out, the
-    /// configuration file, and no update or model list fetched.
+    /// configuration file, no update or model list fetched, and the user's
+    /// caches.
     pub fn env(&self) -> Vec<(String, String)> {
         let at = |path: &str| self.home.join(path).display().to_string();
         let mut env = vec![
@@ -156,9 +159,7 @@ impl OpenCodeLaunch {
             ("OPENCODE_DISABLE_AUTOUPDATE".to_owned(), "1".to_owned()),
             ("OPENCODE_DISABLE_MODELS_FETCH".to_owned(), "1".to_owned()),
         ];
-        if let Some(cache) = &self.npm_cache {
-            env.push(("npm_config_cache".to_owned(), cache.display().to_string()));
-        }
+        env.extend(self.caches.iter().cloned());
         env
     }
 }
@@ -339,8 +340,22 @@ mod tests {
                 ("OPENCODE_DISABLE_MODELS_FETCH", "1"),
             ])
         );
-        launch.npm_cache = Some("/Users/me/.npm".into());
-        assert_eq!(env(&launch)["npm_config_cache"], "/Users/me/.npm");
+        let own = env(&launch);
+        launch.caches = vec![
+            (
+                "PLAYWRIGHT_BROWSERS_PATH".to_owned(),
+                "/Users/me/pw".to_owned(),
+            ),
+            ("npm_config_cache".to_owned(), "/Users/me/.npm".to_owned()),
+        ];
+        let with_caches = env(&launch);
+        assert_eq!(
+            with_caches.len(),
+            own.len() + 2,
+            "a cache overrides one of OpenCode's own"
+        );
+        assert!(own.iter().all(|(k, v)| with_caches[k] == *v));
+        assert_eq!(with_caches["npm_config_cache"], "/Users/me/.npm");
     }
 
     fn spec(label: &str) -> SessionSpec {

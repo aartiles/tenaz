@@ -176,6 +176,7 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     // says outside the protocol (see tenaz_acp::fx::normalize_line).
     launch.shim = std::env::current_exe().ok();
     launch.wrapper = inputs.wrapper.to_vec();
+    launch.caches = inputs.caches.to_vec();
     // Profile servers accept a long operation timeout; servers passed in session/new are cut at 60 s.
     let meta = (!inputs.mcp_endpoints.is_empty()).then(|| {
         serde_json::json!({ "fx": { "profileMcpServers": true } })
@@ -205,10 +206,12 @@ fn opencode_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harnes
         skills: allowed_skills(inputs.skills, inputs.agent_skills),
     };
     let mut launch = OpenCodeLaunch::new(&inputs.options.bin, &home);
-    // npm's own cache, which the sandbox lets the agent write by default;
-    // a `sandboxAllowWrite` without `~/.npm` leaves OpenCode unable to start.
-    launch.npm_cache = std::env::home_dir().map(|h| h.join(".npm"));
     launch.wrapper = inputs.wrapper.to_vec();
+    // npm's cache is the user's (their own setting, else `~/.npm`). The
+    // sandbox lets the agent write `~/.npm` by default: a cache of their
+    // own, or a `sandboxAllowWrite` without `~/.npm`, must be added there
+    // or OpenCode cannot install its plugin package and start.
+    launch.caches = inputs.caches.to_vec();
     inputs.acp_agent(
         Arc::new(OpenCodeAgent {
             launch,
@@ -230,6 +233,7 @@ fn qwen_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> 
     };
     let mut launch = QwenLaunch::new(&inputs.options.bin, &home, inputs.base_url.clone());
     launch.wrapper = inputs.wrapper.to_vec();
+    launch.caches = inputs.caches.to_vec();
     inputs.acp_agent(
         Arc::new(QwenAgent { launch, settings }),
         None,
@@ -536,21 +540,12 @@ mod tests {
         }
     }
 
-    /// dsh starts with the user's caches it is given, so what it installs
-    /// there is where `verify`, with the user's own `HOME`, finds it.
+    /// Each agent with a `HOME` of its own starts with the user's caches
+    /// it is given, so what it installs there is where `verify`, with the
+    /// user's own `HOME`, finds it.
     #[cfg(unix)]
     #[tokio::test]
-    async fn dsh_starts_with_the_user_s_caches() {
-        let dir = tempfile::tempdir().unwrap();
-        let seen = dir.path().join("env");
-        let recorder = dir.path().join("record");
-        tenaz_adapters::testing::write_executable(
-            &recorder,
-            &format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$PLAYWRIGHT_BROWSERS_PATH\" \"$npm_config_cache\" > '{}'\nexit 1\n",
-                seen.display()
-            ),
-        );
+    async fn an_agent_with_its_own_home_starts_with_the_user_s_caches() {
         let caches = [
             (
                 "PLAYWRIGHT_BROWSERS_PATH".to_owned(),
@@ -558,20 +553,42 @@ mod tests {
             ),
             ("npm_config_cache".to_owned(), "/u/npm".to_owned()),
         ];
-        let wrapper = [recorder.display().to_string()];
-        let extras = Extras {
-            wrapper: &wrapper,
-            caches: &caches,
-            ..Extras::default()
-        };
-        let harness = build_with(dir.path(), HarnessKind::Dsh, &extras).unwrap();
-        let spec = session_spec(dir.path());
-        let opened = tokio::time::timeout(Duration::from_secs(10), harness.open(spec))
-            .await
-            .expect("the launch ends");
-        assert!(opened.is_err(), "the recorder is not an ACP agent");
-        let env = std::fs::read_to_string(&seen).expect("the wrapper ran");
-        assert_eq!(env.lines().collect::<Vec<_>>(), ["/u/browsers", "/u/npm"]);
+        for kind in [
+            HarnessKind::Fx,
+            HarnessKind::OpenCode,
+            HarnessKind::Qwen,
+            HarnessKind::Dsh,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let seen = dir.path().join("env");
+            let recorder = dir.path().join("record");
+            tenaz_adapters::testing::write_executable(
+                &recorder,
+                &format!(
+                    "#!/bin/sh\nprintf '%s\\n' \"$PLAYWRIGHT_BROWSERS_PATH\" \"$npm_config_cache\" > '{}'\nexit 1\n",
+                    seen.display()
+                ),
+            );
+            let wrapper = [recorder.display().to_string()];
+            let extras = Extras {
+                wrapper: &wrapper,
+                caches: &caches,
+                ..Extras::default()
+            };
+            let harness = build_with(dir.path(), kind, &extras).unwrap();
+            let spec = session_spec(dir.path());
+            let opened = tokio::time::timeout(Duration::from_secs(10), harness.open(spec))
+                .await
+                .expect("the launch ends");
+            assert!(opened.is_err(), "{kind}: the recorder is not an ACP agent");
+            let env = std::fs::read_to_string(&seen)
+                .unwrap_or_else(|e| panic!("{kind}: the wrapper did not run: {e}"));
+            assert_eq!(
+                env.lines().collect::<Vec<_>>(),
+                ["/u/browsers", "/u/npm"],
+                "{kind}"
+            );
+        }
     }
 
     fn json(path: &Path) -> serde_json::Value {

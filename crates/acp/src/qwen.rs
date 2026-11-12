@@ -78,6 +78,10 @@ pub struct QwenLaunch {
     /// A program and leading arguments Qwen Code is started through: the
     /// sandbox launcher, when the run is sandboxed.
     pub wrapper: Vec<String>,
+    /// The user's browser and package caches (see
+    /// [`crate::caches::user_caches`]), so that what the agent installs
+    /// is found by `verify`, which runs with the user's own `HOME`.
+    pub caches: Vec<(String, String)>,
 }
 
 impl QwenLaunch {
@@ -91,6 +95,7 @@ impl QwenLaunch {
             home: home.into(),
             base_url: base_url.into(),
             wrapper: Vec::new(),
+            caches: Vec::new(),
         }
     }
 
@@ -116,9 +121,11 @@ impl QwenLaunch {
     }
 
     /// The environment Qwen Code starts with: `HOME` at `home`, where it
-    /// finds the settings Tenaz writes.
+    /// finds the settings Tenaz writes, then the user's caches.
     pub fn env(&self) -> Vec<(String, String)> {
-        vec![("HOME".to_owned(), self.home.display().to_string())]
+        let mut env = vec![("HOME".to_owned(), self.home.display().to_string())];
+        env.extend(self.caches.iter().cloned());
+        env
     }
 }
 
