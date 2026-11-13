@@ -19,14 +19,20 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 pub use init::{InitOptions, Templates, init};
-// Only the scripted harness (`testing`) reads this.
+// Only the scripted harness (`testing`) reads these.
 #[cfg(any(test, feature = "testing"))]
-pub(crate) use phases::CONFLICTS_TITLE;
+pub(crate) use phases::{CONFLICTS_TITLE, REJECTED_REPLAN_TITLE};
 pub use preflight::TOOL_PROBE_FILE;
 pub use sampler::Sampler;
-/// The scripted harness knows the prompt about refused reopens by it.
+/// The scripted harness knows the prompts about invalid cards, refused
+/// reopens and a conflict that does not stand by these.
 #[cfg(any(test, feature = "testing"))]
-pub(crate) use session::REFUSED_REOPENS;
+pub(crate) use session::{INVALID_CARDS, PASSING_CONFLICT, REFUSED_REOPENS};
+/// Scenarios find these prompts in a session record by these names.
+#[cfg(test)]
+pub(crate) use session::{
+    INVALID_CARDS_NOTE, OWN_CHECKS_NOTE, PASSING_CONFLICT_NOTE, REFUSED_REOPENS_NOTE,
+};
 pub use status::{TOOL_REPAIRS, status_json, status_text};
 
 use crate::lease::LeaseError;

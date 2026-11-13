@@ -47,8 +47,8 @@ impl Runner {
                 model,
                 watch: None,
                 persist: false,
-                own_checks: None,
-                replan_before: None,
+                builder_task: None,
+                planner: None,
             })
             .await?;
         let cache_reported = self

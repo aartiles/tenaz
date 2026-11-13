@@ -115,7 +115,8 @@ fn to_build(status: TaskStatus) -> bool {
 }
 
 /// What is wrong with the `amends` of the cards in `backlog` that may
-/// still be built: each check they name must be one a conflict names.
+/// still be built: each check they name must be one a conflict names (see
+/// `not_named`).
 pub fn amend_errors(backlog: &Backlog, conflicts: &[Conflict]) -> Vec<String> {
     let declared = |check: &String| conflicts.iter().any(|c| c.checks.contains(check));
     backlog
@@ -125,14 +126,18 @@ pub fn amend_errors(backlog: &Backlog, conflicts: &[Conflict]) -> Vec<String> {
             card.amends
                 .iter()
                 .filter(|check| !declared(check))
-                .map(move |check| {
-                    format!(
-                        "{}: amends `{check}`, which no file in .tenaz/conflicts/ names",
-                        card.id
-                    )
-                })
+                .map(move |check| not_named(&card.id, check))
         })
         .collect()
+}
+
+/// The error for card `id` amending `check`, which no conflict that stands
+/// names, with the way out: drop the `amends`, since only a builder
+/// declares a conflict. Shown to the bootstrap and to planners alike.
+pub(crate) fn not_named(id: &TaskId, check: &str) -> String {
+    format!(
+        "{id}: amends `{check}`, which no conflict that stands names. Remove `{check}` from this card's `amends`. Do not write .tenaz/conflicts/: only a builder declares a conflict, and a later replan may then amend the check."
+    )
 }
 
 #[cfg(test)]
@@ -275,9 +280,7 @@ mod tests {
             card("T004", "active", "amends: [T000.old]\n"),
             card("T005", "blocked", "amends: [T000.old]\n"),
         ]);
-        let not_named = |card: &str, check: &str| {
-            format!("{card}: amends `{check}`, which no file in .tenaz/conflicts/ names")
-        };
+        let not_named = |card: &str, check: &str| not_named(&TaskId::parse(card).unwrap(), check);
         assert_eq!(
             amend_errors(&backlog, &[conflict]),
             [
@@ -285,6 +288,15 @@ mod tests {
                 not_named("T005", "T000.old"),
                 not_named("T016h", "T009.lights"),
             ]
+        );
+    }
+
+    /// The error names the card and the check, and says what to do.
+    #[test]
+    fn an_amend_no_conflict_names_says_to_drop_it() {
+        assert_eq!(
+            not_named(&TaskId::parse("T024").unwrap(), "T002.state"),
+            "T024: amends `T002.state`, which no conflict that stands names. Remove `T002.state` from this card's `amends`. Do not write .tenaz/conflicts/: only a builder declares a conflict, and a later replan may then amend the check."
         );
     }
 }

@@ -55,18 +55,26 @@ put T002 back to `blocked`, where nothing builds it.
 
 **A**, in `Conflict::stands_in` (`crates/core/src/conflict.rs`),
 `LoadedBacklog::ready` (`crates/core/src/backlog.rs`) and
-`undo_status_changes` with `reopen_fix`
-(`crates/core/src/orchestrator/phases/planner.rs`). Only a replan may
+`judge` with `reopen_fix`
+(`crates/core/src/orchestrator/phases/planner/judge.rs`), written by
+`Runner::put_statuses_right` (`planner.rs`). Only a replan may
 reopen; a split is not shown the conflicts. The replan prompt and
 `protocol.md` name both shapes: drop the blocked card, or set it back to
 `todo` depending on the amending card.
 
 Tenaz now puts right the statuses a planner may not set before it judges
-its cards. A blocked task the planner set to `done` or `active` is
-blocked again, its conflict still stands, and the amending card is
-accepted instead of rejected with "no file in .tenaz/conflicts/ names"
-its check. A reopen is judged last, against the statuses the others
-keep: an amending card the planner wrote as `done` is `todo` by then.
+its cards, and writes them only when it keeps the cards. A blocked task
+the planner set to `done` or `active` is blocked again, its conflict
+still stands, and the amending card is accepted instead of rejected with
+"no file in .tenaz/conflicts/ names" its check. A reopen is judged last,
+against the statuses the others keep: an amending card the planner wrote
+as `done` is `todo` by then.
+
+Later (2026-11-12), part of B was added too. In the Hardball 3D run four
+replans in a row were rejected for the same card, and none was told why:
+the journal summary named no errors, and later entries pushed it out of
+the recent journal. A replan now gets the last rejected replan's errors
+in "Why the last replan was rejected", until a replan is accepted.
 
 ## Consequences
 
@@ -125,3 +133,7 @@ Known gaps, older than this change or wider than it:
   built, a reopened task's conflict file stays until its next attempt; a
   replan that adds another card amending the same check in between is
   licensed by it again.
+  (2026-11-13: the code does not allow it. A planner's writes to
+  `.tenaz/conflicts/` are reverted as out of its role; only a builder
+  writes its own task's conflict. In the resumed Hardball 3D run a
+  replan tried it, and the revert left its `amends` unlicensed.)

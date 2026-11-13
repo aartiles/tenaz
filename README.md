@@ -65,7 +65,11 @@ may add a card that amends those checks, judged against the spec (ADR
 0009). The replan may also set the blocked task back to `todo`: it waits
 until that card is built, then starts again with no attempts (ADR 0018).
 A replan that reopens it with no such card is told, before it ends, that
-Tenaz will block it again.
+Tenaz will block it again. A split or replan whose cards Tenaz would throw
+away, such as a card amending a check no conflict names, is told why
+before it ends and may fix them (ADR 0033). A conflict file left on an
+attempt that passes does not stand: the builder is told before it ends,
+and the reviewer is told too (ADR 0034).
 Work too heavy for a session, such as a long render, is declared
 by the builder in `.tenaz/jobs/<TASK>.json`; Tenaz runs it between
 sessions, with the engine's memory freed where it can, for at most
@@ -294,7 +298,9 @@ block. No ledger edits or extra flags are needed. Leave the files unwritten
 to keep the local bootstrap flow. The frontier agent reviews the result.
 
 The initial `verify --all` must pass twice with identical final JSON,
-checking only a real baseline: existing tests or tooling smoke checks.
+and leave the files git tracks or does not ignore as it found them (ADR
+0035). It checks only a real baseline: existing tests or tooling smoke
+checks.
 It does not prove future requirements. Builders add those checks as they
 implement each task; do not use placeholder checks that always pass.
 The handoff has been tried with real tools; full completion and any benefit
@@ -446,10 +452,13 @@ lists the model, the wizard offers it and the run keeps its settings there
 over ACP, as fx is. Each runs in a `HOME` of its own under
 `.tenaz/private/`, with a configuration Tenaz writes for each session's
 model, so your own settings, plugins, MCP servers and memories stay out of
-the run ([ADR 0019](docs/adr/0019-opencode-and-qwen-code.md)). Qwen Code's
-memory and chat recording are turned off, and the context files it reads
-from its `HOME` are removed before each session, so every session starts
-from the plan and the repository alone. Neither takes a steering message:
+the run ([ADR 0019](docs/adr/0019-opencode-and-qwen-code.md)). fx,
+OpenCode, Qwen Code and dsh each get your Playwright and npm caches
+(`PLAYWRIGHT_BROWSERS_PATH`, `npm_config_cache`), since `verify` runs
+with your own `HOME`. Qwen Code's memory and chat recording are turned
+off, and the context files it reads from its `HOME` are removed before
+each session, so every session starts from the plan and the repository
+alone. Neither takes a steering message:
 a watchdog stops the session without one. On its first run OpenCode
 installs its plugin package (about 60 MB) into that `HOME`, from npm's
 cache when it is there. Each has been tried in one real run, much less
@@ -465,9 +474,7 @@ under `.tenaz/private/dsh-home`, and Tenaz writes a patch there for each
 session's model that points dsh's `acp` profile at the engine proxy
 instead of DeepSeek's own service and turns off dsh's own automatic
 compaction, so Tenaz's context budget ends a session; a summary request
-dsh still sends is refused and ends the session (ADR 0030). dsh gets
-the user's Playwright and npm caches (`PLAYWRIGHT_BROWSERS_PATH`,
-`npm_config_cache`), since `verify` runs with the user's own `HOME`.
+dsh still sends is refused and ends the session (ADR 0030).
 dsh does not ask before its tool calls, and the media tools and pinned
 skills are not offered to it yet.
 The thinking level maps to its reasoning effort (`high` is its `xhigh`).

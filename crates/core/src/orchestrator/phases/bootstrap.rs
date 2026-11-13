@@ -67,15 +67,17 @@ impl Runner {
         (backlog, errors)
     }
 
-    /// Why `./verify --all` is not a deterministic pass, unless it is one.
+    /// Why `./verify --all` is not a deterministic pass that leaves the
+    /// working tree as it found it (ADR 0035), unless it is one.
     async fn verify_all_error(&self) -> Option<String> {
+        let before = self.tree_state();
         let first = self.run_verify(&["--all"]).await;
         if !first.ok {
             return Some(format!("./verify --all does not pass:\n{}", first.summary));
         }
         let second = self.run_verify(&["--all"]).await;
         if second.ok && second.json == first.json {
-            return None;
+            return self.tree_writes(before.as_ref());
         }
         Some(format!(
             "./verify --all is not deterministic:\nrun 1: {}\nrun 2: {}",

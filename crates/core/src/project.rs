@@ -12,6 +12,7 @@ use crate::ledger::{JournalEntry, JournalRecord, Ledger, Verdict};
 use crate::role::Role;
 use crate::spec::{Requirement, parse_requirements};
 use crate::task::{TaskId, TaskStatus, set_card_fields};
+use crate::util::sha256_hex;
 
 /// The original request, copied at `init`.
 pub const BRIEF: &str = ".tenaz/brief.md";
@@ -182,6 +183,12 @@ impl Project {
         fs::read_to_string(self.path(relative))
     }
 
+    /// A hash of the bytes of the file at `relative`; `None` when it cannot
+    /// be read, as when it was deleted.
+    pub fn content_hash(&self, relative: &str) -> Option<String> {
+        fs::read(self.path(relative)).ok().map(sha256_hex)
+    }
+
     pub fn read_if(&self, relative: &str) -> Option<String> {
         self.read(relative).ok()
     }
@@ -324,6 +331,17 @@ impl Project {
     }
 
     pub fn load_backlog(&self) -> LoadedBacklog {
+        let mut loaded = self.load_cards();
+        loaded.conflicts = self.conflicts(&loaded.backlog);
+        loaded
+            .errors
+            .extend(conflict::amend_errors(&loaded.backlog, &loaded.conflicts));
+        loaded
+    }
+
+    /// The task cards and the problems in them, before their `amends` are
+    /// checked against the conflicts that stand (`load_backlog` does).
+    pub(crate) fn load_cards(&self) -> LoadedBacklog {
         let dir = self.tasks_dir();
         let Ok(entries) = fs::read_dir(&dir) else {
             return LoadedBacklog {
@@ -341,15 +359,10 @@ impl Project {
             })
             .collect();
         files.sort();
-        let mut loaded = Backlog::load(
+        Backlog::load(
             files.iter().map(|(n, t)| (n.as_str(), t.as_str())),
             &self.requirements(),
-        );
-        loaded.conflicts = self.conflicts(&loaded.backlog);
-        loaded
-            .errors
-            .extend(conflict::amend_errors(&loaded.backlog, &loaded.conflicts));
-        loaded
+        )
     }
 
     /// The conflicts that stand (`Conflict::stands_in`, ADR 0009 and 0018):
@@ -596,7 +609,10 @@ mod tests {
         assert_eq!(loaded.conflicts, []);
         assert_eq!(
             loaded.errors,
-            ["T008: amends `T003.x`, which no file in .tenaz/conflicts/ names"]
+            [crate::conflict::not_named(
+                &TaskId::parse("T008").unwrap(),
+                "T003.x"
+            )]
         );
     }
 

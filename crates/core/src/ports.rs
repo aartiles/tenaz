@@ -1,6 +1,7 @@
 //! The interfaces the orchestration depends on. Adapters implement them;
 //! tests use fakes.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -125,6 +126,11 @@ pub trait Vcs: Send + Sync {
     /// Modified, added, deleted and untracked paths relative to the root.
     fn changed_paths(&self) -> Result<Vec<String>, VcsError>;
     fn in_head(&self, path: &str) -> bool;
+    /// Which of `paths` git ignores: untracked, and matched by a
+    /// `.gitignore`. A tracked file is never ignored, even when a
+    /// `.gitignore` matches it; one removed from the index (`git rm
+    /// --cached`) can be.
+    fn ignored(&self, paths: &[String]) -> Result<BTreeSet<String>, VcsError>;
     fn head_content(&self, path: &str) -> Option<String>;
     /// Restores `path` from HEAD, or deletes it when HEAD has no such path.
     fn revert_path(&self, path: &str) -> Result<(), VcsError>;

@@ -1,5 +1,6 @@
 //! The project repository through the `git` command line.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -50,27 +51,7 @@ impl GitRepo {
         env: &[(&str, &Path)],
         stdin: Option<&str>,
     ) -> Result<String, VcsError> {
-        use std::io::Write as _;
-        let mut command = self.command();
-        command.args(args);
-        for (key, value) in env {
-            command.env(key, value);
-        }
-        let output = match stdin {
-            None => command.output(),
-            Some(text) => command
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    if let Some(mut pipe) = child.stdin.take() {
-                        pipe.write_all(text.as_bytes())?;
-                    }
-                    child.wait_with_output()
-                }),
-        }
-        .map_err(|e| VcsError(format!("git {}: {e}", args.join(" "))))?;
+        let output = self.output_with(args, env, stdin)?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
@@ -86,6 +67,37 @@ impl GitRepo {
                 }
             )))
         }
+    }
+
+    /// Runs git with extra environment and, optionally, stdin, whatever
+    /// its status; an error only when it cannot run.
+    fn output_with(
+        &self,
+        args: &[&str],
+        env: &[(&str, &Path)],
+        stdin: Option<&str>,
+    ) -> Result<std::process::Output, VcsError> {
+        use std::io::Write as _;
+        let mut command = self.command();
+        command.args(args);
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        match stdin {
+            None => command.output(),
+            Some(text) => command
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .and_then(|mut child| {
+                    if let Some(mut pipe) = child.stdin.take() {
+                        pipe.write_all(text.as_bytes())?;
+                    }
+                    child.wait_with_output()
+                }),
+        }
+        .map_err(|e| VcsError(format!("git {}: {e}", args.join(" "))))
     }
 
     fn ok(&self, args: &[&str]) -> bool {
@@ -400,6 +412,30 @@ impl Vcs for GitRepo {
         self.ok(&["cat-file", "-e", &format!("HEAD:{path}")])
     }
 
+    /// `git check-ignore`, which exits 1 when it ignores none of them.
+    fn ignored(&self, paths: &[String]) -> Result<BTreeSet<String>, VcsError> {
+        if paths.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let mut input = paths.join("\0");
+        input.push('\0');
+        let args = ["check-ignore", "-z", "--stdin"];
+        let output = self.output_with(&args, &[], Some(&input))?;
+        match output.status.code() {
+            Some(0) => Ok(String::from_utf8_lossy(&output.stdout)
+                .split('\0')
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned)
+                .collect()),
+            Some(1) => Ok(BTreeSet::new()),
+            _ => Err(VcsError(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))),
+        }
+    }
+
     fn head_content(&self, path: &str) -> Option<String> {
         self.git(&["show", &format!("HEAD:{path}")]).ok()
     }
@@ -470,6 +506,28 @@ mod tests {
     }
 
     tenaz_core::vcs_contract_tests!(|root: &Path| -> Box<dyn Vcs> { Box::new(GitRepo::new(root)) });
+
+    /// A tracked file taken out of the index (`git rm --cached`) while a
+    /// `.gitignore` matches it is ignored, though git still lists it as
+    /// changed (a staged deletion): what ADR 0035's error asks a builder
+    /// to do. The fake `SnapshotVcs` has no index, so only git shows it.
+    #[test]
+    fn a_file_untracked_under_an_ignored_folder_is_ignored() {
+        let (dir, repo) = repo();
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        std::fs::write(dir.path().join("out/x.png"), "1\n").unwrap();
+        repo.commit_all("out").unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "out/\n").unwrap();
+        repo.commit_all("ignore out").unwrap();
+        repo.git(&["rm", "--cached", "-q", "out/x.png"]).unwrap();
+        std::fs::write(dir.path().join("out/x.png"), "2\n").unwrap();
+        let path = "out/x.png".to_owned();
+        assert!(repo.changed_paths().unwrap().contains(&path));
+        assert_eq!(
+            repo.ignored(std::slice::from_ref(&path)).unwrap(),
+            BTreeSet::from([path])
+        );
+    }
 
     #[test]
     fn worktrees_branches_and_history() {

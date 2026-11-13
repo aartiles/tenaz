@@ -76,6 +76,11 @@ file; the code of its checks goes in `checks/`, never in a folder named
 - Checks are deterministic, need no network, clean up after themselves, and
   finish within 120 seconds in total, unless `.tenaz/brief.md` sets another
   limit.
+- `verify` leaves the working tree as it found it: what checks produce goes
+  under a folder `.gitignore` lists (for example `artifacts/`), never into
+  files git tracks or does not ignore; untrack such files already
+  committed (`git rm --cached <path>`). An attempt after which it changed
+  files git tracks or does not ignore fails.
 - A check tests behaviour (run the program and assert on its output or
   state), not merely that a file exists.
 - Never delete or weaken an existing check to make it pass. If a check is
@@ -123,10 +128,13 @@ Which requirement each check serves, what you measured, and why the card
 and the check cannot both pass.
 ```
 
-The file is read only when the attempt fails `verify`. It stands when every
-check it names belongs to a done task other than yours; then the
-orchestrator blocks the task at once and starts a replan. One that does not
-stand is removed, and the attempt fails as any other. A replan may add a
+The file is read only when the attempt fails `verify`: do not make your
+checks pass around the conflict. If your attempt passes while the file is
+there, you are told before the session ends; a file left in place is
+removed when the task is done. It stands when every check it names
+belongs to a done task other than yours; then the orchestrator blocks the
+task at once and starts a replan. One that does not stand is removed, and
+the attempt fails as any other. A replan may add a
 card with `amends: [T016a.look-cues]`, naming only checks of a conflict
 that stood, and either drop the blocked task or set it back to `todo`
 with the amending card in its `depends`. The builder of that card may

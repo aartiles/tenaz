@@ -5,13 +5,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::backlog::Backlog;
 use crate::metrics::RequestRecord;
-use crate::orchestrator::phases::refused_reopens_of;
+use crate::orchestrator::phases::{AttemptFailure, PlannerSession, error_list};
 use crate::orchestrator::{RunError, Runner};
 use crate::ports::{Clock, PermissionDecision, Session, SessionModel, SessionSpec};
+use crate::project::conflict_path;
+use crate::role::Role;
 use crate::session::{SessionEvent, SessionMetrics};
 use crate::task::TaskId;
+use crate::util::clip;
 use crate::verify::retarget;
 use crate::watchdog::{Action, WatchConfig, Watchdog};
 
@@ -45,12 +47,15 @@ pub(crate) struct HarnessRun<'a> {
     pub persist: bool,
     /// A builder's task: a session that answered every prompt while
     /// `./verify --task` runs no passing check of it gets one more prompt
-    /// asking for them.
-    pub own_checks: Option<&'a TaskId>,
-    /// A replan's backlog from before it: a session that answered every
-    /// prompt having set a blocked task back to `todo` that Tenaz would
-    /// block again gets one more prompt saying so (ADR 0018).
-    pub replan_before: Option<&'a Backlog>,
+    /// asking for them; one that left a conflict file while its attempt
+    /// would pass gets one more saying the file does not stand (ADR 0034).
+    pub builder_task: Option<&'a TaskId>,
+    /// A split's or replan's role and backlog from before it: a session
+    /// that answered every prompt having left cards Tenaz would throw away
+    /// gets one more prompt naming why (ADR 0033), and a replan that set a
+    /// blocked task back to `todo` that Tenaz would block again gets one
+    /// more prompt saying so (ADR 0018).
+    pub planner: Option<PlannerSession<'a>>,
 }
 
 /// What the session loop does after an event or a wake-up.
@@ -68,6 +73,22 @@ enum Woke {
     Killed,
 }
 
+/// A builder session's task and the prompts it was already sent after
+/// answering every prompt; each is sent at most once per harness session.
+struct BuilderFollowUps<'a> {
+    task: &'a TaskId,
+    asked_checks: bool,
+    asked_conflict: bool,
+}
+
+/// A planner session and the prompts it was already sent after answering
+/// every prompt; each is sent at most once per harness session.
+struct PlannerFollowUps<'a> {
+    session: PlannerSession<'a>,
+    asked_cards: bool,
+    asked_reopens: bool,
+}
+
 /// A running session and what the loop keeps about it.
 struct SessionLoop<'a> {
     runner: &'a Runner,
@@ -75,9 +96,10 @@ struct SessionLoop<'a> {
     prompts: &'a [String],
     /// Sent so far.
     prompt_index: usize,
-    own_checks: Option<&'a TaskId>,
-    /// Taken by the one prompt about refused reopens.
-    replan_before: Option<&'a Backlog>,
+    /// A builder session's follow-ups (`HarnessRun::builder_task`).
+    builder: Option<BuilderFollowUps<'a>>,
+    /// A planner session's follow-ups (`HarnessRun::planner`).
+    planner: Option<PlannerFollowUps<'a>>,
     session: Box<dyn Session>,
     watchdog: Watchdog,
     clock: Arc<dyn Clock>,
@@ -140,8 +162,18 @@ impl Runner {
             label: run.label,
             prompts: run.prompts,
             prompt_index: 0,
-            own_checks: run.own_checks,
-            replan_before: run.replan_before,
+            builder: run.builder_task.map(|task| BuilderFollowUps {
+                task,
+                asked_checks: false,
+                asked_conflict: false,
+            }),
+            planner: run.planner.map(|session| PlannerFollowUps {
+                session,
+                asked_cards: false,
+                // A split has no reopen to ask about (ADR 0018): once told
+                // about its cards, it is not judged again.
+                asked_reopens: session.role != Role::Replan,
+            }),
             session,
             watchdog,
             clock,
@@ -176,17 +208,58 @@ impl SessionLoop<'_> {
         Some(actions)
     }
 
-    /// The prompt for a builder session that answered every prompt while
-    /// `./verify --task` runs no passing check of its task; `None` when it
-    /// does, or after the first time. The attempt would fail on that alone,
-    /// and the session still holds what it learned, so it adds them now.
-    /// A builder that declared a conflict stopped as it was told: asking it
-    /// for a passing check would talk it out of the conflict (ADR 0009).
-    async fn own_checks_prompt(&mut self) -> Option<String> {
-        let task = self.own_checks.take()?;
+    /// The next prompt for a builder session that answered every prompt:
+    /// about the conflict file of its task, when it left one; else about
+    /// its missing checks. A builder that declared a conflict is never
+    /// asked for checks: asking it for a passing check would talk it out
+    /// of the conflict (ADR 0009).
+    async fn builder_follow_up(&mut self) -> Option<(&'static str, String)> {
+        let task = self.builder.as_ref()?.task;
         if self.runner.project.conflict_text(task.as_str()).is_some() {
+            return self
+                .passing_conflict_prompt(task)
+                .await
+                .map(|message| (PASSING_CONFLICT_NOTE, message));
+        }
+        self.own_checks_prompt(task)
+            .await
+            .map(|message| (OWN_CHECKS_NOTE, message))
+    }
+
+    /// The prompt for a builder that left a conflict file of `task` while
+    /// its checks would pass as Tenaz judges them (`Runner::verify_attempt`):
+    /// a conflict is read only when the attempt's checks fail, so the file
+    /// does not stand, and the builder is told while it still holds its
+    /// work (ADR 0034). `None` when the checks would fail, so the conflict
+    /// is read, or after the first time in this session.
+    async fn passing_conflict_prompt(&mut self, task: &TaskId) -> Option<String> {
+        if self.builder.as_ref()?.asked_conflict {
             return None;
         }
+        // A conflict is read only when the checks fail; changes `verify`
+        // made to the working tree (ADR 0035) do not make it stand.
+        let failure = self.runner.verify_attempt(task).await.failure;
+        if matches!(failure, Some(AttemptFailure::Checks(_))) {
+            return None;
+        }
+        self.builder.as_mut()?.asked_conflict = true;
+        self.runner.log(&format!(
+            "  {}: {} left while its checks pass, so it does not stand; asking once more",
+            self.label,
+            conflict_path(task.as_str())
+        ));
+        Some(passing_conflict(task))
+    }
+
+    /// The prompt for a builder session while `./verify --task` runs no
+    /// passing check of `task`: the attempt would fail on that alone, and
+    /// the session still holds what it learned, so it adds them now. `None`
+    /// when it does, or after the first time in this session.
+    async fn own_checks_prompt(&mut self, task: &TaskId) -> Option<String> {
+        if self.builder.as_ref()?.asked_checks {
+            return None;
+        }
+        self.builder.as_mut()?.asked_checks = true;
         let own = self.runner.run_verify(&["--task", task.as_str()]).await;
         if own.passed() > 0 {
             return None;
@@ -201,40 +274,57 @@ impl SessionLoop<'_> {
         ))
     }
 
-    /// The prompt for a replan session that answered every prompt having
-    /// set a blocked task back to `todo` while no card still to build
-    /// amends a check of its conflict: Tenaz would block it again when the
-    /// session ends, and the run would find no task ready. Judged as Tenaz
-    /// judges it then (`refused_reopens_of`). `None` when it set none, or
-    /// after the first time in this session.
-    fn refused_reopens_prompt(&mut self) -> Option<String> {
-        let before = self.replan_before.take()?;
-        let project = &self.runner.project;
-        let after = project.load_backlog().backlog;
-        let refused: Vec<String> = refused_reopens_of(before, &after, |b| project.conflicts(b))
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        if refused.is_empty() {
+    /// The next prompt for a split or replan session that answered every
+    /// prompt, from one judgement of its cards as Tenaz judges them when it
+    /// ends (`Runner::judge_planner`): first the errors that would get its
+    /// cards thrown away, so it fixes them while it still holds its plan
+    /// (ADR 0033); then the blocked tasks a replan set back to `todo` that
+    /// Tenaz would block again, so the run does not find no task ready (ADR
+    /// 0018). Each is sent at most once per session.
+    fn planner_follow_up(&mut self) -> Option<(&'static str, String)> {
+        let planner = self.planner.as_mut()?;
+        if planner.asked_cards && planner.asked_reopens {
             return None;
         }
+        let judgement = self.runner.judge_planner(planner.session);
+        if !planner.asked_cards && !judgement.errors.is_empty() {
+            planner.asked_cards = true;
+            let errors = &judgement.errors;
+            let limit = self.runner.params.note_clip_bytes;
+            self.runner.log(&format!(
+                "  {}: its cards would be thrown away ({} errors: {}); asking once more",
+                self.label,
+                errors.len(),
+                clip(&errors.join("; "), limit).replace('\n', " ")
+            ));
+            return Some((INVALID_CARDS_NOTE, invalid_cards(errors, limit)));
+        }
+        let refused: Vec<String> = judgement
+            .refused_reopens()
+            .map(ToString::to_string)
+            .collect();
+        if planner.asked_reopens || refused.is_empty() {
+            return None;
+        }
+        planner.asked_reopens = true;
         let refused = refused.join(", ");
         self.runner.log(&format!(
             "  {}: {refused} set back to todo, but Tenaz would block each again; asking once more",
             self.label
         ));
-        Some(refused_reopens(&refused))
+        Some((REFUSED_REOPENS_NOTE, refused_reopens(&refused)))
     }
 
-    /// The one more prompt a session that answered every prompt gets, with
-    /// the watchdog's name for it: a builder's missing checks, or a
-    /// replan's refused reopens. A session has at most one of the two.
+    /// The next prompt a session that answered every prompt gets, with the
+    /// watchdog's name for it: a builder's conflict that does not stand, or
+    /// its missing checks; a planner's cards Tenaz would throw away; a
+    /// replan's refused reopens. A planner may get the last two, one after
+    /// the other.
     async fn follow_up(&mut self) -> Option<(&'static str, String)> {
-        if let Some(message) = self.own_checks_prompt().await {
-            return Some(("own-checks", message));
+        if let Some(follow_up) = self.builder_follow_up().await {
+            return Some(follow_up);
         }
-        self.refused_reopens_prompt()
-            .map(|message| ("refused-reopens", message))
+        self.planner_follow_up()
     }
 
     /// Sends the first prompt, then handles events until the session is
@@ -467,6 +557,46 @@ fn no_own_checks(task: &TaskId, summary: &str) -> String {
     )
 }
 
+/// The watchdog's name for the prompt asking a builder for its own checks.
+pub(crate) const OWN_CHECKS_NOTE: &str = "own-checks";
+
+/// What the prompt about a conflict that does not stand says; the scripted
+/// harness knows it by this.
+pub(crate) const PASSING_CONFLICT: &str = "a conflict stands only when the attempt's checks fail";
+
+/// The watchdog's name for that prompt in the session's record.
+pub(crate) const PASSING_CONFLICT_NOTE: &str = "passing-conflict";
+
+/// The prompt for a builder that left a conflict file of `task` while its
+/// checks pass (ADR 0034).
+fn passing_conflict(task: &TaskId) -> String {
+    let path = conflict_path(task.as_str());
+    format!(
+        "[orchestrator] You left `{path}`, but this attempt's checks pass, and {PASSING_CONFLICT}: as things stand Tenaz removes the file, and no card may amend the checks it names. If {task} cannot be done as its card and the spec say without changing those checks, make {task}'s checks test what the card asks, even though they then fail, keep the file, and stop: {task} is blocked, this attempt's work is undone, and a replan may amend those checks. Otherwise delete the file, say in your notes what, if anything, the card asks that the work does not do, and stop."
+    )
+}
+
+/// What the prompt about cards Tenaz would throw away says first; the
+/// scripted harness knows it by this.
+pub(crate) const INVALID_CARDS: &str =
+    "When this session ends, Tenaz throws away all your changes to the task cards";
+
+/// The watchdog's name for that prompt in the session's record.
+pub(crate) const INVALID_CARDS_NOTE: &str = "invalid-cards";
+
+/// The watchdog's name for the prompt about refused reopens in the
+/// session's record.
+pub(crate) const REFUSED_REOPENS_NOTE: &str = "refused-reopens";
+
+/// The prompt for a planner session whose cards have `errors`, the list
+/// cut to `limit` bytes.
+fn invalid_cards(errors: &[String], limit: usize) -> String {
+    format!(
+        "[orchestrator] {INVALID_CARDS}, as they stand now, because:\n{}\nFix each, keep the rest of your plan, update your notes, and stop.",
+        error_list(errors, limit)
+    )
+}
+
 /// What the prompt about refused reopens says first; the scripted harness
 /// knows it by this.
 pub(crate) const REFUSED_REOPENS: &str = "when this session ends Tenaz blocks each again";
@@ -533,5 +663,27 @@ fn describe(action: &Action) -> String {
         Action::Interrupt { .. } => {
             "tool call over its time limit; stopped, the session goes on".to_owned()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each error is on a line of its own, and a long list is cut.
+    #[test]
+    fn the_invalid_cards_prompt_lists_each_error() {
+        let errors = [
+            "card T002 was deleted".to_owned(),
+            "T005: amends `T001.x`".to_owned(),
+        ];
+        let prompt = invalid_cards(&errors, 1_000);
+        assert!(
+            prompt.contains("because:\n- card T002 was deleted\n- T005: amends `T001.x`\n"),
+            "{prompt}"
+        );
+        let clipped = invalid_cards(&errors, 30);
+        assert!(clipped.contains("- card T002 was deleted"), "{clipped}");
+        assert!(!clipped.contains("T001.x"), "{clipped}");
     }
 }

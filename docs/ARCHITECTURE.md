@@ -91,7 +91,8 @@ what a failed bootstrap attempt tells the next one and whether it counts
 the task attempt loop with review, split and block, and pause and resume.
 Each phase has a module under `orchestrator/phases/` (`bootstrap`, `task`,
 `job` for the heavy jobs between a builder's sessions, `review`, `planner`
-for split and replan, `task_loop`, `final_review`);
+for split and replan, with the pure `planner/judge` that judges their
+cards, `task_loop`, `final_review`);
 `phases.rs` keeps what they share, the `verify` call and the briefing.
 `orchestrator/session.rs` is the wrapper; one session, start to journal
 record, is `session/record.rs`, the harness run `session/harness.rs`,

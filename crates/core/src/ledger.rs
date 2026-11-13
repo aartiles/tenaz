@@ -743,6 +743,9 @@ pub enum JournalRecord {
         attempt: u32,
         checks: Vec<String>,
     },
+    /// `verify` on an attempt's work: the runs' results, and the verdict
+    /// Tenaz drew from them, which also weighs what the runs do not show
+    /// (the floor of other tasks' checks, the working tree, ADR 0035).
     Verify {
         task: TaskId,
         attempt: u32,
@@ -751,6 +754,13 @@ pub enum JournalRecord {
         task_checks: u64,
         all: Option<serde_json::Value>,
         task_json: Option<serde_json::Value>,
+        /// Whether the attempt passed; missing in journals older than it.
+        /// False exactly when `failure` is there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_ok: Option<bool>,
+        /// Why the attempt failed, as its next builder is told.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<String>,
     },
     Review {
         task: TaskId,
@@ -1070,6 +1080,49 @@ mod tests {
             panic!("not a session: {entry:?}");
         };
         assert_eq!(record.model, None);
+        assert_eq!(serde_json::to_string(&entry).unwrap(), old);
+    }
+
+    /// A `verify` record keeps its fields and their order, adds its verdict
+    /// at the end, leaves `failure` out when the attempt passed, and an
+    /// older line without either loads and writes back unchanged.
+    #[test]
+    fn a_verify_record_says_its_verdict_and_old_records_load_without_one() {
+        let line = r#"{"at":"t","type":"verify","task":"T003","attempt":1,"all_ok":true,"task_ok":true,"task_checks":1,"all":null,"task_json":null,"attempt_ok":false,"failure":"./verify changed files"}"#;
+        let entry: JournalEntry = serde_json::from_str(line).unwrap();
+        let JournalRecord::Verify {
+            attempt_ok,
+            failure,
+            ..
+        } = &entry.record
+        else {
+            panic!("not a verify: {entry:?}");
+        };
+        assert_eq!(
+            (*attempt_ok, failure.as_deref()),
+            (Some(false), Some("./verify changed files"))
+        );
+        assert_eq!(serde_json::to_string(&entry).unwrap(), line);
+        let passed = line.replace(
+            r#""attempt_ok":false,"failure":"./verify changed files""#,
+            r#""attempt_ok":true"#,
+        );
+        let entry: JournalEntry = serde_json::from_str(&passed).unwrap();
+        assert_eq!(serde_json::to_string(&entry).unwrap(), passed);
+        let old = line.replace(
+            r#","attempt_ok":false,"failure":"./verify changed files""#,
+            "",
+        );
+        let entry: JournalEntry = serde_json::from_str(&old).unwrap();
+        let JournalRecord::Verify {
+            attempt_ok,
+            failure,
+            ..
+        } = &entry.record
+        else {
+            panic!("not a verify: {entry:?}");
+        };
+        assert_eq!((*attempt_ok, failure), (None, &None));
         assert_eq!(serde_json::to_string(&entry).unwrap(), old);
     }
 

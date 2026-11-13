@@ -96,6 +96,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   comes from the engine where it reports one (Sushi, vLLM, llama.cpp's
   `/props`, LM Studio's `/api/v0/models`); Ollama does not, so the wizard
   asks. Detection is tested against recorded answers, not live engines.
+- fx, OpenCode, Qwen Code and dsh get the user's Playwright and npm
+  caches (`PLAYWRIGHT_BROWSERS_PATH`, `npm_config_cache`), since `verify`
+  runs with the user's own `HOME`: the user's own settings when set, else
+  `~/Library/Caches/ms-playwright` (or `$XDG_CACHE_HOME`, `~/.cache`) and
+  `~/.npm`. In the Hardball 3D run (2026-11-11 and 12, fx 0.0.16), before
+  fx got them, its Playwright checks failed for the agent while
+  `verify` passed for Tenaz, and 42 of 46 sessions worked around it by
+  running `verify` with `HOME` set by hand, often 10 to 25 turns in.
+  Tested with unit tests and a fake agent that reports its environment;
+  no run has used it with fx, OpenCode or Qwen Code yet.
 - fx runs with an isolated `HOME` under `.tenaz/private/fx-home/`, so your
   own fx settings and MCP servers are not touched. Pi runs with its own
   agent directory, `.tenaz/private/pi-agent/` (`PI_CODING_AGENT_DIR`),
@@ -201,9 +211,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   sandboxed run writes them only while `~/Library/Caches` (or
   `~/.cache`) and `~/.npm` stay in `sandboxAllowWrite`, or the user's
   own paths are added there. A `cache` set in `~/.npmrc` is not read:
-  dsh gets `~/.npm` while `verify` uses that cache. The other agents
-  with a `HOME` of their own (fx, OpenCode, Qwen Code) do not get these
-  caches yet (OpenCode gets npm's). No run has used this yet. What the
+  dsh gets `~/.npm` while `verify` uses that cache; the same holds for
+  fx, OpenCode and Qwen Code. No run has used this yet. What the
   probe showed: dsh did not send permission requests, so its tools run
   without the runner's approval and the watchdog sees a call only once
   it runs; its `usage_update` has no cache counts; it sends its answer after the
@@ -276,6 +285,45 @@ above), so a 32k context is the practical floor (`contextFloor`).
   after `tenaz run --resume`, the next replan was told, dropped the task
   and gave its work to a new card, which was built in one attempt. The
   replan itself ran out of turns; its cards were kept.
+- **`verify` that writes the working tree** (ADR 0035). In the Hardball
+  3D run the checks wrote screenshots into `artifacts/`, which git tracked
+  and whose bytes changed on each run: `T001.smoke.png` was committed 18
+  times, most sessions ended with "reverted out-of-role changes:
+  artifacts/…", and each reviewer was told to look at 5 to 11 screenshots,
+  most of other tasks. Tenaz now fails an attempt or a bootstrap whose
+  `verify` changes such files. It sees a change only when the bytes
+  differ, and only in its own `verify` runs, not the agent's. Tested with
+  the scripted harness only, not yet in a run with a real model. The
+  scripted scenarios recover by moving the output to an ignored folder;
+  the fake repository has no index, so the `git rm --cached` path the
+  error suggests is tested against git alone, in the git adapter.
+- **A conflict left on a passing attempt** (ADR 0034). In the Hardball 3D
+  run T003's builder found R23 needs `T002.state` changed, wrote the
+  conflict, and made its own check pass without it. The reviewer accepted
+  T003 believing the conflict stood; Tenaz removed it in silence when
+  T003 was done, so no replan could amend `T002.state`, and four replans
+  were rejected trying. The builder and the reviewer are now told it does
+  not stand. Tested with the scripted harness only, not yet in a run with
+  a real model.
+- **A planner told why its cards are rejected.** In the Hardball 3D run
+  (2026-11-11 and 12, fx 0.0.16, Qwen3.8-Flash-Next on Sushi 1.6.0) four
+  replans in a row wrote a card that amends `T002.state`, which no
+  conflict named, and each was rejected, the valid amend for the blocked
+  task with it. None was told why: the journal summary named no errors,
+  and later entries pushed it out. The run ended BLOCKED. A replan now
+  gets the last rejected replan's errors in "Why the last replan was
+  rejected". A split or replan is also told its cards' errors before it
+  ends, and gets one more turn to fix them (ADR 0033). When the run was
+  resumed with these (2026-11-12 and 13), the first replan, told why,
+  was accepted, and five of six replans were. The one rejected was told
+  before it ended, and tried to fix an `amends` of a check no conflict
+  named by editing the conflict file, which a planner may not write;
+  Tenaz reverted it. The error now says what to do instead: remove that
+  `amends`; only a builder declares a conflict, and a later replan may
+  then amend the check.
+  That wording is not yet tried with a real model. Cards still wrong
+  after that turn are all thrown away, the valid ones too. A split that
+  leaves fewer than two tasks is not told before it ends.
 - **`--resume` after no task was ready.** A run blocked with no task
   ready gets one more replan on `--resume`. Tested with a
   scripted-harness scenario, and seen once in that run (2026-11-05):
@@ -672,8 +720,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   before each session; no run has written one. Neither agent takes a
   steering message: Tenaz steers only fx and Pi, so a watchdog stops their
   sessions without a warning. OpenCode installs its plugin package (about
-  60 MB) into its `HOME` on the first run, from npm's cache in `~/.npm`: a
-  `sandboxAllowWrite` without `~/.npm` should break it. Qwen Code starts
+  60 MB) into its `HOME` on the first run, from the user's npm cache (their
+  own `npm_config_cache` when set, else `~/.npm`): in a sandboxed run, a
+  cache outside `sandboxAllowWrite` should break it. Qwen Code starts
   with a system prompt of about 21k tokens (OpenCode about 7k), so a small
   window fills sooner.
 - **Install script and Homebrew formula.** Both installed `tenaz` 0.1.0

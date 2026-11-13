@@ -127,6 +127,10 @@ pub struct FxLaunch {
     /// A program and leading arguments fx (or the shim) is started through:
     /// the sandbox launcher, when the run is sandboxed.
     pub wrapper: Vec<String>,
+    /// The user's browser and package caches (see
+    /// [`crate::caches::user_caches`]), so that what the agent installs
+    /// is found by `verify`, which runs with the user's own `HOME`.
+    pub caches: Vec<(String, String)>,
 }
 
 /// The subcommand of the shim program that runs fx.
@@ -161,6 +165,7 @@ impl FxLaunch {
             log_dir: None,
             shim: None,
             wrapper: Vec::new(),
+            caches: Vec::new(),
         }
     }
 
@@ -185,10 +190,10 @@ impl FxLaunch {
 }
 
 /// fx as an [`AgentProfile`]: its profile written for each session's model,
-/// `HOME` set to the profile and its upgrade check off (no network beyond
-/// the engine). With a `shim` (a program that runs `shim fx-shim <fx>
-/// <args>` and passes fx's stdout through [`normalize_line`]), fx is
-/// started through it.
+/// `HOME` set to the profile, its upgrade check off (no network beyond
+/// the engine) and the user's caches. With a `shim` (a program that runs
+/// `shim fx-shim <fx> <args>` and passes fx's stdout through
+/// [`normalize_line`]), fx is started through it.
 #[derive(Clone, Debug)]
 pub struct FxAgent {
     pub launch: FxLaunch,
@@ -224,10 +229,12 @@ impl AgentProfile for FxAgent {
     }
 
     fn env(&self) -> Vec<(String, String)> {
-        vec![
+        let mut env = vec![
             ("HOME".to_owned(), self.launch.home.display().to_string()),
             ("FX_AUTO_UPGRADE".to_owned(), "0".to_owned()),
-        ]
+        ];
+        env.extend(self.launch.caches.iter().cloned());
+        env
     }
 
     fn wrapper(&self) -> &[String] {

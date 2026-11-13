@@ -79,6 +79,15 @@ pub struct ScriptedHarness {
     pub crash_on_checks_task: Option<String>,
     /// A builder that declares a conflict, and the replan that resolves it.
     pub conflict: Option<ScriptedConflict>,
+    /// The first builder session of this task does its work, so the
+    /// attempt passes, and also declares a conflict (ADR 0034).
+    /// Boxed, as the script is held in the futures of whole runs.
+    pub passing_conflict: Option<Box<ScriptedPassingConflict>>,
+    /// This task's check (`T000` is the bootstrap's) writes `out/<task>.png`
+    /// on every run of `verify`, with new content each time; a session told
+    /// that `verify` changed the working tree moves it to `shots/`, which
+    /// it lists in `.gitignore` (ADR 0035).
+    pub stamping_task: Option<String>,
     /// A builder that declares a heavy job.
     pub job: Option<ScriptedJob>,
     /// The engine runs out of memory in the first builder session of this
@@ -240,6 +249,7 @@ impl Session for ScriptedSession {
             prompts: self.prompts,
             call: 0,
             script: self.script.clone(),
+            told_writes: false,
         };
         let prompt = text;
         self.play = Some(tokio::spawn(async move { player.play(&prompt).await }));
@@ -314,6 +324,21 @@ pub struct ScriptedConflict {
     pub routing: Routing,
 }
 
+/// A builder that declares a conflict with `check` on an attempt that
+/// passes, and how it answers when told the conflict does not stand.
+#[derive(Clone, Debug)]
+pub struct ScriptedPassingConflict {
+    pub task: String,
+    pub check: String,
+    /// Makes its task's check fail, so the conflict stands; else leaves
+    /// everything as it is.
+    pub fails_when_told: bool,
+}
+
+/// A check of a done task that the script's conflicts never name: the
+/// `amends` a replan routed `AmendUndeclaredFirst` writes first.
+pub const UNDECLARED: &str = "T002.exists";
+
 /// What the scripted replan does with the blocked task.
 #[derive(Clone, Copy, Debug)]
 pub enum Routing {
@@ -332,6 +357,21 @@ pub enum Routing {
     ReopenWithoutAmendThenDrop,
     /// Sets it to `done`, which a planner may not.
     MarkDone,
+    /// As `Reopen`, but a replan whose briefing has no section "Why the
+    /// last replan was rejected" has `T005` amend a check no conflict
+    /// names, and is rejected.
+    AmendUndeclaredFirst,
+    /// As `AmendUndeclaredFirst`, but the replan fixes `T005`'s `amends`
+    /// and reopens the task when told, before it ends, that its cards
+    /// would be thrown away (ADR 0033).
+    AmendUndeclaredFixedWhenTold,
+    /// Sets it back to `todo` and has `T005` amend `UNDECLARED`; told its
+    /// cards would be thrown away, it drops that `amends` and keeps the
+    /// reopen, which Tenaz then also points out (ADR 0018 and 0033).
+    ReopenAndAmendUndeclared,
+    /// As `ReopenAndAmendUndeclared`, but it leaves its cards as they are
+    /// when told, and they are thrown away.
+    ReopenAndAmendUndeclaredIgnored,
 }
 
 /// The first builder session of `task`, or every one, writes its job

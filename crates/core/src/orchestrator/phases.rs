@@ -11,7 +11,7 @@ use crate::role::Role;
 use crate::spec;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 use crate::util::clip;
-use crate::verify::{VerifyOutcome, interpret, retarget};
+use crate::verify::{TreeState, VerifyOutcome, interpret, judge_attempt, retarget, writes_error};
 
 use super::{RunError, Runner};
 
@@ -23,7 +23,9 @@ mod review;
 mod task;
 mod task_loop;
 
-pub(crate) use planner::refused_reopens_of;
+pub(crate) use planner::PlannerSession;
+#[cfg(test)]
+pub(crate) use planner::UNDONE_REOPEN;
 
 /// What a session's prompt adds to the role prompt, spec and map.
 #[derive(Default)]
@@ -45,6 +47,38 @@ const AMENDS_TITLE: &str = "Checks this card may amend";
 
 /// The briefing section that shows a replan the conflicts that stood.
 pub(crate) const CONFLICTS_TITLE: &str = "Declared conflicts";
+
+/// The briefing section that tells a replan why the last replan's cards
+/// were thrown away; the replan prompt refers to it by this title.
+pub(crate) const REJECTED_REPLAN_TITLE: &str = "Why the last replan was rejected";
+
+/// `verify` on an attempt's work (`Runner::verify_attempt`).
+pub(crate) struct AttemptVerify {
+    pub all: VerifyOutcome,
+    pub own: VerifyOutcome,
+    /// Why the attempt fails; `None` when it passes.
+    pub failure: Option<AttemptFailure>,
+}
+
+/// Why an attempt fails.
+pub(crate) enum AttemptFailure {
+    /// Its checks: the suite fails, passes fewer checks of other tasks, or
+    /// runs no passing check of the task (`judge_attempt`). Only then is a
+    /// conflict its builder declared read (ADR 0009, 0034).
+    Checks(String),
+    /// Its checks pass, but `verify` changed the working tree (ADR 0035).
+    /// A conflict declared with checks that pass does not stand.
+    TreeWrites(String),
+}
+
+impl AttemptFailure {
+    /// What the next builder is told.
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Self::Checks(text) | Self::TreeWrites(text) => text,
+        }
+    }
+}
 
 impl Runner {
     /// The files changed from `from` to `to` (the working tree when
@@ -70,6 +104,61 @@ impl Runner {
             self.params.verify_timeout_sec,
             self.params.verify_clip_bytes,
         )
+    }
+
+    /// `verify` on `task`'s work, judged as an attempt is: the whole suite,
+    /// then the task's own checks, and why the attempt fails
+    /// (`judge_attempt`), or, when it passes, that `verify` changed the
+    /// working tree (`tree_writes`, ADR 0035). The one place both the end
+    /// of an attempt and the builder's follow-up before it (ADR 0034)
+    /// judge it.
+    pub(crate) async fn verify_attempt(&self, task: &TaskId) -> AttemptVerify {
+        let before = self.tree_state();
+        let all = self.run_verify(&["--all"]).await;
+        let own = self.run_verify(&["--task", task.as_str()]).await;
+        let failure = match judge_attempt(task.as_str(), &all, &own, self.ledger.passed_checks) {
+            Some(why) => Some(AttemptFailure::Checks(why)),
+            None => self
+                .tree_writes(before.as_ref())
+                .map(AttemptFailure::TreeWrites),
+        };
+        AttemptVerify { all, own, failure }
+    }
+
+    /// The working tree as `verify` must leave it (`TreeState`, ADR 0035);
+    /// `None`, logged, when git cannot say what changed.
+    pub(crate) fn tree_state(&self) -> Option<TreeState> {
+        let vcs = &self.deps.vcs;
+        let read = vcs
+            .changed_paths()
+            .and_then(|changed| Ok((vcs.ignored(&changed)?, changed)));
+        let (ignored, changed) = match read {
+            Ok(read) => read,
+            Err(e) => {
+                self.log(&format!(
+                    "  cannot tell whether verify changed the working tree: {e}"
+                ));
+                return None;
+            }
+        };
+        Some(
+            changed
+                .into_iter()
+                .map(|path| {
+                    let hash = (!ignored.contains(&path))
+                        .then(|| self.project.content_hash(&path))
+                        .flatten();
+                    (path, hash)
+                })
+                .collect(),
+        )
+    }
+
+    /// Why `verify`, run since the tree was `before`, may not leave it as
+    /// it is now (`writes_error`); `None` when it left it as it was, or git
+    /// cannot say on either side.
+    pub(crate) fn tree_writes(&self, before: Option<&TreeState>) -> Option<String> {
+        writes_error(before?, &self.tree_state()?)
     }
 
     /// The commit the current task started from.
@@ -217,9 +306,16 @@ impl Runner {
     }
 }
 
+/// `errors` as a list, one `- ` line each, cut to `limit` bytes as notes
+/// are: what a planner is told its cards were, or would be, rejected for.
+pub(crate) fn error_list(errors: &[String], limit: usize) -> String {
+    let listed: Vec<String> = errors.iter().map(|e| format!("- {e}")).collect();
+    clip_lines(&listed.join("\n"), limit)
+}
+
 /// Cuts `text` to the whole lines that fit in `limit` bytes and says how
 /// many lines were left out, for a list such as a diff's file stat.
-fn clip_lines(text: &str, limit: usize) -> String {
+pub(crate) fn clip_lines(text: &str, limit: usize) -> String {
     if text.len() <= limit {
         return text.to_owned();
     }

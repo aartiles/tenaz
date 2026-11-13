@@ -10,8 +10,12 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, resume, run};
 use crate::ledger::{JournalRecord, Phase, TaskOutcome};
+use crate::orchestrator::phases::UNDONE_REOPEN;
+use crate::orchestrator::{INVALID_CARDS_NOTE, PASSING_CONFLICT_NOTE, REFUSED_REOPENS_NOTE};
 use crate::project::Project;
-use crate::testing::{Routing, ScriptedConflict, ScriptedHarness, VirtualClock};
+use crate::testing::{
+    Routing, ScriptedConflict, ScriptedHarness, ScriptedPassingConflict, UNDECLARED, VirtualClock,
+};
 
 /// Plays the fake goal with T003's first builder declaring a conflict with
 /// `check`; the project, its log and the work directory.
@@ -21,6 +25,9 @@ async fn declaring(check: &str) -> (tempfile::TempDir, Project, String) {
 
 /// As `declaring`, with the replan routing T003 as `routing` says.
 async fn declaring_routed(check: &str, routing: Routing) -> (tempfile::TempDir, Project, String) {
+    // The scripted replan's first amend may name `UNDECLARED`, which only
+    // works while the conflict names another check.
+    assert_ne!(check, UNDECLARED, "the conflict names the undeclared check");
     play(
         ScriptedHarness {
             conflict: Some(ScriptedConflict {
@@ -54,13 +61,21 @@ async fn play(
     (work, project, log)
 }
 
+/// The prompts of the sessions labelled `…-<session>`, in the order they
+/// ran: labels start with a sequence number, and `read_dir` gives no
+/// order (it differs between macOS and Linux).
 fn prompts(project: &Project, session: &str) -> String {
     let suffix = format!("-{session}.prompt.md");
-    std::fs::read_dir(project.private_dir())
+    let mut paths: Vec<_> = std::fs::read_dir(project.private_dir())
         .unwrap()
         .filter_map(Result::ok)
         .filter(|e| e.file_name().to_string_lossy().ends_with(&suffix))
-        .map(|e| std::fs::read_to_string(e.path()).unwrap())
+        .map(|e| e.path())
+        .collect();
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| std::fs::read_to_string(path).unwrap())
         .collect()
 }
 
@@ -194,7 +209,7 @@ async fn a_replan_told_its_reopen_would_be_undone_may_drop_the_task() {
         done_in_order(&project).contains(&"T005".to_owned()),
         "{log}"
     );
-    assert!(!log.contains("it stays blocked"), "{log}");
+    assert!(!log.contains(UNDONE_REOPEN), "{log}");
 }
 
 /// The tasks done, in the order the journal records them.
@@ -218,6 +233,24 @@ fn accepted_t005(project: &Project) -> bool {
         matches!(&e.record, JournalRecord::ReplanAccepted { added, .. }
             if added.iter().any(|id| id.as_str() == "T005"))
     })
+}
+
+/// The labels of the sessions whose watchdog noted `kind`, once per note.
+fn noted(project: &Project, kind: &str) -> Vec<String> {
+    project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) => Some(s),
+            _ => None,
+        })
+        .flat_map(|s| {
+            s.watchdog
+                .iter()
+                .filter(|e| e.kind == kind)
+                .map(|_| s.label.clone())
+        })
+        .collect()
 }
 
 fn rejected(project: &Project) -> bool {
@@ -357,4 +390,293 @@ async fn a_resumed_run_with_no_task_ready_replans_again() {
     resume(&project, deps(&project, vcs, again, clock)).await;
     let log = project.read(".tenaz/private/orchestrator.log").unwrap();
     assert_eq!(status(&project, "T003"), "dropped", "{log}");
+}
+
+/// A replan whose cards were thrown away is followed by one told why:
+/// here the first amends a check no conflict names, and the next, shown
+/// that error, amends the declared check and the run completes.
+#[tokio::test(start_paused = true)]
+async fn the_next_replan_is_told_why_the_last_was_rejected() {
+    let (_work, project, log) =
+        declaring_routed("T001.exists", Routing::AmendUndeclaredFirst).await;
+    let first_replan = project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-replan") => Some(s.label.clone()),
+            _ => None,
+        })
+        .expect("a replan ran");
+    assert_eq!(
+        noted(&project, INVALID_CARDS_NOTE),
+        [first_replan],
+        "the first replan is told once, then left as it was: {log}"
+    );
+    assert!(rejected(&project), "{log}");
+    assert!(accepted_t005(&project), "{log}");
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+    let replans = prompts(&project, "replan");
+    let told = format!("## {}", crate::orchestrator::REJECTED_REPLAN_TITLE);
+    assert_eq!(replans.matches(&told).count(), 1, "{replans}");
+    assert!(
+        replans.contains(&format!("- T005: amends `{UNDECLARED}`")),
+        "{replans}"
+    );
+}
+
+/// A rejection older than the recent journal still reaches the replan,
+/// with every error: here it is journaled before the run, whose own
+/// entries push it out of the recent journal by the first replan, as the
+/// test checks. The scripted replan amends a check no conflict names
+/// unless it is told why the last replan was rejected, so it is accepted
+/// at once only when told.
+#[tokio::test(start_paused = true)]
+async fn a_rejection_out_of_the_recent_journal_still_reaches_the_replan() {
+    let harness = ScriptedHarness {
+        conflict: Some(ScriptedConflict {
+            task: "T003".into(),
+            check: "T001.exists".into(),
+            routing: Routing::AmendUndeclaredFirst,
+        }),
+        ..Default::default()
+    };
+    let (_work, project, log) = play(harness, |project| {
+        let at = || "2026-11-12T10:00:00Z".to_owned();
+        let errors = vec![
+            "T009: amends `T002.state`".to_owned(),
+            "card T007 was deleted".to_owned(),
+        ];
+        project
+            .append_journal(at(), JournalRecord::ReplanRejected { task: None, errors })
+            .unwrap();
+    })
+    .await;
+    let replans = prompts(&project, "replan");
+    let recent = replans
+        .split("## Recent orchestrator journal")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .unwrap_or_default();
+    assert!(
+        recent.contains("conflict T003"),
+        "no recent journal: {replans}"
+    );
+    assert!(
+        !recent.contains("replan-rejected"),
+        "the rejection is still in the recent journal: {recent}"
+    );
+    assert!(
+        replans.contains("- T009: amends `T002.state`\n- card T007 was deleted"),
+        "{replans}"
+    );
+    let rejections = project
+        .journal()
+        .iter()
+        .filter(|e| matches!(e.record, JournalRecord::ReplanRejected { .. }))
+        .count();
+    assert_eq!(
+        rejections, 1,
+        "only the one journaled before the run: {log}"
+    );
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+}
+
+/// A replan that leaves cards Tenaz would throw away is told why before
+/// it ends (ADR 0033): here it amends a check no conflict names, fixes it
+/// when told, and its cards are kept the first time.
+#[tokio::test(start_paused = true)]
+async fn a_replan_fixes_its_cards_when_told_before_it_ends() {
+    let (_work, project, log) =
+        declaring_routed("T001.exists", Routing::AmendUndeclaredFixedWhenTold).await;
+    let asked = noted(&project, INVALID_CARDS_NOTE);
+    assert!(
+        matches!(asked.as_slice(), [label] if label.ends_with("-replan")),
+        "{asked:?}"
+    );
+    assert!(!rejected(&project), "{log}");
+    assert!(accepted_t005(&project), "{log}");
+    assert_eq!(
+        project.load_ledger().unwrap().phase,
+        Phase::Complete,
+        "{log}"
+    );
+}
+
+/// A replan whose cards are fine is not told they are invalid.
+#[tokio::test(start_paused = true)]
+async fn a_replan_with_valid_cards_is_not_told_they_are_invalid() {
+    let (_work, project, log) = declaring_routed("T001.exists", Routing::Reopen).await;
+    assert!(accepted_t005(&project), "no replan was kept: {log}");
+    assert_eq!(
+        noted(&project, INVALID_CARDS_NOTE),
+        Vec::<String>::new(),
+        "{log}"
+    );
+}
+
+/// The watchdog's planner notes of the first replan session, in order.
+fn first_replan_notes(project: &Project) -> Vec<String> {
+    project
+        .journal()
+        .iter()
+        .find_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-replan") => Some(s),
+            _ => None,
+        })
+        .expect("a replan ran")
+        .watchdog
+        .iter()
+        .map(|e| e.kind.clone())
+        .filter(|k| k == INVALID_CARDS_NOTE || k == REFUSED_REOPENS_NOTE)
+        .collect()
+}
+
+/// A replan whose cards are invalid and that reopens a task Tenaz would
+/// block again gets both prompts in one session, the cards first: here it
+/// fixes the cards, keeps the reopen, and is then told about it; its cards
+/// are kept and the reopen undone.
+#[tokio::test(start_paused = true)]
+async fn a_replan_is_told_about_its_cards_then_its_reopen() {
+    let (_work, project, log) =
+        declaring_routed("T001.exists", Routing::ReopenAndAmendUndeclared).await;
+    assert_eq!(
+        first_replan_notes(&project),
+        [INVALID_CARDS_NOTE, REFUSED_REOPENS_NOTE],
+        "{log}"
+    );
+    assert!(accepted_t005(&project), "{log}");
+    assert!(log.contains(UNDONE_REOPEN), "{log}");
+    assert_eq!(status(&project, "T003"), "blocked", "{log}");
+}
+
+/// The statuses a planner may not set are written only when its cards are
+/// kept: a replan whose cards are thrown away logs no undone reopen, and
+/// the task it reopened stays blocked.
+#[tokio::test(start_paused = true)]
+async fn a_rejected_replan_writes_no_statuses() {
+    let (_work, project, log) =
+        declaring_routed("T001.exists", Routing::ReopenAndAmendUndeclaredIgnored).await;
+    assert!(rejected(&project), "{log}");
+    assert!(!log.contains(UNDONE_REOPEN), "{log}");
+    assert_eq!(status(&project, "T003"), "blocked", "{log}");
+}
+
+/// Plays the fake goal with T003's first builder doing its work and also
+/// declaring a conflict with T001.exists; told it does not stand, it makes
+/// T003's check fail when `fails_when_told`.
+async fn passing_conflict(fails_when_told: bool) -> (tempfile::TempDir, Project, String) {
+    play(
+        ScriptedHarness {
+            passing_conflict: Some(Box::new(ScriptedPassingConflict {
+                task: "T003".into(),
+                check: "T001.exists".into(),
+                fails_when_told,
+            })),
+            ..Default::default()
+        },
+        |_| {},
+    )
+    .await
+}
+
+fn conflicts_journaled(project: &Project) -> usize {
+    project
+        .journal()
+        .iter()
+        .filter(|e| matches!(e.record, JournalRecord::Conflict { .. }))
+        .count()
+}
+
+/// A conflict left on an attempt that passes does not stand (ADR 0034):
+/// the builder is told once before it ends, the reviewer is told, and the
+/// file's removal when the task is done is logged.
+#[tokio::test(start_paused = true)]
+async fn a_conflict_left_on_a_passing_attempt_is_pointed_out() {
+    let (_work, project, log) = passing_conflict(false).await;
+    let told = noted(&project, PASSING_CONFLICT_NOTE);
+    assert!(
+        matches!(told.as_slice(), [label] if label.ends_with("-builder-T003")),
+        "{told:?}"
+    );
+    let reviews = prompts(&project, "reviewer-T003");
+    assert!(reviews.contains("## Conflict file"), "{reviews}");
+    let other = prompts(&project, "reviewer-T001");
+    assert!(!other.is_empty(), "T001 was not reviewed: {log}");
+    assert!(!other.contains("## Conflict file"), "{other}");
+    assert!(
+        log.contains(".tenaz/conflicts/T003.md removed: the attempt passed"),
+        "{log}"
+    );
+    assert_eq!(status(&project, "T003"), "done", "{log}");
+    assert_eq!(conflicts_journaled(&project), 0, "{log}");
+}
+
+/// Told that its conflict does not stand, a builder whose check now tests
+/// what the card asks fails the attempt, and the conflict stands: the task
+/// is blocked and a replan runs.
+#[tokio::test(start_paused = true)]
+async fn a_builder_told_its_conflict_does_not_stand_may_make_it_stand() {
+    let (_work, project, log) = passing_conflict(true).await;
+    let told = noted(&project, PASSING_CONFLICT_NOTE);
+    assert!(
+        matches!(told.as_slice(), [label] if label.ends_with("-builder-T003")),
+        "{told:?}"
+    );
+    assert_eq!(conflicts_journaled(&project), 1, "{log}");
+    assert!(log.contains("T003 declares a conflict"), "{log}");
+    assert_eq!(status(&project, "T003"), "blocked", "{log}");
+    assert!(
+        !prompts(&project, "replan").is_empty(),
+        "no replan ran: {log}"
+    );
+}
+
+/// A conflict declared on an attempt that fails is read, not pointed out:
+/// the builder stopped as it was told (ADR 0009).
+#[tokio::test(start_paused = true)]
+async fn a_conflict_on_a_failing_attempt_is_not_pointed_out() {
+    let (_work, project, log) = declaring("T001.exists").await;
+    assert_eq!(conflicts_journaled(&project), 1, "{log}");
+    assert_eq!(
+        noted(&project, PASSING_CONFLICT_NOTE),
+        Vec::<String>::new(),
+        "{log}"
+    );
+}
+
+/// A conflict left while the checks pass does not stand when the attempt
+/// fails only because `verify` changed the working tree (ADR 0034, 0035):
+/// the builder is told, the conflict file is removed when the attempt
+/// fails, and the next attempt, told about the tree, gets the task done.
+#[tokio::test(start_paused = true)]
+async fn a_conflict_does_not_stand_on_an_attempt_failed_by_the_tree() {
+    let (_work, project, log) = play(
+        ScriptedHarness {
+            passing_conflict: Some(Box::new(ScriptedPassingConflict {
+                task: "T003".into(),
+                check: "T001.exists".into(),
+                fails_when_told: false,
+            })),
+            stamping_task: Some("T003".into()),
+            ..Default::default()
+        },
+        |_| {},
+    )
+    .await;
+    assert_eq!(noted(&project, PASSING_CONFLICT_NOTE).len(), 1, "{log}");
+    assert_eq!(conflicts_journaled(&project), 0, "{log}");
+    // Removed when the attempt fails, so no escalation could carry it on.
+    assert!(
+        log.contains(".tenaz/conflicts/T003.md does not stand: the attempt's checks pass"),
+        "{log}"
+    );
+    assert_eq!(status(&project, "T003"), "done", "{log}");
 }

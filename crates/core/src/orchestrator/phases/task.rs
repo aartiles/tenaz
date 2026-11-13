@@ -10,10 +10,10 @@ use crate::orchestrator::{RunError, Runner};
 use crate::project::conflict_path;
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId, TaskStatus};
-use crate::verify::{VerifyOutcome, judge_attempt};
+use crate::verify::VerifyOutcome;
 
-use super::PromptParts;
 use super::review::{Review, ReviewInput};
+use super::{AttemptFailure, AttemptVerify, PromptParts};
 
 /// A task card as an attempt loads it: parsed, and its text.
 pub(super) struct LoadedCard {
@@ -43,8 +43,8 @@ struct Work {
 enum Attempt {
     Passed(Box<Built>),
     Failed {
-        /// What `verify` said.
-        verify_failure: String,
+        /// Why it failed, and what the next builder is told.
+        failure: AttemptFailure,
         /// Why the orchestrator stopped the builder, if it did.
         stopped: Option<String>,
         /// Its session used up the context continuations.
@@ -76,12 +76,12 @@ impl Runner {
             };
             match outcome {
                 Attempt::Failed {
-                    verify_failure,
+                    failure,
                     stopped,
                     outgrown,
                 } => {
-                    self.record_failure(attempt, &verify_failure, stopped.as_deref())?;
-                    if let Some(conflict) = self.declared_conflict(&task.id)? {
+                    self.record_failure(attempt, failure.text(), stopped.as_deref())?;
+                    if let Some(conflict) = self.conflict_to_read(&task.id, &failure)? {
                         return self.escalate_conflict(task, attempt, conflict).await;
                     }
                     // Another attempt would meet the same budget: the task is too big for it.
@@ -195,6 +195,43 @@ impl Runner {
         self.save()
     }
 
+    /// The conflict the task's builder declared, read only when the
+    /// attempt's checks failed (`declared_conflict`). When only the working
+    /// tree failed it (ADR 0035), its checks pass around the conflict, so
+    /// the file does not stand (ADR 0034): it is removed, logged, and the
+    /// next attempt is told, so no escalation carries it to a replan.
+    fn conflict_to_read(
+        &mut self,
+        id: &TaskId,
+        failure: &AttemptFailure,
+    ) -> Result<Option<Conflict>, RunError> {
+        match failure {
+            AttemptFailure::Checks(_) => self.declared_conflict(id),
+            AttemptFailure::TreeWrites(_) => {
+                self.drop_conflict(
+                    id,
+                    "the attempt's checks pass; it is read only when they fail",
+                )?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Removes the conflict file of task `id`, if there is one, because it
+    /// does not stand for `why`; logs it and tells the next attempt.
+    fn drop_conflict(&mut self, id: &TaskId, why: &str) -> Result<(), RunError> {
+        if self.project.conflict_text(id.as_str()).is_none() {
+            return Ok(());
+        }
+        let path = conflict_path(id.as_str());
+        self.log(&format!("  {id}: {path} does not stand: {why}"));
+        self.project.remove(&path)?;
+        if let Some(current) = &mut self.ledger.current {
+            current.add_to_failure(&format!("Your {path} does not stand: {why}."));
+        }
+        self.save()
+    }
+
     /// The conflict the task's builder declared, when it stands. One that
     /// does not is logged and removed, and the next attempt is told why.
     fn declared_conflict(&mut self, id: &TaskId) -> Result<Option<Conflict>, RunError> {
@@ -209,13 +246,7 @@ impl Runner {
             },
             Err(why) => why,
         };
-        let path = conflict_path(id.as_str());
-        self.log(&format!("  {id}: {path} does not stand: {why}"));
-        self.project.remove(&path)?;
-        if let Some(current) = &mut self.ledger.current {
-            current.add_to_failure(&format!("Your {path} does not stand: {why}."));
-        }
-        self.save()?;
+        self.drop_conflict(id, &why)?;
         Ok(None)
     }
 
@@ -357,9 +388,11 @@ impl Runner {
             stopped,
             outgrown,
         } = work;
-        let all = self.run_verify(&["--all"]).await;
-        let own = self.run_verify(&["--task", task.id.as_str()]).await;
-        let verify_failure = judge_attempt(task.id.as_str(), &all, &own, self.ledger.passed_checks);
+        let AttemptVerify {
+            all,
+            own,
+            failure: verify_failure,
+        } = self.verify_attempt(&task.id).await;
         if let (Some(stopped), None) = (&stopped, &verify_failure) {
             self.record_stopped(attempt, stopped);
         }
@@ -371,10 +404,12 @@ impl Runner {
             task_checks: own.passed(),
             all: all.json.clone(),
             task_json: own.json.clone(),
+            attempt_ok: Some(verify_failure.is_none()),
+            failure: verify_failure.as_ref().map(|f| f.text().to_owned()),
         });
         Ok(match verify_failure {
-            Some(verify_failure) => Attempt::Failed {
-                verify_failure,
+            Some(failure) => Attempt::Failed {
+                failure,
                 stopped,
                 outgrown,
             },
@@ -414,7 +449,7 @@ impl Runner {
             attempt: Some(attempt),
             turns: card.budget.turns,
             context_tokens: card.budget.tokens,
-            replan_before: None,
+            planner_before: None,
         };
         let result = self.session(Role::Builder, prompt, &ctx).await;
         if let Err(
@@ -446,8 +481,15 @@ impl Runner {
         attempt: u32,
         reviewed: bool,
     ) -> Result<(), RunError> {
-        // A task that passed was in nobody's way.
-        self.project.remove(&conflict_path(task.id.as_str()))?;
+        // A task that passed was in nobody's way (ADR 0034).
+        let path = conflict_path(task.id.as_str());
+        if self.project.conflict_text(task.id.as_str()).is_some() {
+            self.log(&format!(
+                "  {}: {path} removed: the attempt passed, so it does not stand",
+                task.id
+            ));
+        }
+        self.project.remove(&path)?;
         self.checkpoint_task(
             &task.id,
             TaskStatus::Done,

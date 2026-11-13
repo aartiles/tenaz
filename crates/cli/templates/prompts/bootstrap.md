@@ -40,7 +40,9 @@ The spec and map from step 1 are below. Write:
    decisions that later sessions must respect.
 
 Write `verify` first. Before ending, run `./verify --all` twice. Both runs
-must pass and print the same final JSON line.
+must pass, print the same final JSON line, and leave the files
+`git status` lists unchanged: list in `.gitignore` the folder where
+checks will write what they produce, and commit nothing there.
 
 ## Step 3: task cards
 
