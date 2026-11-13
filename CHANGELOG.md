@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- After `verify`, Tenaz no longer stops a process above itself as if
+  `verify` had left it behind. A supervisor that started Tenaz detached,
+  from the project, just before Tenaz ran its first `verify` was
+  stopped, and Tenaz with it, with no exit code: in a run resumed
+  straight into a review, both vanished.
+
 ### Changed
 
 - A run started before these changes gets the new protocol and prompts

@@ -105,3 +105,8 @@ dependency.
   process in the project and one outside it, and `job.rs` one in the
   project; they pass on macOS and in CI on Ubuntu (`ubuntu-latest`).
   No real run has used this yet.
+- (2026-11-13) Tenaz and the processes above it are never stopped. A
+  supervisor that starts Tenaz in a session of its own, from the
+  project, meets every rule above when Tenaz's first `verify` follows
+  its start within the window, as on a run resumed straight into a
+  review; stopping it, with everything under it, stopped Tenaz.
