@@ -61,13 +61,21 @@ async fn play(
     (work, project, log)
 }
 
+/// The prompts of the sessions labelled `…-<session>`, in the order they
+/// ran: labels start with a sequence number, and `read_dir` gives no
+/// order (it differs between macOS and Linux).
 fn prompts(project: &Project, session: &str) -> String {
     let suffix = format!("-{session}.prompt.md");
-    std::fs::read_dir(project.private_dir())
+    let mut paths: Vec<_> = std::fs::read_dir(project.private_dir())
         .unwrap()
         .filter_map(Result::ok)
         .filter(|e| e.file_name().to_string_lossy().ends_with(&suffix))
-        .map(|e| std::fs::read_to_string(e.path()).unwrap())
+        .map(|e| e.path())
+        .collect();
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| std::fs::read_to_string(path).unwrap())
         .collect()
 }
 
