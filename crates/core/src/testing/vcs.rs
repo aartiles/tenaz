@@ -372,7 +372,9 @@ impl Vcs for SnapshotVcs {
     }
 
     /// The files on disk the working tree leaves out. There is no index
-    /// here, so a committed file is never ignored.
+    /// here, so a committed file is never ignored, and no `git rm
+    /// --cached` can make it so; a path not on disk is never ignored,
+    /// where git would match it against `.gitignore` anyway.
     fn ignored(&self, paths: &[String]) -> Result<BTreeSet<String>, VcsError> {
         let worktree = self.worktree();
         Ok(paths

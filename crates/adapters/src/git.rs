@@ -507,6 +507,28 @@ mod tests {
 
     tenaz_core::vcs_contract_tests!(|root: &Path| -> Box<dyn Vcs> { Box::new(GitRepo::new(root)) });
 
+    /// A tracked file taken out of the index (`git rm --cached`) while a
+    /// `.gitignore` matches it is ignored, though git still lists it as
+    /// changed (a staged deletion): what ADR 0035's error asks a builder
+    /// to do. The fake `SnapshotVcs` has no index, so only git shows it.
+    #[test]
+    fn a_file_untracked_under_an_ignored_folder_is_ignored() {
+        let (dir, repo) = repo();
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        std::fs::write(dir.path().join("out/x.png"), "1\n").unwrap();
+        repo.commit_all("out").unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "out/\n").unwrap();
+        repo.commit_all("ignore out").unwrap();
+        repo.git(&["rm", "--cached", "-q", "out/x.png"]).unwrap();
+        std::fs::write(dir.path().join("out/x.png"), "2\n").unwrap();
+        let path = "out/x.png".to_owned();
+        assert!(repo.changed_paths().unwrap().contains(&path));
+        assert_eq!(
+            repo.ignored(std::slice::from_ref(&path)).unwrap(),
+            BTreeSet::from([path])
+        );
+    }
+
     #[test]
     fn worktrees_branches_and_history() {
         let (dir, repo) = repo();

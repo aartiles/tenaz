@@ -293,7 +293,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   most of other tasks. Tenaz now fails an attempt or a bootstrap whose
   `verify` changes such files. It sees a change only when the bytes
   differ, and only in its own `verify` runs, not the agent's. Tested with
-  the scripted harness only, not yet in a run with a real model.
+  the scripted harness only, not yet in a run with a real model. The
+  scripted scenarios recover by moving the output to an ignored folder;
+  the fake repository has no index, so the `git rm --cached` path the
+  error suggests is tested against git alone, in the git adapter.
 - **A conflict left on a passing attempt** (ADR 0034). In the Hardball 3D
   run T003's builder found R23 needs `T002.state` changed, wrote the
   conflict, and made its own check pass without it. The reviewer accepted
