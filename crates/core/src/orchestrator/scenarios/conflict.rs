@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, resume, run};
 use crate::ledger::{JournalRecord, Phase, TaskOutcome};
+use crate::orchestrator::phases::UNDONE_REOPEN;
 use crate::orchestrator::{INVALID_CARDS_NOTE, PASSING_CONFLICT_NOTE, REFUSED_REOPENS_NOTE};
 use crate::project::Project;
 use crate::testing::{
@@ -24,6 +25,9 @@ async fn declaring(check: &str) -> (tempfile::TempDir, Project, String) {
 
 /// As `declaring`, with the replan routing T003 as `routing` says.
 async fn declaring_routed(check: &str, routing: Routing) -> (tempfile::TempDir, Project, String) {
+    // The scripted replan's first amend may name `UNDECLARED`, which only
+    // works while the conflict names another check.
+    assert_ne!(check, UNDECLARED, "the conflict names the undeclared check");
     play(
         ScriptedHarness {
             conflict: Some(ScriptedConflict {
@@ -197,7 +201,7 @@ async fn a_replan_told_its_reopen_would_be_undone_may_drop_the_task() {
         done_in_order(&project).contains(&"T005".to_owned()),
         "{log}"
     );
-    assert!(!log.contains("it stays blocked"), "{log}");
+    assert!(!log.contains(UNDONE_REOPEN), "{log}");
 }
 
 /// The tasks done, in the order the journal records them.
@@ -541,7 +545,7 @@ async fn a_replan_is_told_about_its_cards_then_its_reopen() {
         "{log}"
     );
     assert!(accepted_t005(&project), "{log}");
-    assert!(log.contains("it stays blocked"), "{log}");
+    assert!(log.contains(UNDONE_REOPEN), "{log}");
     assert_eq!(status(&project, "T003"), "blocked", "{log}");
 }
 
@@ -553,7 +557,7 @@ async fn a_rejected_replan_writes_no_statuses() {
     let (_work, project, log) =
         declaring_routed("T001.exists", Routing::ReopenAndAmendUndeclaredIgnored).await;
     assert!(rejected(&project), "{log}");
-    assert!(!log.contains("it stays blocked"), "{log}");
+    assert!(!log.contains(UNDONE_REOPEN), "{log}");
     assert_eq!(status(&project, "T003"), "blocked", "{log}");
 }
 

@@ -25,11 +25,12 @@ it to `status: todo` and add the amending card to its `depends`. If it
 does not, route around the blocked card another way, or leave it blocked
 and say why in your notes.
 
-Only a builder declares a conflict; never write `.tenaz/conflicts/`. Put
-in `amends` only checks a declared conflict names. If you think a card
-cannot pass without changing some other done check, write the card
-without `amends`: if its builder finds the same, it declares a conflict,
-and a later replan may amend that check if the spec allows it.
+Only a builder declares a conflict; never write `.tenaz/conflicts/`.
+Put in `amends` only checks a conflict in "Declared conflicts" names. If
+you think a card cannot pass without changing some other done check,
+write the card without `amends`: if its builder finds the same, it
+declares a conflict, and a later replan may amend that check if the spec
+allows it.
 
 When the briefing has a section "Why the last replan was rejected", the
 last replan's changes to the cards were thrown away for the errors it

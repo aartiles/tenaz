@@ -30,7 +30,9 @@ pub use sampler::Sampler;
 pub(crate) use session::{INVALID_CARDS, PASSING_CONFLICT, REFUSED_REOPENS};
 /// Scenarios find these prompts in a session record by these names.
 #[cfg(test)]
-pub(crate) use session::{INVALID_CARDS_NOTE, PASSING_CONFLICT_NOTE, REFUSED_REOPENS_NOTE};
+pub(crate) use session::{
+    INVALID_CARDS_NOTE, OWN_CHECKS_NOTE, PASSING_CONFLICT_NOTE, REFUSED_REOPENS_NOTE,
+};
 pub use status::{TOOL_REPAIRS, status_json, status_text};
 
 use crate::lease::LeaseError;

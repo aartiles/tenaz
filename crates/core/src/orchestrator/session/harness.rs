@@ -6,13 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::metrics::RequestRecord;
-use crate::orchestrator::phases::{AttemptFailure, PlannerSession, clip_lines};
+use crate::orchestrator::phases::{AttemptFailure, PlannerSession, error_list};
 use crate::orchestrator::{RunError, Runner};
 use crate::ports::{Clock, PermissionDecision, Session, SessionModel, SessionSpec};
 use crate::project::conflict_path;
 use crate::role::Role;
 use crate::session::{SessionEvent, SessionMetrics};
 use crate::task::TaskId;
+use crate::util::clip;
 use crate::verify::retarget;
 use crate::watchdog::{Action, WatchConfig, Watchdog};
 
@@ -222,7 +223,7 @@ impl SessionLoop<'_> {
         }
         self.own_checks_prompt(task)
             .await
-            .map(|message| ("own-checks", message))
+            .map(|message| (OWN_CHECKS_NOTE, message))
     }
 
     /// The prompt for a builder that left a conflict file of `task` while
@@ -294,7 +295,7 @@ impl SessionLoop<'_> {
                 "  {}: its cards would be thrown away ({} errors: {}); asking once more",
                 self.label,
                 errors.len(),
-                clip_lines(&errors.join("; "), limit)
+                clip(&errors.join("; "), limit).replace('\n', " ")
             ));
             return Some((INVALID_CARDS_NOTE, invalid_cards(errors, limit)));
         }
@@ -556,6 +557,9 @@ fn no_own_checks(task: &TaskId, summary: &str) -> String {
     )
 }
 
+/// The watchdog's name for the prompt asking a builder for its own checks.
+pub(crate) const OWN_CHECKS_NOTE: &str = "own-checks";
+
 /// What the prompt about a conflict that does not stand says; the scripted
 /// harness knows it by this.
 pub(crate) const PASSING_CONFLICT: &str = "a conflict stands only when the attempt's checks fail";
@@ -587,10 +591,9 @@ pub(crate) const REFUSED_REOPENS_NOTE: &str = "refused-reopens";
 /// The prompt for a planner session whose cards have `errors`, the list
 /// cut to `limit` bytes.
 fn invalid_cards(errors: &[String], limit: usize) -> String {
-    let listed: Vec<String> = errors.iter().map(|e| format!("- {e}")).collect();
     format!(
         "[orchestrator] {INVALID_CARDS}, as they stand now, because:\n{}\nFix each, keep the rest of your plan, update your notes, and stop.",
-        clip_lines(&listed.join("\n"), limit)
+        error_list(errors, limit)
     )
 }
 

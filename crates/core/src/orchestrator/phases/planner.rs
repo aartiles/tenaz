@@ -12,7 +12,7 @@ use crate::project::{conflict_path, note_path};
 use crate::role::Role;
 use crate::task::{TaskCard, TaskId, TaskStatus};
 
-use super::{CONFLICTS_TITLE, PromptParts, REJECTED_REPLAN_TITLE, clip_lines};
+use super::{CONFLICTS_TITLE, PromptParts, REJECTED_REPLAN_TITLE, error_list};
 pub(crate) use judge::PlannerSession;
 use judge::{Judgement, StatusFix, judge};
 
@@ -333,16 +333,11 @@ fn rejection_section(journal: &[JournalEntry], limit: usize) -> Option<(String, 
     let JournalRecord::ReplanRejected { errors, .. } = &last.record else {
         return None;
     };
-    let listed = errors
-        .iter()
-        .map(|e| format!("- {e}"))
-        .collect::<Vec<_>>()
-        .join("\n");
     Some((
         REJECTED_REPLAN_TITLE.to_owned(),
         format!(
             "Its changes to the cards were thrown away for:\n{}",
-            clip_lines(&listed, limit)
+            error_list(errors, limit)
         ),
     ))
 }
@@ -363,8 +358,8 @@ fn accepted(role: Role, task: Option<TaskId>, added: Vec<TaskId>) -> JournalReco
     }
 }
 
-/// What the log says of a reopen Tenaz undoes.
-const UNDONE_REOPEN: &str =
+/// What the log says of a reopen Tenaz undoes; scenarios know it by this.
+pub(crate) const UNDONE_REOPEN: &str =
     "but no card still to build amends a check of a conflict it declared; it stays blocked";
 
 #[cfg(test)]

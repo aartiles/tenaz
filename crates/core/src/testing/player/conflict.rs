@@ -103,7 +103,7 @@ impl Player {
         else {
             return;
         };
-        if self.first(Some(&at), "passing-conflict", task) {
+        if self.first(Some(&at), "declare-passing-conflict", task) {
             let text = format!("---\nchecks: [{check}]\n---\n{task} needs {check} changed.\n");
             self.write_tool(&format!(".tenaz/conflicts/{task}.md"), &text, false)
                 .await;

@@ -24,6 +24,8 @@ mod task;
 mod task_loop;
 
 pub(crate) use planner::PlannerSession;
+#[cfg(test)]
+pub(crate) use planner::UNDONE_REOPEN;
 
 /// What a session's prompt adds to the role prompt, spec and map.
 #[derive(Default)]
@@ -302,6 +304,13 @@ impl Runner {
             self.params.verify_path(),
         ))
     }
+}
+
+/// `errors` as a list, one `- ` line each, cut to `limit` bytes as notes
+/// are: what a planner is told its cards were, or would be, rejected for.
+pub(crate) fn error_list(errors: &[String], limit: usize) -> String {
+    let listed: Vec<String> = errors.iter().map(|e| format!("- {e}")).collect();
+    clip_lines(&listed.join("\n"), limit)
 }
 
 /// Cuts `text` to the whole lines that fit in `limit` bytes and says how

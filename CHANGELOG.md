@@ -8,6 +8,10 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- A run started before these changes gets the new protocol and prompts
+  with `tenaz run --resume --refresh-templates` (or `--refresh-templates`
+  for a run that is not blocked); without it, the new checks still apply
+  but the run's prompts do not explain them.
 - The Tenaz skill now has the delegating agent prepare the brief and full
   bootstrap, sized to the local builder model's context budget. The runner
   validates those files before building, using its existing path that skips
@@ -41,6 +45,8 @@ uses [Semantic Versioning](https://semver.org/).
   as dsh does, since `verify` runs with the user's own `HOME`. Before, a
   Playwright check failed for the agent and passed for Tenaz, and in a
   run with fx, 42 of 46 sessions ran `verify` with `HOME` set by hand.
+  OpenCode now follows a user's own `npm_config_cache`, not always
+  `~/.npm`.
 - A split or replan that leaves cards Tenaz would throw away is told the
   errors before it ends, and gets one more turn to fix them (ADR 0033).
   Cards still wrong after that are thrown away, as before.
@@ -48,8 +54,7 @@ uses [Semantic Versioning](https://semver.org/).
   lists the errors under "Why the last replan was rejected", until a
   replan is accepted. Before, it saw at most a bare `replan-rejected`
   line. In a run with Qwen3.8-Flash-Next, replans wrote the same rejected
-  card four times and the run ended BLOCKED. In a project made before this,
-  `--refresh-templates` adds the prompt's note about that section.
+  card four times and the run ended BLOCKED.
 
 ## [0.7.0] - 2026-11-11
 

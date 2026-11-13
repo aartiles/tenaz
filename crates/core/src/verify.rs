@@ -362,6 +362,10 @@ mod tests {
         assert!(error.contains("out/00.png, out/01.png"), "{error}");
         assert!(error.contains("out/09.png and 2 more."), "{error}");
         assert!(!error.contains("out/10.png"), "{error}");
+        assert!(
+            error.contains("`.gitignore`") && error.contains("git rm --cached"),
+            "{error}"
+        );
     }
 
     #[test]

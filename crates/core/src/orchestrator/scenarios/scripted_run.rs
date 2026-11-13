@@ -13,6 +13,7 @@ use super::{deps, fake_project, run};
 use crate::cache_report::CacheReport;
 use crate::ledger::{JournalRecord, SessionRecord, TaskOutcome, Verdict};
 use crate::orchestrator::Deps;
+use crate::orchestrator::OWN_CHECKS_NOTE;
 use crate::project::Project;
 use crate::testing::{ScriptedHarness, VirtualClock};
 use crate::verify::WROTE_THE_TREE;
@@ -624,7 +625,7 @@ async fn a_builder_without_its_check_is_asked_for_one() {
     .await;
     let asked = run
         .sessions()
-        .find(|s| s.watchdog.iter().any(|e| e.kind == "own-checks"))
+        .find(|s| s.watchdog.iter().any(|e| e.kind == OWN_CHECKS_NOTE))
         .expect("a builder without its check was not asked for one");
     assert!(asked.label.ends_with("-builder-T002"), "{}", asked.label);
     let attempt = asked.attempt;
@@ -881,9 +882,8 @@ async fn a_retried_builder_s_list_of_changes_is_clipped() {
 
 /// An attempt whose `verify` writes into the working tree fails, and the
 /// next builder is told what and why (ADR 0035): here T003's check writes
-/// `out/T003.png` with new bytes on each run, which the failed attempt's
-/// commit tracks by then; the builder told why writes it under `shots/`,
-/// which it lists in `.gitignore`.
+/// `out/T003.png` with new bytes on each run; the builder told why writes
+/// it under `shots/`, which it lists in `.gitignore`.
 #[tokio::test(start_paused = true)]
 async fn an_attempt_whose_verify_writes_the_tree_fails() {
     let run = Played::with(ScriptedHarness {
@@ -892,6 +892,14 @@ async fn an_attempt_whose_verify_writes_the_tree_fails() {
     })
     .await;
     let told = format!("{WROTE_THE_TREE}: out/T003.png");
+    let ignore = run.project.read(".gitignore").unwrap_or_default();
+    assert!(
+        ignore.lines().any(|l| l == "shots/"),
+        "{ignore}\n{}",
+        run.log
+    );
+    let moved = run.project.root().join("shots/T003.png");
+    assert!(moved.is_file(), "{}", run.log);
     let builders = run.prompts("builder-T003");
     assert_eq!(builders.len(), 2, "{}", run.log);
     assert!(!builders[0].contains(&told), "{}", builders[0]);
