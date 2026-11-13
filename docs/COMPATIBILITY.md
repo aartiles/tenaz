@@ -310,10 +310,17 @@ above), so a 32k context is the practical floor (`contextFloor`).
   and later entries pushed it out. The run ended BLOCKED. A replan now
   gets the last rejected replan's errors in "Why the last replan was
   rejected". A split or replan is also told its cards' errors before it
-  ends, and gets one more turn to fix them (ADR 0033). Both tested with
-  the scripted harness only, not yet in a run with a real model. Cards
-  still wrong after that turn are all thrown away, the valid ones too. A
-  split that leaves fewer than two tasks is not told before it ends.
+  ends, and gets one more turn to fix them (ADR 0033). When the run was
+  resumed with these (2026-11-12 and 13), the first replan, told why,
+  was accepted, and five of six replans were. The one rejected was told
+  before it ended, and tried to fix an `amends` of a check no conflict
+  named by editing the conflict file, which a planner may not write;
+  Tenaz reverted it. The error now says what to do instead: remove that
+  `amends`; only a builder declares a conflict, and a later replan may
+  then amend the check.
+  That wording is not yet tried with a real model. Cards still wrong
+  after that turn are all thrown away, the valid ones too. A split that
+  leaves fewer than two tasks is not told before it ends.
 - **`--resume` after no task was ready.** A run blocked with no task
   ready gets one more replan on `--resume`. Tested with a
   scripted-harness scenario, and seen once in that run (2026-11-05):

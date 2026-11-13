@@ -133,3 +133,7 @@ Known gaps, older than this change or wider than it:
   built, a reopened task's conflict file stays until its next attempt; a
   replan that adds another card amending the same check in between is
   licensed by it again.
+  (2026-11-13: the code does not allow it. A planner's writes to
+  `.tenaz/conflicts/` are reverted as out of its role; only a builder
+  writes its own task's conflict. In the resumed Hardball 3D run a
+  replan tried it, and the revert left its `amends` unlicensed.)

@@ -12,6 +12,11 @@ uses [Semantic Versioning](https://semver.org/).
   bootstrap, sized to the local builder model's context budget. The runner
   validates those files before building, using its existing path that skips
   valid bootstrap steps. Local bootstrap remains available.
+- The error for a card that amends a check no conflict that stands names
+  now says what to do: remove that `amends`, since only a builder
+  declares a conflict and a later replan may then amend the check. The
+  replan prompt says so too. Before, a replan that was told this error
+  tried to write the conflict file itself, and Tenaz reverted it.
 - `verify` must leave the working tree as it found it: an attempt, or a
   bootstrap, after which Tenaz's own `verify` run changed files that git
   tracks or does not ignore fails, naming them (ADR 0035). Before, a check

@@ -315,7 +315,10 @@ mod tests {
         ];
         assert_eq!(
             Left::replan(after).judged().errors,
-            ["T005: amends `T001.other`, which no file in .tenaz/conflicts/ names"]
+            [crate::conflict::not_named(
+                &TaskId::parse("T005").unwrap(),
+                "T001.other"
+            )]
         );
     }
 

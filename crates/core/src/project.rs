@@ -609,7 +609,10 @@ mod tests {
         assert_eq!(loaded.conflicts, []);
         assert_eq!(
             loaded.errors,
-            ["T008: amends `T003.x`, which no file in .tenaz/conflicts/ names"]
+            [crate::conflict::not_named(
+                &TaskId::parse("T008").unwrap(),
+                "T003.x"
+            )]
         );
     }
 
