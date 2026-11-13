@@ -106,16 +106,21 @@ fn round(
 /// directory is known: born within `ran` (rounded up to whole seconds,
 /// as `ps` rounds ages down), detached (see [`detached`]), run by
 /// Tenaz's user, and with a parent that adopts orphans or is in the
-/// command's `group`. `own` is Tenaz's row.
+/// command's `group`. `own` is Tenaz's row. Never Tenaz or one of its
+/// ancestors: a supervisor that started Tenaz detached, in the project,
+/// a moment before its first `verify` looks left behind, and stopping it
+/// would stop Tenaz with it.
 fn candidates(rows: &[ProcessRow], own: &ProcessRow, group: u32, ran: Duration) -> Vec<u32> {
     let by_pid: HashMap<u32, &ProcessRow> = rows.iter().map(|r| (r.pid, r)).collect();
-    let adopters = adopters(&by_pid, own);
+    let above = ancestors(&by_pid, own);
+    let adopters = adopters(&by_pid, &above, own);
+    let spared: BTreeSet<u32> = above.iter().copied().chain([own.pid]).collect();
     let window = Duration::from_secs(ran.as_secs() + u64::from(ran.subsec_nanos() > 0));
     let in_group = |pid: u32| by_pid.get(&pid).is_some_and(|p| p.pgid == group);
     rows.iter()
         .filter(|r| {
             r.age <= window
-                && r.pid != own.pid
+                && !spared.contains(&r.pid)
                 && detached(r)
                 && r.uid == own.uid
                 && (adopters.contains(&r.ppid) || in_group(r.ppid))
@@ -130,19 +135,28 @@ fn detached(row: &ProcessRow) -> bool {
     row.pgid == row.pid && !row.terminal && row.name != NEVER_STOPPED
 }
 
-/// Where an orphan of Tenaz's commands goes: pid 1, which the table may
-/// not list, and a [`SUBREAPER`] above Tenaz.
-/// Never Tenaz itself, which may be pid 1 in a container.
-fn adopters(by_pid: &HashMap<u32, &ProcessRow>, own: &ProcessRow) -> BTreeSet<u32> {
-    let mut found = BTreeSet::from([1]);
-    let mut seen = BTreeSet::new();
+/// The processes above Tenaz in `by_pid`, its parent first, up to one
+/// the table does not list; a loop, or one back to Tenaz, ends the walk.
+fn ancestors(by_pid: &HashMap<u32, &ProcessRow>, own: &ProcessRow) -> Vec<u32> {
+    let mut chain = Vec::new();
     let mut next = by_pid.get(&own.ppid);
-    while let Some(row) = next.filter(|r| r.pid > 1 && seen.insert(r.pid)) {
-        if row.name == SUBREAPER {
-            found.insert(row.pid);
-        }
+    while let Some(row) = next.filter(|r| r.pid != own.pid && !chain.contains(&r.pid)) {
+        chain.push(row.pid);
         next = by_pid.get(&row.ppid);
     }
+    chain
+}
+
+/// Where an orphan of Tenaz's commands goes: pid 1, which the table may
+/// not list, and a [`SUBREAPER`] among the processes `above` Tenaz.
+/// Never Tenaz itself, which may be pid 1 in a container.
+fn adopters(by_pid: &HashMap<u32, &ProcessRow>, above: &[u32], own: &ProcessRow) -> BTreeSet<u32> {
+    let mut found: BTreeSet<u32> = above
+        .iter()
+        .filter(|pid| **pid > 1 && by_pid.get(pid).is_some_and(|r| r.name == SUBREAPER))
+        .copied()
+        .collect();
+    found.insert(1);
     found.remove(&own.pid);
     found
 }
@@ -394,6 +408,46 @@ mod tests {
         tenaz.terminal = false;
         tenaz.age = Duration::from_secs(1);
         assert!(candidates_in(&rows, RAN).is_empty());
+    }
+
+    /// A supervisor that started Tenaz in a session of its own, from the
+    /// project, a moment before Tenaz's first `verify` (as a run resumed
+    /// straight into a review does): it looks left behind, but it is
+    /// above Tenaz, and stopping it would stop Tenaz.
+    /// A shell between them, as a launcher's `sh -c` would be.
+    fn supervised() -> Vec<ProcessRow> {
+        let mut rows = machine();
+        let tenaz = rows.iter_mut().find(|r| r.pid == TENAZ).unwrap();
+        tenaz.ppid = 650;
+        tenaz.pgid = 600;
+        tenaz.terminal = false;
+        tenaz.age = Duration::from_secs(1);
+        rows.push(ProcessRow {
+            name: "Python".to_owned(),
+            ..row(600, 1, 600, 1)
+        });
+        rows.push(ProcessRow {
+            name: "sh".to_owned(),
+            ..row(650, 600, 600, 1)
+        });
+        rows
+    }
+
+    #[test]
+    fn a_process_above_tenaz_is_not_a_candidate() {
+        assert!(candidates_in(&supervised(), RAN).is_empty());
+    }
+
+    /// The sweep still stops what `verify` left behind beside it.
+    #[test]
+    fn sweep_spares_the_supervisor_above_tenaz() {
+        let mut rows = supervised();
+        rows.push(row(800, 1, 800, 1));
+        let table = ScriptedProcesses::new(vec![rows])
+            .cwd(600, "/p")
+            .cwd(800, "/p");
+        assert_eq!(sweep_p(&table), vec![800]);
+        assert_eq!(table.killed(), vec![vec![800]]);
     }
 
     /// In a container Tenaz may be pid 1: what it starts is its own

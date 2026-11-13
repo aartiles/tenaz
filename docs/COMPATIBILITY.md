@@ -171,7 +171,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   for; there nothing is stopped. Tested with a detached `sleep`
   (through `perl`'s `setsid`) on macOS and in CI on Ubuntu; not yet seen
   in a real run, nor with `npx vite preview`, nor on a Linux desktop
-  with a `systemd --user` subreaper.
+  with a `systemd --user` subreaper. Never stopped: Tenaz or a process
+  above it. In the Hardball 3D run (2026-11-13) a supervisor started
+  Tenaz detached, from the project, and Tenaz, resumed straight into a
+  review, ran `verify` a moment later: the supervisor looked left
+  behind, and stopping it and everything under it stopped Tenaz too,
+  with no exit code. Tested with a process table modelled on that case;
+  not yet seen in a real run since. Still stopped: another process a
+  launcher starts from the project in a session of its own, beside
+  Tenaz rather than above it, in the same second as Tenaz's first
+  `verify`.
 
 - **Shell reads count for the idle rule from text alone** (ADR 0029). The
   words of a command that look like paths are taken without a shell
