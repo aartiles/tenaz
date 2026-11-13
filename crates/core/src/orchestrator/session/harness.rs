@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::metrics::RequestRecord;
-use crate::orchestrator::phases::{PlannerSession, clip_lines};
+use crate::orchestrator::phases::{AttemptFailure, PlannerSession, clip_lines};
 use crate::orchestrator::{RunError, Runner};
 use crate::ports::{Clock, PermissionDecision, Session, SessionModel, SessionSpec};
 use crate::project::conflict_path;
@@ -226,21 +226,24 @@ impl SessionLoop<'_> {
     }
 
     /// The prompt for a builder that left a conflict file of `task` while
-    /// its attempt would pass as Tenaz judges it (`Runner::verify_attempt`):
-    /// a conflict is read only when the attempt fails, so the file does not
-    /// stand, and the builder is told while it still holds its work (ADR
-    /// 0034). `None` when the attempt would fail, so the conflict is read,
-    /// or after the first time in this session.
+    /// its checks would pass as Tenaz judges them (`Runner::verify_attempt`):
+    /// a conflict is read only when the attempt's checks fail, so the file
+    /// does not stand, and the builder is told while it still holds its
+    /// work (ADR 0034). `None` when the checks would fail, so the conflict
+    /// is read, or after the first time in this session.
     async fn passing_conflict_prompt(&mut self, task: &TaskId) -> Option<String> {
         if self.builder.as_ref()?.asked_conflict {
             return None;
         }
-        if self.runner.verify_attempt(task).await.failure.is_some() {
+        // A conflict is read only when the checks fail; changes `verify`
+        // made to the working tree (ADR 0035) do not make it stand.
+        let failure = self.runner.verify_attempt(task).await.failure;
+        if matches!(failure, Some(AttemptFailure::Checks(_))) {
             return None;
         }
         self.builder.as_mut()?.asked_conflict = true;
         self.runner.log(&format!(
-            "  {}: {} left while the attempt passes, so it does not stand; asking once more",
+            "  {}: {} left while its checks pass, so it does not stand; asking once more",
             self.label,
             conflict_path(task.as_str())
         ));
@@ -555,17 +558,17 @@ fn no_own_checks(task: &TaskId, summary: &str) -> String {
 
 /// What the prompt about a conflict that does not stand says; the scripted
 /// harness knows it by this.
-pub(crate) const PASSING_CONFLICT: &str = "a conflict stands only when the attempt fails `verify`";
+pub(crate) const PASSING_CONFLICT: &str = "a conflict stands only when the attempt's checks fail";
 
 /// The watchdog's name for that prompt in the session's record.
 pub(crate) const PASSING_CONFLICT_NOTE: &str = "passing-conflict";
 
 /// The prompt for a builder that left a conflict file of `task` while its
-/// attempt passes `verify` (ADR 0034).
+/// checks pass (ADR 0034).
 fn passing_conflict(task: &TaskId) -> String {
     let path = conflict_path(task.as_str());
     format!(
-        "[orchestrator] You left `{path}`, but this attempt passes `verify`, and {PASSING_CONFLICT}: as things stand Tenaz removes the file when {task} is done, and no card may amend the checks it names. If {task} cannot be done as its card and the spec say without changing those checks, make {task}'s checks test what the card asks, even though they then fail, keep the file, and stop: {task} is blocked, this attempt's work is undone, and a replan may amend those checks. Otherwise delete the file, say in your notes what, if anything, the card asks that the work does not do, and stop."
+        "[orchestrator] You left `{path}`, but this attempt's checks pass, and {PASSING_CONFLICT}: as things stand Tenaz removes the file, and no card may amend the checks it names. If {task} cannot be done as its card and the spec say without changing those checks, make {task}'s checks test what the card asks, even though they then fail, keep the file, and stop: {task} is blocked, this attempt's work is undone, and a replan may amend those checks. Otherwise delete the file, say in your notes what, if anything, the card asks that the work does not do, and stop."
     )
 }
 

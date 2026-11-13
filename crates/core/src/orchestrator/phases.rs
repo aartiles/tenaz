@@ -55,7 +55,27 @@ pub(crate) struct AttemptVerify {
     pub all: VerifyOutcome,
     pub own: VerifyOutcome,
     /// Why the attempt fails; `None` when it passes.
-    pub failure: Option<String>,
+    pub failure: Option<AttemptFailure>,
+}
+
+/// Why an attempt fails.
+pub(crate) enum AttemptFailure {
+    /// Its checks: the suite fails, passes fewer checks of other tasks, or
+    /// runs no passing check of the task (`judge_attempt`). Only then is a
+    /// conflict its builder declared read (ADR 0009, 0034).
+    Checks(String),
+    /// Its checks pass, but `verify` changed the working tree (ADR 0035).
+    /// A conflict declared with checks that pass does not stand.
+    TreeWrites(String),
+}
+
+impl AttemptFailure {
+    /// What the next builder is told.
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Self::Checks(text) | Self::TreeWrites(text) => text,
+        }
+    }
 }
 
 impl Runner {
@@ -94,8 +114,12 @@ impl Runner {
         let before = self.tree_state();
         let all = self.run_verify(&["--all"]).await;
         let own = self.run_verify(&["--task", task.as_str()]).await;
-        let failure = judge_attempt(task.as_str(), &all, &own, self.ledger.passed_checks)
-            .or_else(|| self.tree_writes(before.as_ref()));
+        let failure = match judge_attempt(task.as_str(), &all, &own, self.ledger.passed_checks) {
+            Some(why) => Some(AttemptFailure::Checks(why)),
+            None => self
+                .tree_writes(before.as_ref())
+                .map(AttemptFailure::TreeWrites),
+        };
         AttemptVerify { all, own, failure }
     }
 

@@ -639,3 +639,32 @@ async fn a_conflict_on_a_failing_attempt_is_not_pointed_out() {
         "{log}"
     );
 }
+
+/// A conflict left while the checks pass does not stand when the attempt
+/// fails only because `verify` changed the working tree (ADR 0034, 0035):
+/// the builder is told, the conflict file is removed when the attempt
+/// fails, and the next attempt, told about the tree, gets the task done.
+#[tokio::test(start_paused = true)]
+async fn a_conflict_does_not_stand_on_an_attempt_failed_by_the_tree() {
+    let (_work, project, log) = play(
+        ScriptedHarness {
+            passing_conflict: Some(Box::new(ScriptedPassingConflict {
+                task: "T003".into(),
+                check: "T001.exists".into(),
+                fails_when_told: false,
+            })),
+            stamping_task: Some("T003".into()),
+            ..Default::default()
+        },
+        |_| {},
+    )
+    .await;
+    assert_eq!(noted(&project, PASSING_CONFLICT_NOTE).len(), 1, "{log}");
+    assert_eq!(conflicts_journaled(&project), 0, "{log}");
+    // Removed when the attempt fails, so no escalation could carry it on.
+    assert!(
+        log.contains(".tenaz/conflicts/T003.md does not stand: the attempt's checks pass"),
+        "{log}"
+    );
+    assert_eq!(status(&project, "T003"), "done", "{log}");
+}
