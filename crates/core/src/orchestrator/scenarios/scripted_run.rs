@@ -901,6 +901,32 @@ async fn an_attempt_whose_verify_writes_the_tree_fails() {
         "{}",
         run.log
     );
+    // The journal says why the first attempt failed, though both runs of
+    // `verify` passed.
+    let verdicts: Vec<(bool, Option<bool>, Option<bool>)> = run
+        .records
+        .iter()
+        .filter_map(|r| match r {
+            JournalRecord::Verify {
+                task,
+                all_ok,
+                attempt_ok,
+                failure,
+                ..
+            } if task.as_str() == "T003" => Some((
+                *all_ok,
+                *attempt_ok,
+                failure.as_deref().map(|f| f.contains(&told)),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        verdicts,
+        [(true, Some(false), Some(true)), (true, Some(true), None)],
+        "{}",
+        run.log
+    );
 }
 
 /// A bootstrap whose `verify` writes into the working tree is not

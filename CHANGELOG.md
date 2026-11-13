@@ -12,6 +12,11 @@ uses [Semantic Versioning](https://semver.org/).
   bootstrap, sized to the local builder model's context budget. The runner
   validates those files before building, using its existing path that skips
   valid bootstrap steps. Local bootstrap remains available.
+- A `verify` record in `journal.jsonl` now says whether the attempt passed
+  (`attempt_ok`) and, when it failed, why (`failure`), as its next builder
+  is told. Before, an attempt that failed on what `verify` does not report
+  (the working tree, fewer checks of other tasks) showed `all_ok` and
+  `task_ok` true and no reason. The existing fields are unchanged.
 - The error for a card that amends a check no conflict that stands names
   now says what to do: remove that `amends`, since only a builder
   declares a conflict and a later replan may then amend the check. The

@@ -373,6 +373,8 @@ impl Runner {
             task_checks: own.passed(),
             all: all.json.clone(),
             task_json: own.json.clone(),
+            attempt_ok: Some(verify_failure.is_none()),
+            failure: verify_failure.clone(),
         });
         Ok(match verify_failure {
             Some(verify_failure) => Attempt::Failed {
