@@ -37,11 +37,11 @@ async fn blocked_after_pause(
         ..Default::default()
     };
     let clock = Arc::new(VirtualClock::new());
-    run(
+    Box::pin(run(
         &project,
         deps(&project, vcs.clone(), Arc::new(stopping), clock.clone()),
         stop,
-    )
+    ))
     .await;
     let mut ledger = project.load_ledger().unwrap();
     let log = project.read(".tenaz/private/orchestrator.log").unwrap();
@@ -49,11 +49,11 @@ async fn blocked_after_pause(
     edit(&mut ledger);
     project.save_ledger(&ledger).unwrap();
 
-    run(
+    Box::pin(run(
         &project,
         deps(&project, vcs.clone(), Arc::new(harness), clock.clone()),
         CancellationToken::new(),
-    )
+    ))
     .await;
     let run = Blocked::read(work, project);
     BlockedAfterPause {

@@ -25,6 +25,8 @@ pub struct RunParams {
     pub replan_every: u32,
     /// Default turns per session (a card may override).
     pub turn_budget: u32,
+    /// A session at this multiple of its turn budget is stopped (ADR 0036).
+    pub turn_abort: f64,
     /// Fraction of the context window a session should stay under.
     pub context_budget: f64,
     /// The same tool call N times in a row: steer.
@@ -174,6 +176,7 @@ impl Default for RunParams {
             max_split_depth: 2,
             replan_every: 5,
             turn_budget: 40,
+            turn_abort: 1.5,
             context_budget: 0.65,
             loop_steer: 3,
             loop_abort: 5,
@@ -340,6 +343,7 @@ mod tests {
         assert_eq!(p.max_attempts, 3);
         assert_eq!(p.context_floor, 32768);
         assert!((p.context_abort - 1.3).abs() < f64::EPSILON);
+        assert!((p.turn_abort - 1.5).abs() < f64::EPSILON);
         assert!(p.notify);
     }
 
@@ -351,6 +355,22 @@ mod tests {
         assert_eq!(p.diff_limit_bytes, 30000);
         assert!((p.diff_share - 0.25).abs() < f64::EPSILON);
         assert_eq!(p.harness_reserve_tokens, 8192);
+    }
+
+    /// A run.json from before `turnAbort` loads with its default, so a
+    /// resumed run stops sessions where it did.
+    #[test]
+    fn params_pinned_before_turn_abort_load_with_its_default() {
+        let p: RunParams = serde_json::from_str(r#"{"turnBudget": 30}"#).unwrap();
+        assert_eq!(p.turn_budget, 30);
+        assert!((p.turn_abort - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn an_integral_turn_abort_override_loads_as_a_float() {
+        let mut p = RunParams::default();
+        p.apply_override("turnAbort=2").unwrap();
+        assert!((p.turn_abort - 2.0).abs() < f64::EPSILON);
     }
 
     #[test]

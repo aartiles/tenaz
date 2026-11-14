@@ -113,7 +113,10 @@ Write the brief outside the repository so it does not dirty the checkout.
    `--mcp name=url` offers the agent an MCP server of the user's own that
    speaks HTTP (repeat it for more; fx, OpenCode, Qwen Code or `--harness
    acp`, not Pi or dsh). The user starts that server; `tenaz run --no-mcp`
-   drops the pinned ones.
+   drops the pinned ones. `--set turnBudget=50` changes the turn budget
+   (40) of builder, bootstrap, replan and split sessions; reviewers keep
+   25 turns and the final review 60. `--set turnAbort=2` stops every
+   session at twice its budget (1.5 by default).
 2. Before starting `run`, prepare the bootstrap below in the directory
    `init` printed. For a repository with commits, confirm it with
    `git worktree list`; do not guess the directory from the goal name. For a
@@ -168,6 +171,10 @@ the bootstrap, leaving implementation to the local model.
    output and turns. Aim for 1–4 files, about 50–300 changed lines and at
    most three acceptance bullets; split larger work before starting. For a
    new project, reach a minimal end-to-end version early.
+   A builder is also stopped at 60 turns by default (see `turnBudget`
+   above), and a fresh session carries on from its changes, up to
+   `contextContinuations` (3) times. A card can set its own budget with
+   `budget: {turns: 30}`.
 7. Check requirement coverage, dependency order and the baseline once more.
    Leave `run.json`, `journal.jsonl`, pinned prompts and protocol untouched.
    Do not set phases, checkpoints or task statuses to skip validation.

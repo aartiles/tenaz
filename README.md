@@ -99,10 +99,11 @@ project's own tests.
   the engine refuses for what is in it (a 400 for a file it cannot
   decode) is not retried as it was: a fresh session goes on, told what
   was refused, up to the session's continuations.
-- **Watchdogs.** Loops, repeated calls, idle turns and huge outputs get a
-  steering message first (fx and Pi; OpenCode and Qwen Code get none),
-  then the session is stopped. A file written outside the project is
-  logged and the session told so.
+- **Watchdogs.** Loops, repeated calls, idle turns, huge outputs and
+  sessions that reach their turn or context budget get a steering
+  message first (fx and Pi; OpenCode and Qwen Code get none), then the
+  session is stopped. A file written outside the project is logged and
+  the session told so.
 - **Resident models.** When the agent asks for an image, Tenaz unloads
   the LLM, runs the image model, frees it and reloads the LLM. With
   `--model-for`, every model named is loaded at once: Tenaz checks before
@@ -437,6 +438,20 @@ engine's prefix cache breaks once per step, not every turn
 A video file the agent read reaches the engine as a note that says to
 read it as frames, since the local engines do not decode video files
 ([ADR 0024](docs/adr/0024-a-note-in-place-of-a-video-file.md)).
+
+A session's turns are watched as well as its context. A builder,
+bootstrap, replan or split session is told to wrap up at `turnBudget`
+turns (40) and stopped at `turnAbort` times that (1.5, so 60). A card can
+give its builder another budget with `budget: {turns: 30}`. A reviewer
+gets 25 turns and the final review 60; those do not change with
+`turnBudget`, but `turnAbort` sets their stop too. A builder or
+bootstrap session stopped this way is continued by a fresh session,
+without charging the task an attempt; these continuations share
+`contextContinuations` (3) with context stops. The context guard usually
+stops a session first; the turn budget bounds the sessions that reach
+their context budget slowly, such as one that adds little context each
+turn or one with a large window. See
+[ADR 0036](docs/adr/0036-keep-the-turn-budget-and-make-its-stop-a-parameter.md).
 
 ### Pi instead of fx
 

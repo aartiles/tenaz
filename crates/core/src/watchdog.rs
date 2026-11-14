@@ -756,8 +756,7 @@ impl Watchdog {
                 self.steer("idle", &message, elapsed_ms, actions);
             }
         }
-        let hard = (f64::from(watch.turns) * 1.5).ceil();
-        if f64::from(self.metrics.turns) >= hard {
+        if f64::from(self.metrics.turns) >= turn_stop(watch.turns, self.params.turn_abort) {
             self.abort(
                 &format!(
                     "turn budget exceeded ({}/{})",
@@ -774,6 +773,13 @@ impl Watchdog {
             self.steer("turns", &message, elapsed_ms, actions);
         }
     }
+}
+
+/// The turn at which a session with `budget` turns is stopped: `abort`
+/// times the budget, rounded up. The small offset drops float error, so
+/// 50 turns at 1.1 stop at 55, not at 56 (50 * 1.1 is 55.000000000000007).
+fn turn_stop(budget: u32, abort: f64) -> f64 {
+    (f64::from(budget) * abort - 1e-9).ceil()
 }
 
 #[cfg(test)]
@@ -1529,33 +1535,72 @@ mod tests {
         assert!(is_steer(&shell_turn(&mut w, "cat src/a.js"), "idle"));
     }
 
-    #[test]
-    fn turn_budget_steers_at_the_budget_and_aborts_at_one_and_a_half() {
+    /// The turns at which a session with a budget of `budget` turns is
+    /// steered by the turn rule and stopped by it, over `turns` turns.
+    fn turn_rule(turn_abort: f64, budget: u32, turns: u32) -> (Vec<u32>, Vec<u32>) {
         let mut w = Watchdog::new(
-            RunParams::default(),
+            RunParams {
+                turn_abort,
+                ..RunParams::default()
+            },
             Some(WatchConfig {
-                turns: 4,
+                turns: budget,
                 context_tokens: 60_000,
                 idle: false,
                 wrap_up: Role::Builder.wrap_up(),
             }),
         );
-        let mut steered_at = None;
-        let mut aborted_at = None;
-        for turn in 1..=6 {
+        let (mut steered, mut stopped) = (Vec::new(), Vec::new());
+        for turn in 1..=turns {
             for action in w.handle(&SessionEvent::TurnEnd, 0, || {
                 panic!("idle off: fingerprint must not be computed")
             }) {
                 match action {
-                    Action::Steer { key, .. } if key == "turns" => steered_at = Some(turn),
-                    Action::Abort { .. } => aborted_at = Some(turn),
+                    Action::Steer { key, .. } if key == "turns" => steered.push(turn),
+                    Action::Abort { reason } if reason.starts_with("turn budget exceeded") => {
+                        stopped.push(turn);
+                    }
                     Action::Steer { key, .. } => panic!("unexpected steer {key}"),
+                    Action::Abort { reason } => panic!("unexpected stop {reason}"),
                     Action::Interrupt { message } => panic!("unexpected interrupt {message}"),
                 }
             }
         }
-        assert_eq!(steered_at, Some(4));
-        assert_eq!(aborted_at, Some(6));
+        (steered, stopped)
+    }
+
+    #[test]
+    fn the_default_turn_rule_steers_at_the_budget_and_stops_at_one_and_a_half() {
+        let default = RunParams::default().turn_abort;
+        assert_eq!(turn_rule(default, 4, 7), (vec![4], vec![6]));
+    }
+
+    #[test]
+    fn turn_abort_sets_the_stop_as_a_multiple_of_the_turn_budget() {
+        assert_eq!(turn_rule(2.0, 4, 9), (vec![4], vec![8]));
+    }
+
+    /// 4 turns times 1.1 is 4.4: the stop is the turn after, not the budget.
+    #[test]
+    fn a_fractional_turn_stop_is_rounded_up() {
+        assert_eq!(turn_rule(1.1, 4, 6), (vec![4], vec![5]));
+    }
+
+    /// 50 times 1.1 is 55.000000000000007 in floating point.
+    #[test]
+    fn a_turn_stop_that_is_whole_is_not_rounded_up_by_float_error() {
+        assert_eq!(turn_rule(1.1, 50, 57), (vec![50], vec![55]));
+    }
+
+    #[test]
+    fn a_turn_abort_of_one_stops_at_the_budget_without_a_steer() {
+        assert_eq!(turn_rule(1.0, 4, 5), (vec![], vec![4]));
+    }
+
+    #[test]
+    fn a_turn_abort_below_one_stops_before_the_budget_without_a_steer() {
+        assert_eq!(turn_rule(0.5, 4, 3), (vec![], vec![2]));
+        assert_eq!(turn_rule(0.0, 4, 2), (vec![], vec![1]));
     }
 
     #[test]

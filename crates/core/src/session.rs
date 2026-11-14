@@ -399,7 +399,7 @@ impl SessionMetrics {
         self.abort_reason.as_deref() == Some(SECOND_COMPACTION)
     }
 
-    /// The session was stopped at one and a half times its turn budget.
+    /// The session was stopped at `turnAbort` times its turn budget.
     pub fn turns_stopped(&self) -> bool {
         self.abort_reason
             .as_deref()

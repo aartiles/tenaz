@@ -54,7 +54,7 @@ async fn play(
 
 /// [`play`], unchanged, that must block.
 async fn blocked(harness: ScriptedHarness, overrides: &[&str]) -> Blocked {
-    let (work, project, _) = play(harness, overrides, |_| {}).await;
+    let (work, project, _) = Box::pin(play(harness, overrides, |_| {})).await;
     Blocked::read(work, project)
 }
 

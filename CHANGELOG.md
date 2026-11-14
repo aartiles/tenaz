@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `turnAbort` (1.5 by default) sets where a session is stopped, as a
+  multiple of its turn budget, like `contextAbort` does for the context
+  budget. It was fixed at 1.5. `turnBudget` (40), a card's
+  `budget: {turns: N}` and the fixed budgets of reviewers (25) and the
+  final review (60) are now documented. See ADR 0036.
+
 ### Fixed
 
 - After `verify`, Tenaz no longer stops a process above itself as if
