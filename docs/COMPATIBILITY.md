@@ -647,6 +647,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   `.tenaz/private/<label>.thinking.md` to show what such a reply was
   doing; fx 0.0.14 sends it as ACP thought chunks, seen in the
   image-landing runs of 2026-10-25.
+- **fx 0.0.17 ends a cut turn with a stop reason ACP does not have.**
+  Where fx 0.0.16 exited on a reply cut at the output limit, fx 0.0.17
+  answers the prompt with `stopReason: max_output_tokens`; ACP's is
+  `max_tokens`. Tenaz's ACP client fails to read it ("unknown variant
+  `max_output_tokens`"), the connection ends and fx exits with code 1.
+  The session ends as it did with fx 0.0.16, and Tenaz still reads the
+  cut from the proxy, so it is charged and handled the same; only the
+  harness exit in the session's record shows the parse error. Seen twice
+  in the Hardball 3D improvements run (2026-11-16, Qwen3.8-Flash-Next on
+  Sushi 1.6.0).
 - `verify`'s time limit kills the process but not grandchildren it left; a
   tool call that forks without limit is not stopped by the runner.
 - The bootstrap runs in three steps, one session each (ADR 0003): the
