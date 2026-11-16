@@ -2,7 +2,7 @@
 //! facts, one JSON object per line). Field names are kept stable so
 //! scripts that read them (`jq` over the journal) keep working.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -423,10 +423,17 @@ pub struct Ledger {
     /// when a raise is tried past it (ADR 0014).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cap_ceiling: Option<u64>,
-    /// The last session's reply stopped at the output limit: the next one
-    /// runs at a lower reasoning effort.
+    /// Kept for readers older than `lower_effort_roles`, and always written
+    /// as "`lower_effort_roles` is not empty". In a ledger from before that
+    /// field it lowers the next session of any role.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lower_effort: bool,
+    /// The roles whose last session was cut at the output limit. The next
+    /// session of each, even for another task, runs at a lower reasoning
+    /// effort and uses it up; sessions of other roles, such as the review
+    /// of a cut builder's attempt, leave it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub lower_effort_roles: BTreeSet<Role>,
     /// Checks `./verify --all` passed when the last task was done; an
     /// attempt that leaves fewer fails.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -455,6 +462,27 @@ pub struct Ledger {
 
 impl Ledger {
     pub const SCHEMA_VERSION: u32 = 1;
+
+    /// Whether a session of `role` runs at a lower reasoning effort.
+    pub fn lowers_effort_for(&self, role: Role) -> bool {
+        if self.lower_effort_roles.is_empty() {
+            self.lower_effort
+        } else {
+            self.lower_effort_roles.contains(&role)
+        }
+    }
+
+    /// Notes how a session of `role` ended. A reply cut at the output limit
+    /// lowers the effort of the next session of that role, which uses it
+    /// up; a session of another role leaves it.
+    pub fn note_output_limit(&mut self, role: Role, truncated: bool) {
+        if truncated {
+            self.lower_effort_roles.insert(role);
+        } else {
+            self.lower_effort_roles.remove(&role);
+        }
+        self.lower_effort = !self.lower_effort_roles.is_empty();
+    }
 
     /// A fresh ledger at `init`.
     pub fn new(
@@ -496,6 +524,7 @@ impl Ledger {
             cap_raised: false,
             cap_ceiling: None,
             lower_effort: false,
+            lower_effort_roles: BTreeSet::new(),
             passed_checks: None,
             last_errors: None,
             pending_continuation: false,
@@ -981,6 +1010,61 @@ mod tests {
         let old: EngineApi = serde_json::from_str("\"sushi\"").unwrap();
         assert_eq!(old, EngineApi::LoadApi);
         assert_eq!(serde_json::to_string(&old).unwrap(), "\"load-api\"");
+    }
+
+    fn fresh_ledger() -> Ledger {
+        Ledger::new(
+            "t".into(),
+            "b".into(),
+            "s".into(),
+            "0.1.0".into(),
+            config(),
+            RunParams::default(),
+            vec![],
+        )
+    }
+
+    #[test]
+    fn a_cut_reply_lowers_the_effort_of_the_next_session_of_its_role() {
+        let mut ledger = fresh_ledger();
+        ledger.note_output_limit(Role::Builder, true);
+        assert!(
+            !ledger.lowers_effort_for(Role::Reviewer),
+            "a session of another role runs at the configured effort"
+        );
+        ledger.note_output_limit(Role::Reviewer, false);
+        assert!(
+            ledger.lowers_effort_for(Role::Builder),
+            "a review between keeps it"
+        );
+        ledger.note_output_limit(Role::Builder, false);
+        assert!(!ledger.lowers_effort_for(Role::Builder), "one session only");
+        assert!(!ledger.lower_effort);
+    }
+
+    #[test]
+    fn a_cut_review_keeps_the_cut_builder_lowered() {
+        let mut ledger = fresh_ledger();
+        ledger.note_output_limit(Role::Builder, true);
+        ledger.note_output_limit(Role::Reviewer, true);
+        assert!(ledger.lowers_effort_for(Role::Reviewer));
+        assert!(ledger.lowers_effort_for(Role::Builder));
+        ledger.note_output_limit(Role::Reviewer, false);
+        assert!(!ledger.lowers_effort_for(Role::Reviewer));
+        assert!(ledger.lowers_effort_for(Role::Builder));
+    }
+
+    #[test]
+    fn a_ledger_without_the_cut_roles_lowers_the_next_session_of_any_role() {
+        let mut json = serde_json::to_value(fresh_ledger()).unwrap();
+        json["lower_effort"] = true.into();
+        let mut ledger: Ledger = serde_json::from_value(json).unwrap();
+        assert!(ledger.lowers_effort_for(Role::Reviewer));
+        ledger.note_output_limit(Role::Reviewer, false);
+        assert!(
+            !ledger.lowers_effort_for(Role::Builder),
+            "the next session uses it up"
+        );
     }
 
     #[test]

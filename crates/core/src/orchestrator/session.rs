@@ -31,6 +31,8 @@ pub(crate) use harness::{
     INVALID_CARDS_NOTE, OWN_CHECKS_NOTE, PASSING_CONFLICT_NOTE, REFUSED_REOPENS_NOTE,
 };
 use reasons::{PromptLimit, give_up_reason, retry_notice, retry_reason};
+#[cfg(test)]
+pub(crate) use record::lowered_effort_note;
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
 const CRITICAL_PRESSURE: u32 = 4;

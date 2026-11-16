@@ -102,11 +102,10 @@ impl Runner {
             wrap_up: role.wrap_up(),
         };
         if let Some(dial) = &self.deps.effort {
-            dial.set_lowered(self.ledger.lower_effort);
-            if self.ledger.lower_effort {
-                self.log(&format!(
-                    "  {label}: the last reply stopped at the output limit; this session reasons at a lower effort"
-                ));
+            let lowered = self.ledger.lowers_effort_for(role);
+            dial.set_lowered(lowered);
+            if lowered {
+                self.log(&format!("  {}", lowered_effort_note(&label)));
             }
         }
         if let Some(sampler) = &self.sampler {
@@ -158,7 +157,8 @@ impl Runner {
     ) -> Result<(), RunError> {
         self.journal(JournalRecord::Session(record.clone()));
         self.ledger.inflight = None;
-        self.ledger.lower_effort = metrics.output_truncated();
+        self.ledger
+            .note_output_limit(record.role, metrics.output_truncated());
         self.save()?;
         self.log(&format!(
             "Session {} {} after {} turns, peak context {}",
@@ -270,6 +270,14 @@ impl ownership::RepoFacts for RepoView<'_> {
     fn head_content(&self, path: &str) -> Option<String> {
         self.0.head_content(path)
     }
+}
+
+/// The log line of a session that runs at a lower reasoning effort because
+/// an earlier session of its role was cut at the output limit.
+pub(crate) fn lowered_effort_note(label: &str) -> String {
+    format!(
+        "{label}: a reply of this role stopped at the output limit; this session reasons at a lower effort"
+    )
 }
 
 #[cfg(test)]

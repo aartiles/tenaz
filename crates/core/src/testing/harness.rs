@@ -96,6 +96,10 @@ pub struct ScriptedHarness {
     /// The first builder session for this task reasons until its reply is
     /// cut at the output limit, and the harness exits, as fx does.
     pub truncate_task: Option<String>,
+    /// The first builder session for this task writes its work and its
+    /// check, then is cut the same way: `verify` passes, so a review runs
+    /// before the next builder.
+    pub truncate_after_work_task: Option<String>,
     /// The first bootstrap session after the engine failures does the same.
     pub truncate_bootstrap: bool,
     /// The first bootstrap session writes the spec and a new file, then

@@ -49,7 +49,7 @@ Pure modules, each unit-tested without I/O:
 | `cache_report` | Whether the engine's usage names its cached tokens, noted by the engine proxy for the preflight. |
 | `effort` | The dial that lowers the reasoning effort for one session after a reply cut at the output limit. |
 | `ownership` | Which paths each role may write; the rest is reverted. A split task's builder may also correct its ancestors' notes (ADR 0013). |
-| `ledger` | `run.json` and the `journal.jsonl` record types. |
+| `ledger` | `run.json` and the `journal.jsonl` record types, and which roles' next session runs at a lower effort. |
 | `metrics` | Engine Prometheus counters, per-request deltas, engine summary. |
 | `memory` | Memory samples and per-session windows. |
 | `lease` | One resident engine: the lease manager state machine over the engine and media ports, the heavy jobs builders declare (ADR 0010), and the swap between the run's models when one is loaded at a time (`residency.rs`, ADR 0015). |

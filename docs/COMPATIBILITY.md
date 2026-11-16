@@ -630,11 +630,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
 - **Replies cut at the output limit.** fx is given a 16384-token output
   limit; a reply that reasons past it ends the session (`OutputTruncated`).
   Tenaz charges the attempt, says why in the next briefing, and lowers the
-  reasoning effort for the next session through the proxy, so without the
-  proxy (`--no-proxy`) the effort stays as configured. Tested with the fake
-  harness only. TensorFold ended a reply cut inside a tool call's
-  arguments with `finish_reason: tool_calls` at 16384 of 16384 tokens, and
-  fx reported `InvalidToolArguments`; the proxy now reports any reply that
+  reasoning effort for the next session of the same role through the proxy,
+  so without the proxy (`--no-proxy`) the effort stays as configured.
+  Until 2026-11-16 the next session of any role took it: in the Hardball
+  3D improvements run (fx 0.0.17, Qwen3.8-Flash-Next on Sushi 1.6.0) a
+  cut builder's attempt passed `verify`, its review ran at the lower
+  effort, and the builder after it ran at `medium` and was cut again.
+  The lowered effort is tested with the fake harness only. TensorFold
+  ended a reply cut inside a tool call's arguments with `finish_reason:
+  tool_calls` at 16384 of 16384 tokens, and fx reported
+  `InvalidToolArguments`; the proxy now reports any reply that
   reaches the request's output limit (16384 when the request does not say)
   as `length`. Tested against a fake engine only: no reply reached the
   limit in the run since.

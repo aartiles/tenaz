@@ -902,6 +902,19 @@ impl Player {
         self.finish("Done.");
     }
 
+    /// The script's drop-check task removes T001's check in its first
+    /// session and writes it back in the next ones.
+    async fn drop_check(&mut self, task: &str) {
+        if !names(self.script.drop_check_task.as_deref(), task) {
+            return;
+        }
+        if self.bump(&format!("drop-check-{task}")) == 1 {
+            let _ = std::fs::remove_file(self.cwd.join("checks/T001.exists.sh"));
+        } else {
+            self.write_check("T001").await;
+        }
+    }
+
     /// A builder session that does the work of `task`: its file, its check
     /// and its notes, with what the script adds on the way.
     async fn build(&mut self, task: &str) {
@@ -915,13 +928,7 @@ impl Player {
             self.write_notes(task).await;
             return self.finish("Done.");
         }
-        if names(self.script.drop_check_task.as_deref(), task) {
-            if self.bump(&format!("drop-check-{task}")) == 1 {
-                let _ = std::fs::remove_file(self.cwd.join("checks/T001.exists.sh"));
-            } else {
-                self.write_check("T001").await;
-            }
-        }
+        self.drop_check(task).await;
         if !self.stamp_check(task).await {
             self.write_check(task).await;
         }
@@ -932,6 +939,13 @@ impl Player {
         if self.first(self.script.context_stop_task.as_deref(), "context", task) {
             // Context grows past 1.3x the budget: stopped and continued.
             return self.outgrow().await;
+        }
+        if self.first(
+            self.script.truncate_after_work_task.as_deref(),
+            "truncate-after-work",
+            task,
+        ) {
+            return self.truncate().await;
         }
         self.tamper_card(task).await;
         self.declare_passing_conflict(task).await;

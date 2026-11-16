@@ -16,6 +16,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- After a reply cut at the output limit, the lower reasoning effort goes
+  to the next session of the same role (for a builder, the next builder,
+  even on another task), not to whatever session runs next. When the cut
+  builder's attempt passed `verify`, its review took the lower effort and
+  the next builder ran at the configured one: in the Hardball 3D
+  improvements run that builder was cut again, and the task ran out of
+  attempts.
 - After `verify`, Tenaz no longer stops a process above itself as if
   `verify` had left it behind. A supervisor that started Tenaz detached,
   from the project, just before Tenaz ran its first `verify` was

@@ -5,7 +5,8 @@
 //! run of 2026-10-24) would die again on a rerun that makes the same call, so
 //! the attempt counts and the next briefing names the call. So does one
 //! whose reply was cut at the output limit while the model reasoned (fx
-//! exits on `OutputTruncated`): the next session runs at a lower effort.
+//! exits on `OutputTruncated`): the next session of its role runs at a
+//! lower effort, whatever runs between.
 //! The bootstrap runs in steps, and a step that fails is retried with the
 //! files the earlier session left, or told where it wrote them when that was
 //! outside the project.
@@ -18,7 +19,9 @@ use super::{deps, fake_project};
 use crate::effort::EffortDial;
 use crate::ledger::{BootstrapStep, JournalEntry, JournalRecord, Phase, SessionRecord};
 use crate::orchestrator::Deps;
+use crate::orchestrator::session::lowered_effort_note;
 use crate::project::Project;
+use crate::role::Role;
 use crate::testing::{OUTSIDE, ScriptedHarness, VirtualClock};
 
 /// Runs the fake goal to the end with `harness` and `maxAttempts`; the
@@ -233,15 +236,63 @@ async fn a_reply_cut_at_the_output_limit_charges_the_attempt_and_lowers_the_effo
         .read(&format!(".tenaz/private/{}.prompt.md", next.label))
         .unwrap();
     assert!(prompt.contains("reason briefly"), "{prompt}");
+    assert!(log.contains(&lowered_effort_note(&next.label)), "{log}");
     assert!(
-        log.contains(&format!(
-            "{}: the last reply stopped at the output limit; this session reasons at a lower effort",
-            next.label
-        )),
-        "{log}"
+        !project
+            .load_ledger()
+            .unwrap()
+            .lowers_effort_for(Role::Builder),
+        "one session only"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_review_between_leaves_the_lowered_effort_to_the_next_builder() {
+    let (_work, project, log) = run(
+        ScriptedHarness {
+            truncate_after_work_task: Some("T001".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    let labels: Vec<String> = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) => Some(s.label.clone()),
+            _ => None,
+        })
+        .collect();
+    let cut = labels
+        .iter()
+        .position(|l| l.ends_with("-builder-T001"))
+        .expect("T001 was built");
+    let review = labels
+        .get(cut + 1)
+        .unwrap_or_else(|| panic!("a review follows the cut builder: {labels:?}"));
+    assert!(review.ends_with("-reviewer-T001"), "{labels:?}");
+    let builder = labels[cut + 2..]
+        .iter()
+        .find(|l| l.contains("-builder-"))
+        .expect("a builder runs after the review");
+    assert!(
+        builder.ends_with("-builder-T002"),
+        "the review approved T001, so the next builder is T002's: {labels:?}"
     );
     assert!(
-        !project.load_ledger().unwrap().lower_effort,
+        !log.contains(&lowered_effort_note(review)),
+        "the review runs at the configured effort:\n{log}"
+    );
+    assert!(
+        log.contains(&lowered_effort_note(builder)),
+        "the next builder is lowered:\n{log}"
+    );
+    assert!(
+        !project
+            .load_ledger()
+            .unwrap()
+            .lowers_effort_for(Role::Builder),
         "one session only"
     );
 }
@@ -270,10 +321,26 @@ async fn a_bootstrap_cut_at_the_output_limit_is_told_why_and_tried_again() {
         problems[0].starts_with("the session was stopped: the reply reached the output limit"),
         "{problems:?}"
     );
-    assert!(
-        log.contains("this session reasons at a lower effort"),
-        "{log}"
-    );
+    let bootstraps: Vec<&SessionRecord> = journal
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.role == Role::Bootstrap => Some(s),
+            _ => None,
+        })
+        .collect();
+    let cut = bootstraps
+        .iter()
+        .position(|s| {
+            s.abort_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("output limit"))
+        })
+        .expect("a bootstrap was cut at the output limit");
+    let retry = &bootstraps
+        .get(cut + 1)
+        .expect("a bootstrap runs again after the cut")
+        .label;
+    assert!(log.contains(&lowered_effort_note(retry)), "{log}");
 }
 
 #[tokio::test(start_paused = true)]
