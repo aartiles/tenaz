@@ -424,8 +424,10 @@ pub struct Ledger {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cap_ceiling: Option<u64>,
     /// Kept for readers older than `lower_effort_roles`, and always written
-    /// as "`lower_effort_roles` is not empty". In a ledger from before that
-    /// field it lowers the next session of any role.
+    /// as "`lower_effort_roles` is not empty": some role's next session is
+    /// lowered, not necessarily the next session, and it stays set while a
+    /// cut role does not run again. In a ledger from before that field it
+    /// lowers the next session of any role.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lower_effort: bool,
     /// The roles whose last session was cut at the output limit. The next

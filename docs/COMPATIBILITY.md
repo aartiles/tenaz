@@ -628,7 +628,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   progress is lost. The fake harness reproduces the crash; it has not been
   rerun against fx itself.
 - **Replies cut at the output limit.** fx is given a 16384-token output
-  limit; a reply that reasons past it ends the session (`OutputTruncated`).
+  limit; a reply that reasons past it ends the session (fx 0.0.16 exits
+  on `OutputTruncated`; 0.0.17 ends the turn as below).
   Tenaz charges the attempt, says why in the next briefing, and lowers the
   reasoning effort for the next session of the same role through the proxy,
   so without the proxy (`--no-proxy`) the effort stays as configured.

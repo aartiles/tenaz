@@ -5,7 +5,7 @@
 //! run of 2026-10-24) would die again on a rerun that makes the same call, so
 //! the attempt counts and the next briefing names the call. So does one
 //! whose reply was cut at the output limit while the model reasoned (fx
-//! exits on `OutputTruncated`): the next session of its role runs at a
+//! 0.0.16 exits on `OutputTruncated`): the next session of its role runs at a
 //! lower effort, whatever runs between.
 //! The bootstrap runs in steps, and a step that fails is retried with the
 //! files the earlier session left, or told where it wrote them when that was

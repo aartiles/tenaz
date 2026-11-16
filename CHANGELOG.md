@@ -22,7 +22,8 @@ uses [Semantic Versioning](https://semver.org/).
   builder's attempt passed `verify`, its review took the lower effort and
   the next builder ran at the configured one: in the Hardball 3D
   improvements run that builder was cut again, and the task ran out of
-  attempts.
+  attempts. `lower_effort` in `run.json` now means that some role's next
+  session is lowered; `lower_effort_roles` names the roles.
 - After `verify`, Tenaz no longer stops a process above itself as if
   `verify` had left it behind. A supervisor that started Tenaz detached,
   from the project, just before Tenaz ran its first `verify` was
