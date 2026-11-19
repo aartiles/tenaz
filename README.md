@@ -100,7 +100,11 @@ project's own tests.
   in between does not take it). A request the engine refuses for what is
   in it (a 400 for a file it cannot decode) is not retried as it was: a
   fresh session goes on, told what was refused, up to the session's
-  continuations.
+  continuations. A harness that exits before it sends the engine anything
+  (Pi without its model in its agent directory) is rerun once; if the
+  rerun does the same while the engine serves, the run blocks at once
+  with `harness failed:` and the harness's stderr
+  ([ADR 0037](docs/adr/0037-a-harness-that-never-reaches-the-engine.md)).
 - **Watchdogs.** Loops, repeated calls, idle turns, huge outputs and
   sessions that reach their turn or context budget get a steering
   message first (fx and Pi; OpenCode and Qwen Code get none), then the

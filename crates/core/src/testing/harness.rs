@@ -62,6 +62,8 @@ pub struct ScriptedHarness {
     /// The first builder session for this task dies mid-turn between tool
     /// calls: it writes to stderr and exits with code 1.
     pub crash_task: Option<String>,
+    /// Builder sessions that end before their first turn.
+    pub unstartable: Option<ScriptedUnstartable>,
     /// The first builder session for this task dies while a shell call runs,
     /// as fx does on output that is not UTF-8.
     pub crash_in_tool_task: Option<String>,
@@ -315,6 +317,18 @@ impl Session for ScriptedSession {
             code: self.exit_code,
         }
     }
+}
+
+/// The first `times` builder sessions of `task` end before their first
+/// turn: the harness writes [`super::PI_MODEL_NOT_FOUND`] to stderr and
+/// exits 1, as Pi 1.4.0 does when its agent directory is gone. With
+/// `engine_down: Some((n, flag))`, the `n`th such exit sets `flag`, as if
+/// the engine went down with the harness.
+#[derive(Clone, Debug)]
+pub struct ScriptedUnstartable {
+    pub task: String,
+    pub times: u32,
+    pub engine_down: Option<(u32, Arc<std::sync::atomic::AtomicBool>)>,
 }
 
 /// The first builder session of `task` declares a conflict with `check`

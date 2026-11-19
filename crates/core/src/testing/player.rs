@@ -12,6 +12,8 @@ use crate::session::{SessionEvent, StopReason, Usage};
 mod conflict;
 mod preflight;
 mod stamp;
+mod unstartable;
+pub use unstartable::PI_MODEL_NOT_FOUND;
 
 /// One tool call of the scripted model: the tool, its arguments, what it
 /// returns, and the prompt tokens of the reply that made it (`None`: a few
@@ -765,7 +767,7 @@ impl Player {
     }
 
     async fn builder(&mut self, task: &str, attempt: u32) {
-        if self.failed_session(task, attempt).await {
+        if self.unstartable(task) || self.failed_session(task, attempt).await {
             return;
         }
         self.build(task).await;

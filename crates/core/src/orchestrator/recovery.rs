@@ -101,7 +101,14 @@ pub(crate) struct Recovery {
     /// The engine ran out of memory in a builder session, and jobs are on:
     /// every later session of this loop gets the memory note.
     out_of_memory: bool,
+    /// Sessions in a row whose harness ended before it reached the engine.
+    unstarted: u32,
 }
+
+/// Sessions in a row whose harness never reached the engine before the
+/// harness is blamed: one rerun lets a passing fault (a lock, a cache
+/// being written) clear.
+const UNSTARTED_SESSIONS: u32 = 2;
 
 impl Recovery {
     /// The counts for a session that continues a paused one when `resumed`.
@@ -128,6 +135,14 @@ impl Recovery {
         }
     }
 
+    /// Whether the last session and the one before it ended before they
+    /// asked the engine anything. When the engine serves, the harness is at
+    /// fault, whatever [`Recovery::next`] said; otherwise its step stands
+    /// (ADR 0037).
+    pub fn harness_suspect(&self) -> bool {
+        self.unstarted >= UNSTARTED_SESSIONS
+    }
+
     /// The note the sessions after an engine out-of-memory get, when they
     /// can move heavy work into a job (ADR 0010).
     pub fn memory_note(&self) -> Option<&'static str> {
@@ -137,6 +152,11 @@ impl Recovery {
     /// Decides what follows a session of `role` that ended with `metrics`,
     /// and counts it.
     pub fn next(&mut self, metrics: &SessionMetrics, role: Role, params: &RunParams) -> Step {
+        self.unstarted = if metrics.exit_before_engine().is_some() {
+            self.unstarted + 1
+        } else {
+            0
+        };
         if let Some(kind) = continuation(metrics, role)
             && self.continued < params.context_continuations
         {
@@ -746,6 +766,68 @@ mod tests {
     fn harness_and_engine_failures_share_the_retry_budget() {
         let (_, steps) = steps(Role::Builder, &[harness_ended(), engine_error()]);
         assert_eq!(steps, [retry(0, FailureCause::Harness), engine_retry(1)]);
+    }
+
+    /// Whether the harness is suspect after each of `sessions`, with
+    /// `params`.
+    fn suspects(params: &RunParams, sessions: &[SessionMetrics]) -> Vec<bool> {
+        let mut recovery = Recovery::default();
+        sessions
+            .iter()
+            .map(|m| {
+                recovery.next(m, Role::Builder, params);
+                recovery.harness_suspect()
+            })
+            .collect()
+    }
+
+    /// A harness that ends before it reaches the engine twice in a row is
+    /// suspect, whatever the engine retries left: with none left the step
+    /// gives up, but the runner asks about the harness first.
+    #[test]
+    fn a_harness_that_twice_never_reaches_the_engine_is_suspect() {
+        let twice = [harness_ended(), harness_ended()];
+        assert_eq!(suspects(&params(), &twice), [false, true]);
+        let no_retries = RunParams {
+            engine_retries: 1,
+            ..params()
+        };
+        assert_eq!(suspects(&no_retries, &twice), [false, true]);
+        let (_, gave_up) = steps_with(&no_retries, Role::Builder, &twice);
+        assert!(
+            matches!(gave_up[1], Step::GiveUp(GiveUp::Engine { .. })),
+            "{gave_up:?}"
+        );
+    }
+
+    /// A session that reached the engine starts the count again, an engine
+    /// error or an overflow alike.
+    #[test]
+    fn a_session_that_reaches_the_engine_clears_the_suspicion() {
+        for between in [engine_error(), overflow(&[4000])] {
+            let sessions = [harness_ended(), between, harness_ended()];
+            assert_eq!(suspects(&params(), &sessions), [false, false, false]);
+        }
+    }
+
+    /// A harness that died after its turn started had asked the engine:
+    /// it is rerun as before, however often, and never suspect.
+    #[test]
+    fn a_harness_that_dies_in_a_started_turn_is_not_suspect() {
+        let in_turn = SessionMetrics {
+            turn_started: true,
+            ..harness_ended()
+        };
+        let sessions = [in_turn.clone(), in_turn];
+        assert_eq!(suspects(&params(), &sessions), [false, false]);
+        let (_, reruns) = steps(Role::Builder, &sessions);
+        assert_eq!(
+            reruns,
+            [
+                retry(0, FailureCause::Harness),
+                retry(1, FailureCause::Harness)
+            ]
+        );
     }
 
     #[test]

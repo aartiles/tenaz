@@ -20,11 +20,12 @@ mod verify;
 
 pub use clock::VirtualClock;
 pub use harness::{
-    Routing, ScriptedConflict, ScriptedHarness, ScriptedJob, ScriptedPassingConflict, UNDECLARED,
+    Routing, ScriptedConflict, ScriptedHarness, ScriptedJob, ScriptedPassingConflict,
+    ScriptedUnstartable, UNDECLARED,
 };
 pub use jobs::ScriptedJobs;
 pub use notifier::SilentNotifier;
-pub use player::{OUTSIDE, VERIFY, fx_context_exceeded_exit};
+pub use player::{OUTSIDE, PI_MODEL_NOT_FOUND, VERIFY, fx_context_exceeded_exit};
 pub use processes::ScriptedProcesses;
 pub use replay::Replay;
 pub use vcs::SnapshotVcs;

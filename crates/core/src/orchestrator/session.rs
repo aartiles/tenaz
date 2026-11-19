@@ -89,7 +89,10 @@ impl Runner {
             if !result.metrics.engine_failed() {
                 self.note_engine_held(&result.record)?;
             }
-            match recovery.next(&result.metrics, role, &self.params) {
+            let step = recovery.next(&result.metrics, role, &self.params);
+            self.check_harness(&label, &result.metrics, &recovery)
+                .await?;
+            match step {
                 Step::Done => {
                     self.clear_continuation()?;
                     return Ok(result);
@@ -112,6 +115,24 @@ impl Runner {
                 Step::GiveUp(why) => return Err(self.give_up(&label, why)),
             }
         }
+    }
+
+    /// Stops the run when `recovery` suspects the harness, which ended
+    /// `label` before it reached the engine as `metrics` say, and the
+    /// engine serves (ADR 0037).
+    async fn check_harness(
+        &self,
+        label: &str,
+        metrics: &SessionMetrics,
+        recovery: &Recovery,
+    ) -> Result<(), RunError> {
+        let Some(exit) = metrics.exit_before_engine() else {
+            return Ok(());
+        };
+        if recovery.harness_suspect() && self.engine_serving().await.is_ok() {
+            return Err(harness_failed(label, exit));
+        }
+        Ok(())
     }
 
     /// A builder's `prompt`, with what earlier builder sessions of its task
@@ -445,6 +466,16 @@ impl Runner {
             () = self.stop.cancelled() => {}
         }
     }
+}
+
+/// The error that ends the run when the harness of `label`, and of the
+/// session before it, ended before it reached an engine that serves, the
+/// last time with `exit`.
+fn harness_failed(label: &str, exit: &str) -> RunError {
+    let exit = exit.replace('\n', " ");
+    RunError::HarnessFailed(format!(
+        "{label} and the session before it ended before the harness sent the engine a request, while the engine serves the run's models; {exit}"
+    ))
 }
 
 /// The prompt of a session: `prompt`, with the note a session that

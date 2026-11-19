@@ -87,6 +87,10 @@ pub enum RunError {
     /// Engine failures exhausted their retries: the run blocks.
     #[error("engine unavailable: {0}")]
     EngineUnavailable(String),
+    /// The harness keeps ending before it reaches an engine that serves:
+    /// the run blocks.
+    #[error("harness failed: {0}")]
+    HarnessFailed(String),
     /// A session's prompt cannot fit its model's window: the run blocks.
     #[error("prompt too large: {0}")]
     PromptTooLarge(String),
@@ -580,6 +584,9 @@ impl Runner {
             }
             Err(RunError::EngineUnavailable(reason)) => self.block(&format!(
                 "engine unavailable: {reason}. Fix the engine, then run with --resume"
+            )),
+            Err(RunError::HarnessFailed(reason)) => self.block(&format!(
+                "harness failed: {reason}. Fix the harness, then run with --resume"
             )),
             Err(error @ RunError::PromptTooLarge(_)) => self.block(&error.to_string()),
             Err(error) => {

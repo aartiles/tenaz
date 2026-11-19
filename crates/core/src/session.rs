@@ -325,6 +325,9 @@ pub struct SessionMetrics {
     /// A tool call that had started and not ended when the harness exited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_in_flight: Option<String>,
+    /// A turn started: Pi started one, or an ACP agent was sent a prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turn_started: bool,
 }
 
 impl SessionMetrics {
@@ -379,6 +382,20 @@ impl SessionMetrics {
                 .abort_reason
                 .as_deref()
                 .is_some_and(|r| r.contains("provider errors"))
+    }
+
+    /// How the harness ended, when it ended before it asked the engine
+    /// anything: no turn started, no reply, no tool call and no engine
+    /// error. Pi does this when it cannot find its model in its agent
+    /// directory, before it reads a prompt.
+    pub fn exit_before_engine(&self) -> Option<&str> {
+        let silent = !self.turn_started
+            && self.turns == 0
+            && self.provider_errors == 0
+            && self.tool_calls == 0
+            && self.assistant.is_empty()
+            && self.last_stop_reason.is_none();
+        self.harness_exit.as_deref().filter(|_| silent)
     }
 
     /// The model called tools and every call failed: it is not using the
@@ -956,6 +973,34 @@ mod tests {
             ),
             ..SessionMetrics::default()
         }
+    }
+
+    /// A crash before anything reached the engine names the exit; any sign
+    /// that the session asked the engine something takes that away.
+    #[test]
+    fn only_a_harness_that_asked_the_engine_nothing_exits_before_it() {
+        let exit = crashed().harness_exit;
+        assert_eq!(crashed().exit_before_engine(), exit.as_deref());
+        let asked: [fn(&mut SessionMetrics); 6] = [
+            |m| m.turn_started = true,
+            |m| m.turns = 1,
+            |m| m.provider_errors = 1,
+            |m| m.tool_calls = 1,
+            |m| {
+                m.assistant.push(AssistantTurn {
+                    stop_reason: StopReason::Stop,
+                    usage: Usage::default(),
+                    thinking: 0,
+                });
+            },
+            |m| m.last_stop_reason = Some(StopReason::Error),
+        ];
+        for (row, ask) in asked.iter().enumerate() {
+            let mut metrics = crashed();
+            ask(&mut metrics);
+            assert_eq!(metrics.exit_before_engine(), None, "row {row}");
+        }
+        assert_eq!(SessionMetrics::default().exit_before_engine(), None);
     }
 
     #[test]

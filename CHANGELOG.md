@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- A harness that exits before it sends the engine anything, in a session
+  and in its rerun, while the engine serves, now blocks the run at once
+  with `harness failed:` and the harness's stderr. Before, it was counted
+  as an engine error: the run waited through `engineRetries` (45 minutes
+  by default) and blocked with `engine unavailable`. See ADR 0037.
+
 ### Fixed
 
 - Each harness's own files under `.tenaz/private/` (Pi's agent directory,

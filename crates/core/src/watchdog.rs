@@ -310,8 +310,8 @@ impl Watchdog {
                     self.metrics.settled = true;
                 }
             }
-            SessionEvent::TurnStart
-            | SessionEvent::FirstToken
+            SessionEvent::TurnStart => self.metrics.turn_started = true,
+            SessionEvent::FirstToken
             | SessionEvent::PermissionRequest { .. }
             | SessionEvent::Exited { .. } => {}
         }

@@ -4,6 +4,7 @@
 mod conflict;
 mod external_bootstrap;
 mod harness_exit;
+mod harness_start;
 mod job;
 mod paused_continuation;
 mod preflight;
