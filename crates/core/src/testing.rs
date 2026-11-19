@@ -20,8 +20,8 @@ mod verify;
 
 pub use clock::VirtualClock;
 pub use harness::{
-    Routing, ScriptedConflict, ScriptedHarness, ScriptedJob, ScriptedPassingConflict,
-    ScriptedUnstartable, UNDECLARED,
+    Removed, Routing, ScriptedConflict, ScriptedHarness, ScriptedJob, ScriptedPassingConflict,
+    ScriptedRemoval, ScriptedUnstartable, UNDECLARED,
 };
 pub use jobs::ScriptedJobs;
 pub use notifier::SilentNotifier;

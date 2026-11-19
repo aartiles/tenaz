@@ -100,6 +100,10 @@ pub enum RunError {
     Vcs(#[from] VcsError),
     #[error("i/o: {0}")]
     Io(#[from] io::Error),
+    /// Another run took the run lock after a session removed its file:
+    /// the ledger is that run's now, and this one stops without saving.
+    #[error("{0}")]
+    LockLost(String),
     /// A precondition the user must fix (missing files, changed pins).
     #[error("{0}")]
     Precondition(String),
@@ -126,6 +130,9 @@ pub struct Runner {
     params: RunParams,
     stop: CancellationToken,
     sampler: Option<Sampler>,
+    /// The run lock, taken by [`Runner::run`] and again when a session
+    /// removed its file.
+    lock: Option<RunLock>,
 }
 
 impl std::fmt::Debug for Runner {
@@ -160,6 +167,7 @@ impl Runner {
             params,
             stop,
             sampler: None,
+            lock: None,
         })
     }
 
@@ -467,7 +475,7 @@ impl Runner {
     pub async fn run(&mut self, options: RunOptions) -> Result<(), RunError> {
         let project = self.project.clone();
         project.create_layout()?;
-        let _lock = take_run_lock(&project)?;
+        self.lock = Some(take_run_lock(&project)?);
         let brief = project
             .brief()
             .map_err(|_| RunError::Precondition(format!("{BRIEF} is missing")))?;
@@ -589,6 +597,7 @@ impl Runner {
                 "harness failed: {reason}. Fix the harness, then run with --resume"
             )),
             Err(error @ RunError::PromptTooLarge(_)) => self.block(&error.to_string()),
+            Err(error @ RunError::LockLost(_)) => Err(error),
             Err(error) => {
                 self.ledger.last_error = Some(error.to_string());
                 self.ledger.inflight = None;
@@ -612,7 +621,7 @@ impl Runner {
 }
 
 /// The project's run lock, or the error that names the run holding it.
-fn take_run_lock(project: &Project) -> Result<RunLock, RunError> {
+pub(crate) fn take_run_lock(project: &Project) -> Result<RunLock, RunError> {
     project.lock_run()?.ok_or_else(|| {
         let pid = project
             .active_run()

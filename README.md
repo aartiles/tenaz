@@ -665,6 +665,18 @@ journal record (`outside_writes`), and tells the session once that its
 files belong in the project. A bootstrap step whose files are then missing
 says where they went. Writes from shell commands are not seen (ADR 0008).
 
+Neither mode protects `.tenaz/private/`: it is inside the project, and the
+harness keeps its own state there. When a session removes it (`rm -rf`,
+`git clean -fdx`), Tenaz notices after the session: the journal records
+`private-removed` with the session's label, `orchestrator.log` says so,
+and Tenaz writes its prompt file there again. When the run lock's file
+went, Tenaz takes the lock again when the session ends; if another
+`tenaz run` took it before then, this run stops and leaves the run to
+it. Each harness writes its own files there again
+before its next session. The session's logs and what the harness kept
+there are lost
+([ADR 0038](docs/adr/0038-note-a-removed-private-folder.md)).
+
 ### In an existing project
 
 This mode is experimental: it has been exercised with the scripted harness

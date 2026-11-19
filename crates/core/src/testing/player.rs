@@ -11,6 +11,7 @@ use crate::session::{SessionEvent, StopReason, Usage};
 
 mod conflict;
 mod preflight;
+mod private;
 mod stamp;
 mod unstartable;
 pub use unstartable::PI_MODEL_NOT_FOUND;
@@ -770,6 +771,7 @@ impl Player {
         if self.unstartable(task) || self.failed_session(task, attempt).await {
             return;
         }
+        self.remove_private(task).await;
         self.build(task).await;
     }
 

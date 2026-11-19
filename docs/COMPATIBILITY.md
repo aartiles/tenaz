@@ -143,6 +143,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **`.tenaz/private` removed by the agent.** Tenaz notices after the
+  session (journal `private-removed`, a log line), writes its prompt
+  and each harness's files again, and takes the run lock again (ADR
+  0038). Until the session ends, another `tenaz run` could take the
+  lock; this run then stops. A harness that cannot start after the
+  removal blocks as `harness failed:` (ADR 0037). Tested with the
+  scripted harness only; no real run has removed the folder since.
 - **Bootstrap prepared by a frontier agent.** The skill now asks the agent
   driving Tenaz to write the brief, initialise the run, and write the spec,
   map, verify, notes and task cards in the run's worktree before `run`.

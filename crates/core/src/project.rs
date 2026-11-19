@@ -23,6 +23,13 @@ pub const PROTOCOL: &str = ".tenaz/protocol.md";
 pub const GITIGNORE: &str = ".tenaz/.gitignore";
 /// The run's ledger: the pinned setup and where the run is.
 pub const LEDGER: &str = ".tenaz/run.json";
+/// The file a run holds a lock on while it works.
+pub const RUN_LOCK: &str = ".tenaz/private/run.lock";
+
+/// Where the prompt of the session `label` is kept.
+pub fn prompt_path(label: &str) -> String {
+    format!(".tenaz/private/{label}.prompt.md")
+}
 
 /// The last ledger text this process saved, by ledger path. A sandboxed run
 /// puts it back when a session changed `run.json` (see `save_ledger`).
@@ -31,7 +38,19 @@ static SAVED_LEDGERS: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mute
 /// Held by a run while it works; dropping it releases the lock.
 #[derive(Debug)]
 pub struct RunLock {
-    _file: fs::File,
+    file: fs::File,
+}
+
+impl RunLock {
+    /// Whether the file at `path` is the one this lock holds, not one made
+    /// in its place after it was removed.
+    pub fn is_at(&self, path: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        match (self.file.metadata(), fs::metadata(path)) {
+            (Ok(held), Ok(there)) => held.dev() == there.dev() && held.ino() == there.ino(),
+            _ => false,
+        }
+    }
 }
 
 /// Paths and file access for one project.
@@ -100,7 +119,7 @@ impl Project {
     }
 
     fn run_lock_path(&self) -> PathBuf {
-        self.private_dir().join("run.lock")
+        self.path(RUN_LOCK)
     }
 
     /// Takes the lock a run holds while it works on the project, or `None`
@@ -121,7 +140,7 @@ impl Project {
                     use std::io::Write as _;
                     file.set_len(0)?;
                     write!(file, "{}", std::process::id())?;
-                    return Ok(Some(RunLock { _file: file }));
+                    return Ok(Some(RunLock { file }));
                 }
                 Err(fs::TryLockError::WouldBlock) if attempt < 9 => {
                     std::thread::sleep(std::time::Duration::from_millis(50));

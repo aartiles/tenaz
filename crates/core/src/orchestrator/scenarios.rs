@@ -8,6 +8,7 @@ mod harness_start;
 mod job;
 mod paused_continuation;
 mod preflight;
+mod private_removed;
 mod prompt_fit;
 mod role_models;
 mod scripted_run;

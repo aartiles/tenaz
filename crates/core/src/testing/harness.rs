@@ -64,6 +64,8 @@ pub struct ScriptedHarness {
     pub crash_task: Option<String>,
     /// Builder sessions that end before their first turn.
     pub unstartable: Option<ScriptedUnstartable>,
+    /// A builder session that removes `.tenaz/private`.
+    pub remove_private: Option<ScriptedRemoval>,
     /// The first builder session for this task dies while a shell call runs,
     /// as fx does on output that is not UTF-8.
     pub crash_in_tool_task: Option<String>,
@@ -329,6 +331,34 @@ pub struct ScriptedUnstartable {
     pub task: String,
     pub times: u32,
     pub engine_down: Option<(u32, Arc<std::sync::atomic::AtomicBool>)>,
+}
+
+/// The first builder session of `task` that does its work first removes
+/// `what` with a shell command, once in the run: `done` keeps the count,
+/// as the counts in `.tenaz/private` go with it. The next builder session
+/// sets `lock_held` to whether a run still holds the project's run lock.
+/// `another_run` keeps the lock [`Removed::LockForAnotherRun`] takes.
+#[derive(Clone, Debug, Default)]
+pub struct ScriptedRemoval {
+    pub task: String,
+    pub what: Removed,
+    pub done: Arc<std::sync::atomic::AtomicBool>,
+    pub lock_held: Arc<std::sync::OnceLock<bool>>,
+    pub another_run: Arc<std::sync::Mutex<Option<crate::project::RunLock>>>,
+}
+
+/// What a [`ScriptedRemoval`] removes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Removed {
+    /// All of `.tenaz/private`.
+    #[default]
+    Folder,
+    /// The prompt files there.
+    Prompts,
+    /// The run lock's file.
+    Lock,
+    /// The run lock's file, after which another run takes the lock.
+    LockForAnotherRun,
 }
 
 /// The first builder session of `task` declares a conflict with `check`

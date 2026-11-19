@@ -14,6 +14,15 @@ uses [Semantic Versioning](https://semver.org/).
   as an engine error: the run waited through `engineRetries` (45 minutes
   by default) and blocked with `engine unavailable`. See ADR 0037.
 
+### Added
+
+- A session that removes `.tenaz/private/` is named in the journal
+  (`private-removed`, with its label) and in `orchestrator.log`, and
+  Tenaz writes its prompt file there again. A run whose lock file was
+  removed takes the lock again when the session ends, or stops when
+  another `tenaz run` took it before then. Before, nothing said so, and
+  a second run could start at any time after. See ADR 0038.
+
 ### Fixed
 
 - Each harness's own files under `.tenaz/private/` (Pi's agent directory,

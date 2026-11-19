@@ -5,9 +5,10 @@ use crate::ledger::{Inflight, JournalRecord, SessionRecord};
 use crate::memory::MemoryWindow;
 use crate::metrics::{RequestRecord, engine_summary};
 use crate::orchestrator::phases::PlannerSession;
-use crate::orchestrator::{RunError, Runner};
+use crate::orchestrator::{RunError, Runner, take_run_lock};
 use crate::ownership;
 use crate::ports::{SessionModel, Vcs};
+use crate::project::{RUN_LOCK, prompt_path};
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
@@ -91,8 +92,7 @@ impl Runner {
             started_at: self.now(),
         });
         self.save()?;
-        self.project
-            .write(&format!(".tenaz/private/{label}.prompt.md"), prompt)?;
+        self.project.write(&prompt_path(&label), prompt)?;
         self.log(&format!("Session {label} started"));
         let model = self.ledger.config.model_for(role);
         let watch = WatchConfig {
@@ -132,6 +132,8 @@ impl Runner {
             Some(sampler) => sampler.end().await,
             None => None,
         };
+        self.keep_run_lock(&started.label)?;
+        self.note_private_removed(started)?;
         let reverted = self.enforce_ownership(started.role, started.ctx.task.as_ref())?;
         self.note_builder_reverts(started, &reverted);
         self.check_skills()?;
@@ -147,6 +149,55 @@ impl Runner {
             memory,
             reverted,
         })
+    }
+
+    /// Notes a session that removed `.tenaz/private`, or its prompts: the
+    /// prompt written there when it started is gone. The prompt is written
+    /// again (which makes the folder again), then the journal and the log
+    /// say so. Each harness writes its own files there before its next
+    /// session; the session's logs and the harness's state may be lost.
+    fn note_private_removed(&mut self, started: &Started<'_>) -> Result<(), RunError> {
+        let prompt = prompt_path(&started.label);
+        if self.project.exists(&prompt) {
+            return Ok(());
+        }
+        self.project.write(&prompt, started.prompt)?;
+        self.journal(JournalRecord::PrivateRemoved {
+            label: started.label.clone(),
+        });
+        self.log(&format!(
+            "  {}: the prompt Tenaz wrote in .tenaz/private is gone: the session removed the folder, or that much of it. Tenaz wrote the prompt again; the session's logs and what the harness kept there may be lost",
+            started.label
+        ));
+        Ok(())
+    }
+
+    /// Takes the run lock again when a session removed its file, so that
+    /// another `tenaz run` cannot start; one that took it meanwhile stops
+    /// this run, which leaves the ledger to it.
+    fn keep_run_lock(&mut self, label: &str) -> Result<(), RunError> {
+        let held = self
+            .lock
+            .as_ref()
+            .is_none_or(|lock| lock.is_at(&self.project.path(RUN_LOCK)));
+        if held {
+            return Ok(());
+        }
+        match take_run_lock(&self.project) {
+            Ok(lock) => self.lock = Some(lock),
+            Err(error @ RunError::Precondition(_)) => {
+                let lost = format!(
+                    "this run stopped: the run lock's file was removed during {label}, and another run took the lock ({error})"
+                );
+                tracing::error!("{lost}");
+                return Err(RunError::LockLost(lost));
+            }
+            Err(other) => return Err(other),
+        }
+        self.log(&format!(
+            "  {label}: the run lock's file in .tenaz/private was removed; Tenaz took the lock again"
+        ));
+        Ok(())
     }
 
     /// Journals the session, clears it from flight, and logs how it ended.
