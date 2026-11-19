@@ -101,7 +101,7 @@ project's own tests.
   in it (a 400 for a file it cannot decode) is not retried as it was: a
   fresh session goes on, told what was refused, up to the session's
   continuations. A harness that exits before it sends the engine anything
-  (Pi without its model in its agent directory) is rerun once; if the
+  (a broken harness installation, say) is rerun once; if the
   rerun does the same while the engine serves, the run blocks at once
   with `harness failed:` and the harness's stderr
   ([ADR 0037](docs/adr/0037-a-harness-that-never-reaches-the-engine.md)).
