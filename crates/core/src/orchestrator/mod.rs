@@ -597,7 +597,11 @@ impl Runner {
                 "harness failed: {reason}. Fix the harness, then run with --resume"
             )),
             Err(error @ RunError::PromptTooLarge(_)) => self.block(&error.to_string()),
-            Err(error @ RunError::LockLost(_)) => Err(error),
+            // The ledger is the other run's now: say why, but do not save.
+            Err(error @ RunError::LockLost(_)) => {
+                self.notify(&format!("Stopped: {error}"));
+                Err(error)
+            }
             Err(error) => {
                 self.ledger.last_error = Some(error.to_string());
                 self.ledger.inflight = None;

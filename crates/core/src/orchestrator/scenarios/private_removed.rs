@@ -140,9 +140,8 @@ async fn a_run_whose_lock_another_run_took_stops() {
     assert!(error.starts_with("this run stopped: "), "{error}");
     assert!(error.contains("Another tenaz run"), "{error}");
     let ledger = run.project.load_ledger().unwrap();
-    assert_eq!(ledger.last_error, None, "this run saved the other's ledger");
-    assert!(
-        ledger.inflight.is_some(),
-        "this run saved the other's ledger"
-    );
+    let saved = "this run saved its ledger after losing the lock";
+    assert_eq!(ledger.last_error, None, "{saved}");
+    assert!(ledger.inflight.is_some(), "{saved}");
+    assert!(run.log().contains("  this run stopped: "), "{}", run.log());
 }

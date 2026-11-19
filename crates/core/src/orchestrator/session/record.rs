@@ -189,7 +189,7 @@ impl Runner {
                 let lost = format!(
                     "this run stopped: the run lock's file was removed during {label}, and another run took the lock ({error})"
                 );
-                tracing::error!("{lost}");
+                self.log(&format!("  {lost}"));
                 return Err(RunError::LockLost(lost));
             }
             Err(other) => return Err(other),
