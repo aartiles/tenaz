@@ -1,4 +1,4 @@
-# cargo-deny configuration: `cargo deny check licenses`.
+# cargo-deny configuration: `cargo deny check`.
 # The project is MIT OR Apache-2.0; dependencies must be under a license that
 # is compatible with shipping under either.
 
@@ -21,3 +21,10 @@ allow = [
 
 [licenses.private]
 ignore = true
+
+[advisories]
+# Each entry says why it is ignored. Remove it when the advisory is withdrawn,
+# the crate is fixed or maintained again, or no crate in Cargo.lock needs it.
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained but has no known vulnerability; rmcp 3.9 (locked) and 3.11 (latest) depend on it directly, not as an option, so no feature or upgrade drops it" },
+]
