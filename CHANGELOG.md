@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-19
+
 ### Added
 
 - `turnAbort` (1.5 by default) sets where a session is stopped, as a
@@ -14,28 +16,8 @@ uses [Semantic Versioning](https://semver.org/).
   `budget: {turns: N}` and the fixed budgets of reviewers (25) and the
   final review (60) are now documented. See ADR 0036.
 
-### Fixed
-
-- After a reply cut at the output limit, the lower reasoning effort goes
-  to the next session of the same role (for a builder, the next builder,
-  even on another task), not to whatever session runs next. When the cut
-  builder's attempt passed `verify`, its review took the lower effort and
-  the next builder ran at the configured one: in the Hardball 3D
-  improvements run that builder was cut again, and the task ran out of
-  attempts. `lower_effort` in `run.json` now means that some role's next
-  session is lowered; `lower_effort_roles` names the roles.
-- After `verify`, Tenaz no longer stops a process above itself as if
-  `verify` had left it behind. A supervisor that started Tenaz detached,
-  from the project, just before Tenaz ran its first `verify` was
-  stopped, and Tenaz with it, with no exit code: in a run resumed
-  straight into a review, both vanished.
-
 ### Changed
 
-- A run started before these changes gets the new protocol and prompts
-  with `tenaz run --resume --refresh-templates` (or `--refresh-templates`
-  for a run that is not blocked); without it, the new checks still apply
-  but the run's prompts do not explain them.
 - The Tenaz skill now has the delegating agent prepare the brief and full
   bootstrap, sized to the local builder model's context budget. The runner
   validates those files before building, using its existing path that skips
@@ -79,6 +61,26 @@ uses [Semantic Versioning](https://semver.org/).
   replan is accepted. Before, it saw at most a bare `replan-rejected`
   line. In a run with Qwen3.8-Flash-Next, replans wrote the same rejected
   card four times and the run ended BLOCKED.
+- A run started with 0.7.0 or earlier gets the new protocol and prompts
+  with `tenaz run --resume --refresh-templates` (or `--refresh-templates`
+  for a run that is not blocked); without it, the new checks still apply
+  but the run's prompts do not explain them.
+
+### Fixed
+
+- After a reply cut at the output limit, the lower reasoning effort goes
+  to the next session of the same role (for a builder, the next builder,
+  even on another task), not to whatever session runs next. When the cut
+  builder's attempt passed `verify`, its review took the lower effort and
+  the next builder ran at the configured one: in the Hardball 3D
+  improvements run that builder was cut again, and the task ran out of
+  attempts. `lower_effort` in `run.json` now means that some role's next
+  session is lowered; `lower_effort_roles` names the roles.
+- After `verify`, Tenaz no longer stops a process above itself as if
+  `verify` had left it behind. A supervisor that started Tenaz detached,
+  from the project, just before Tenaz ran its first `verify` was
+  stopped, and Tenaz with it, with no exit code: in a run resumed
+  straight into a review, both vanished.
 
 ## [0.7.0] - 2026-11-11
 
