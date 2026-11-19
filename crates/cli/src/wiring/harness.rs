@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use tenaz_acp::agent::{self, AgentProfile};
 use tenaz_acp::dsh::{DshAgent, DshLaunch, DshPatch};
-use tenaz_acp::fx::{self, FxAgent, FxLaunch, FxSettings};
+use tenaz_acp::fx::{FxAgent, FxLaunch, FxSettings};
 use tenaz_acp::generic::{GenericAgent, SessionFacts};
 use tenaz_acp::opencode::{OpenCodeAgent, OpenCodeConfig, OpenCodeLaunch};
 use tenaz_acp::qwen::{QwenAgent, QwenLaunch, QwenSettings};
@@ -64,14 +64,15 @@ impl HarnessInputs<'_> {
 
     /// Every ACP agent the same way: launched as `agent` says, fed the
     /// engine's observations, given `meta` in `session/new`, with its
-    /// configuration written for the run's model (a home that cannot be
-    /// written stops the run here, not in its first session), then the
-    /// pinned skills linked into `skills_dir`, for an agent that has one.
+    /// configuration (the links to the pinned skills included, for an
+    /// agent that takes them) written for the run's model: a home that
+    /// cannot be written stops the run here, not in its first session.
+    /// The agent writes it again before every session, so a shell command
+    /// that removed `.tenaz/private` does not leave the next one without it.
     fn acp_agent(
         &self,
         agent: Arc<dyn AgentProfile>,
         meta: Option<serde_json::Map<String, serde_json::Value>>,
-        skills_dir: Option<&Path>,
     ) -> anyhow::Result<Arc<dyn Harness>> {
         let mut acp: AcpHarness =
             agent::harness(agent.clone(), self.config.harness_version.clone())
@@ -80,14 +81,27 @@ impl HarnessInputs<'_> {
             acp = acp.with_session_meta(meta);
         }
         let configured = agent::configured(agent, acp, &self.config.run_model())?;
-        match skills_dir {
-            Some(dir) => link_skills(self.project, dir, self.skills)?,
-            None if !self.skills.is_empty() => {
-                tracing::warn!("{} is not given the pinned skills", self.config.harness);
-            }
-            None => {}
-        }
         Ok(Arc::new(configured))
+    }
+
+    /// The pinned skills' folders, `.tenaz/skills/<name>`, made absolute:
+    /// an agent links them into its own home.
+    fn skill_folders(&self) -> Vec<PathBuf> {
+        self.skills
+            .iter()
+            .map(|skill| {
+                let folder = self.project.tenaz_dir().join("skills").join(&skill.name);
+                std::path::absolute(&folder).unwrap_or(folder)
+            })
+            .collect()
+    }
+
+    /// Warns that the agent, which takes no skills, is not given the
+    /// pinned ones.
+    fn warn_no_skills(&self) {
+        if !self.skills.is_empty() {
+            tracing::warn!("{} is not given the pinned skills", self.config.harness);
+        }
     }
 }
 
@@ -114,12 +128,11 @@ pub(super) fn build_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dy
 /// Pi with an agent directory of its own pointing it at the proxy (or the
 /// engine); the media MCP server is not on its path.
 fn pi_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
-    let HarnessInputs {
-        project, config, ..
-    } = inputs;
+    let config = inputs.config;
     let agent_dir = inputs.home("pi-agent");
     let user_models = tenaz_pi::models::default_models_path();
-    let models = write_pi_agent(&agent_dir, config, &inputs.base_url, user_models.as_deref())?;
+    let (models, files) =
+        write_pi_agent(&agent_dir, config, &inputs.base_url, user_models.as_deref())?;
     let launch = PiLaunch::new(&inputs.options.bin, models.run_name())
         .other_models(models.other_names())
         .thinking(
@@ -128,14 +141,8 @@ fn pi_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
                 .clone()
                 .unwrap_or_else(|| "medium".to_owned()),
         )
-        .skills(
-            inputs
-                .skills
-                .iter()
-                .map(|s| project.tenaz_dir().join("skills").join(&s.name))
-                .collect(),
-        )
-        .agent_dir(&agent_dir)
+        .skills(inputs.skill_folders())
+        .agent_dir(files)
         .discover_skills(inputs.agent_skills)
         .wrapper(inputs.wrapper.to_vec());
     Ok(Arc::new(launch.harness(config.harness_version.clone())))
@@ -162,7 +169,6 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
         skill_catalog: agent_skills || !skills.is_empty(),
     };
-    fx::write_mcp(&home, &inputs.profile_mcp()).context("cannot write the fx MCP servers")?;
     if !skills.is_empty() && !agent_skills {
         tracing::warn!(
             "fx lists the pinned skills, and with them any skills it finds in the folders \
@@ -185,9 +191,13 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
             .unwrap_or_default()
     });
     inputs.acp_agent(
-        Arc::new(FxAgent { launch, settings }),
+        Arc::new(FxAgent {
+            launch,
+            settings,
+            mcp: inputs.profile_mcp(),
+            skills: inputs.skill_folders(),
+        }),
         meta,
-        Some(&home.join(".agents/skills")),
     )
 }
 
@@ -216,10 +226,9 @@ fn opencode_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harnes
         Arc::new(OpenCodeAgent {
             launch,
             config: opencode,
+            skills: inputs.skill_folders(),
         }),
         None,
-        // OpenCode finds skills in `.agents/skills` of its home, as fx does.
-        Some(&home.join(".agents/skills")),
     )
 }
 
@@ -235,9 +244,12 @@ fn qwen_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> 
     launch.wrapper = inputs.wrapper.to_vec();
     launch.caches = inputs.caches.to_vec();
     inputs.acp_agent(
-        Arc::new(QwenAgent { launch, settings }),
+        Arc::new(QwenAgent {
+            launch,
+            settings,
+            skills: inputs.skill_folders(),
+        }),
         None,
-        Some(&home.join(".qwen/skills")),
     )
 }
 
@@ -263,7 +275,8 @@ fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     let mut launch = DshLaunch::new(&inputs.options.bin, &home);
     launch.wrapper = inputs.wrapper.to_vec();
     launch.caches = inputs.caches.to_vec();
-    inputs.acp_agent(Arc::new(DshAgent { launch, patch }), None, None)
+    inputs.warn_no_skills();
+    inputs.acp_agent(Arc::new(DshAgent { launch, patch }), None)
 }
 
 /// The user's ACP command, told about each session in
@@ -282,7 +295,8 @@ fn generic_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
         },
         wrapper: inputs.wrapper.to_vec(),
     };
-    inputs.acp_agent(Arc::new(agent), None, None)
+    inputs.warn_no_skills();
+    inputs.acp_agent(Arc::new(agent), None)
 }
 
 /// The user's browser and package caches, for an agent with an isolated
@@ -313,18 +327,19 @@ fn allowed_skills(skills: &[SkillPin], agent_skills: bool) -> Option<Vec<String>
 
 /// Writes Pi's agent directory for the run's models, the run's own first
 /// and each role's model once with its own window and inputs (ADR 0011),
-/// keeping what the user's `models` file (`user_models`) has for them.
+/// keeping what the user's `models` file (`user_models`) has for them; the
+/// models and the files, which the harness writes again before each session.
 pub(super) fn write_pi_agent(
     agent_dir: &Path,
     config: &ModelConfig,
     base_url: &str,
     user_models: Option<&Path>,
-) -> anyhow::Result<tenaz_pi::models::AgentModels> {
+) -> anyhow::Result<(tenaz_pi::models::AgentModels, tenaz_pi::AgentDir)> {
     let models = pi_models(config, base_url);
     let template = user_models.and_then(|path| pi_template(path, &models));
-    tenaz_pi::write_agent_dir(agent_dir, &models, template)
-        .context("cannot write Pi's agent directory")?;
-    Ok(models)
+    let files = tenaz_pi::AgentDir::new(agent_dir, &models, template);
+    files.write().context("cannot write Pi's agent directory")?;
+    Ok((models, files))
 }
 
 /// The run's models as Pi's `models.json` describes them, on the run's
@@ -365,26 +380,6 @@ fn pi_template(
         .inspect_err(|error| tracing::warn!(%error, "ignoring Pi's models.json"))
         .ok()
         .flatten()
-}
-
-/// Puts the pinned skills in `dir`, an agent's own skill folder in its
-/// isolated `HOME`, as links to `.tenaz/skills/<name>`. Links from an
-/// earlier run are replaced.
-fn link_skills(project: &Project, dir: &Path, skills: &[SkillPin]) -> anyhow::Result<()> {
-    if dir.exists() {
-        std::fs::remove_dir_all(dir).context("cannot clear the agent's skill folder")?;
-    }
-    if skills.is_empty() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(dir).context("cannot create the agent's skill folder")?;
-    for skill in skills {
-        let target = project.tenaz_dir().join("skills").join(&skill.name);
-        let target = std::path::absolute(&target).unwrap_or(target);
-        std::os::unix::fs::symlink(&target, dir.join(&skill.name))
-            .with_context(|| format!("cannot link the skill {}", skill.name))?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -698,6 +693,66 @@ mod tests {
         );
     }
 
+    /// Each agent's own files are written again when a session opens, as
+    /// after a shell command of the agent's removed `.tenaz/private` in the
+    /// Raycaster Shooter run of 2026-11-19.
+    #[tokio::test]
+    async fn each_session_writes_the_agent_s_files_again() {
+        for (kind, files) in [
+            (
+                HarnessKind::Pi,
+                &["pi-agent/models.json", "pi-agent/settings.json"][..],
+            ),
+            (
+                HarnessKind::Fx,
+                &[
+                    "fx-home/.fx/settings.json",
+                    "fx-home/.fx/mcp.json",
+                    "fx-home/.agents/skills/rust",
+                ],
+            ),
+            (
+                HarnessKind::OpenCode,
+                &[
+                    "opencode-home/opencode.json",
+                    "opencode-home/.agents/skills/rust",
+                ],
+            ),
+            (
+                HarnessKind::Qwen,
+                &[
+                    "qwen-home/.qwen/settings.json",
+                    "qwen-home/.qwen/skills/rust",
+                ],
+            ),
+            (HarnessKind::Dsh, &["dsh-home/.dsh/tenaz-patch.yml"]),
+            (HarnessKind::Acp, &["acp-session.json"]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let skills = [pin("rust")];
+            let extras = Extras {
+                skills: &skills,
+                ..Extras::default()
+            };
+            let harness = build_with(dir.path(), kind, &extras).unwrap();
+            let private = Project::new(dir.path()).private_dir();
+            std::fs::remove_dir_all(&private).unwrap();
+            let opened = tokio::time::timeout(
+                Duration::from_secs(10),
+                harness.open(session_spec(dir.path())),
+            )
+            .await
+            .expect("the launch ends");
+            assert!(opened.is_err(), "{kind}: there is no agent to start");
+            for file in files {
+                assert!(
+                    std::fs::symlink_metadata(private.join(file)).is_ok(),
+                    "{kind}: {file} was not written again"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_configuration_that_cannot_be_written_stops_the_run_before_it_starts() {
         // A folder where the agent's configuration file goes: only that
@@ -741,23 +796,5 @@ mod tests {
         );
         assert_eq!(allowed_skills(&[], false), Some(Vec::new()));
         assert_eq!(allowed_skills(&pinned, true), None);
-    }
-
-    #[test]
-    fn the_pinned_skills_replace_those_of_an_earlier_run() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = Project::new(dir.path());
-        let skills = dir.path().join("home/.qwen/skills");
-        std::fs::create_dir_all(skills.join("old")).unwrap();
-        link_skills(&project, &skills, &[pin("rust")]).unwrap();
-        let names: Vec<_> = std::fs::read_dir(&skills)
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(names, ["rust"]);
-        assert_eq!(
-            std::fs::read_link(skills.join("rust")).unwrap(),
-            std::path::absolute(project.tenaz_dir().join("skills/rust")).unwrap()
-        );
     }
 }

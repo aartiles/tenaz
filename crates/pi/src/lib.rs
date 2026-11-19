@@ -1,6 +1,6 @@
 //! The Pi harness adapter: runs `pi --mode rpc` as a subprocess per session
 //! and turns its JSON event stream into the runner's session events. Pi
-//! runs with an agent directory of its own ([`write_agent_dir`],
+//! runs with an agent directory of its own ([`AgentDir`],
 //! `PI_CODING_AGENT_DIR`) whose `models.json` points it at the engine proxy
 //! or the engine, so the user's `~/.pi/agent` is neither needed nor touched.
 
@@ -19,29 +19,48 @@ pub use translate::Translator;
 /// Pi's agent directory: settings, models, credentials (Pi 1.1.0).
 pub const AGENT_DIR_ENV: &str = "PI_CODING_AGENT_DIR";
 
-/// Writes the run's agent directory: `models.json` with the run's models,
-/// its own first (see [`models::agent_models_json`]), and a
-/// `settings.json` with an HTTP idle timeout long enough for a local
-/// engine's prefill and install telemetry off. Pi keeps its own
-/// `auth.json` and catalog cache there too.
-pub fn write_agent_dir(
-    dir: &Path,
-    models: &models::AgentModels,
-    template: Option<serde_json::Map<String, serde_json::Value>>,
-) -> io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    std::fs::write(
-        dir.join("models.json"),
-        serde_json::to_string_pretty(&models::agent_models_json(models, template))?,
-    )?;
-    std::fs::write(
-        dir.join("settings.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "httpIdleTimeoutMs": 900_000,
-            "enableInstallTelemetry": false
-        }))?,
-    )?;
-    Ok(())
+/// The run's agent directory: `models.json` with the run's models, its
+/// own first (see [`models::agent_models_json`]), and a `settings.json`
+/// with an HTTP idle timeout long enough for a local engine's prefill and
+/// install telemetry off. Pi keeps its own `auth.json` and catalog cache
+/// there too. The harness writes it again before every session: Pi exits
+/// at once with `Model "<provider>/<id>" not found` without it, and a
+/// shell command of the agent's can remove it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentDir {
+    dir: PathBuf,
+    models: String,
+    settings: String,
+}
+
+impl AgentDir {
+    /// The files of `dir` for `models`, on the user's `template`.
+    pub fn new(
+        dir: &Path,
+        models: &models::AgentModels,
+        template: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Self {
+        // `{:#}` prints a JSON value pretty, as `to_string_pretty` would,
+        // and cannot fail.
+        Self {
+            dir: dir.to_path_buf(),
+            models: format!("{:#}", models::agent_models_json(models, template)),
+            settings: format!(
+                "{:#}",
+                serde_json::json!({
+                    "httpIdleTimeoutMs": 900_000,
+                    "enableInstallTelemetry": false
+                })
+            ),
+        }
+    }
+
+    /// Writes both files, creating the directory.
+    pub fn write(&self) -> io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.dir.join("models.json"), &self.models)?;
+        std::fs::write(self.dir.join("settings.json"), &self.settings)
+    }
 }
 
 /// The built-in tools a session may use, as the task loop allowed them.
@@ -70,6 +89,8 @@ pub struct PiLaunch {
     /// A program and leading arguments Pi is started through: the sandbox
     /// launcher, when the run is sandboxed.
     pub wrapper: Vec<String>,
+    /// The agent directory, written before each session.
+    pub agent_dir: Option<AgentDir>,
 }
 
 impl PiLaunch {
@@ -85,6 +106,7 @@ impl PiLaunch {
             extra_args: Vec::new(),
             env: Vec::new(),
             wrapper: Vec::new(),
+            agent_dir: None,
         }
     }
 
@@ -144,12 +166,14 @@ impl PiLaunch {
         self
     }
 
-    /// Runs Pi with `dir` as its agent directory (made absolute: Pi runs in
-    /// the project).
+    /// Runs Pi with `files` as its agent directory (made absolute: Pi runs
+    /// in the project), written before each session.
     #[must_use]
-    pub fn agent_dir(mut self, dir: &Path) -> Self {
+    pub fn agent_dir(mut self, files: AgentDir) -> Self {
         self.env.retain(|(key, _)| key != AGENT_DIR_ENV);
-        self.env.push((AGENT_DIR_ENV.to_owned(), absolute(dir)));
+        self.env
+            .push((AGENT_DIR_ENV.to_owned(), absolute(&files.dir)));
+        self.agent_dir = Some(files);
         self
     }
 
@@ -248,6 +272,11 @@ impl Harness for PiHarness {
                 self.launch.listed().join(", ")
             )));
         };
+        if let Some(dir) = &launch.agent_dir {
+            dir.write().map_err(|e| {
+                HarnessError::Spawn(format!("cannot write Pi's agent directory: {e}"))
+            })?;
+        }
         let (program, args) = tenaz_core::util::wrap_command(
             &launch.wrapper,
             &launch.binary,
@@ -312,7 +341,7 @@ mod tests {
             .other_models(vec!["sushi/Critic".into()])
             .thinking("high")
             .skills(vec![PathBuf::from("/s/rust")])
-            .agent_dir(Path::new("/a/pi-agent"))
+            .agent_dir(agent_dir(Path::new("/a/pi-agent")))
             .wrapper(vec!["sandbox".into()]);
         let model_of = |id: &str| {
             let args = launch.for_model(id)?.args(None);
@@ -350,6 +379,89 @@ mod tests {
         assert_eq!(after("--skill"), cwd.join("proj/.tenaz/skills/rust"));
     }
 
+    /// The run's model `m` on `engine`.
+    fn engine_models() -> models::AgentModels {
+        models::AgentModels {
+            provider: "engine".into(),
+            base_url: "http://127.0.0.1:4001/v1".into(),
+            run: models::AgentModel {
+                id: "m".into(),
+                context_window: 32768,
+                input: vec!["text".into()],
+                reasoning: false,
+            },
+            others: vec![],
+        }
+    }
+
+    /// The agent directory `dir` for [`engine_models`].
+    fn agent_dir(dir: &Path) -> AgentDir {
+        AgentDir::new(dir, &engine_models(), None)
+    }
+
+    /// A harness for `engine/m` with its agent directory at `agent`, whose
+    /// Pi cannot start; a builder session's spec in `cwd`.
+    fn unstartable(cwd: &Path, agent: &Path) -> (PiHarness, SessionSpec) {
+        let harness = PiLaunch::new(cwd.join("no-such-pi"), "engine/m")
+            .agent_dir(agent_dir(agent))
+            .harness("1.4.0".into());
+        let spec = SessionSpec {
+            label: "001-builder-T001".into(),
+            cwd: cwd.to_path_buf(),
+            persist_dir: None,
+            raw_log: None,
+            thinking_log: None,
+            stderr_log: None,
+            model: tenaz_core::ports::SessionModel {
+                name: "engine/m".into(),
+                id: "m".into(),
+                context_window: 32768,
+                supports_images: false,
+            },
+        };
+        (harness, spec)
+    }
+
+    /// A session whose agent directory was removed, as a shell command of
+    /// the agent's removed `.tenaz/private` in the Raycaster Shooter run of
+    /// 2026-11-19, gets it back before Pi starts: without it Pi exits at
+    /// once with `Model "<provider>/<id>" not found`.
+    #[tokio::test]
+    async fn each_session_writes_the_agent_directory_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = dir.path().join("pi-agent");
+        agent_dir(&agent).write().unwrap();
+        std::fs::remove_dir_all(&agent).unwrap();
+        let (harness, spec) = unstartable(dir.path(), &agent);
+        // No Pi to start: the open fails after the directory is written.
+        assert!(harness.open(spec).await.is_err());
+        let read = |name: &str| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(agent.join(name)).unwrap()).unwrap()
+        };
+        assert_eq!(
+            read("models.json")["providers"]["engine"]["models"][0]["id"],
+            "m"
+        );
+        assert_eq!(read("settings.json")["httpIdleTimeoutMs"], 900_000);
+    }
+
+    /// An agent directory that cannot be written stops the session before
+    /// Pi starts, and says so.
+    #[tokio::test]
+    async fn an_agent_directory_that_cannot_be_written_stops_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = dir.path().join("pi-agent");
+        std::fs::write(&agent, "a file where the directory goes").unwrap();
+        let (harness, spec) = unstartable(dir.path(), &agent);
+        let Err(HarnessError::Spawn(error)) = harness.open(spec).await else {
+            panic!("the session started");
+        };
+        assert!(
+            error.starts_with("cannot write Pi's agent directory: "),
+            "{error}"
+        );
+    }
+
     #[test]
     fn the_agent_directory_holds_the_model_and_the_settings() {
         let dir = tempfile::tempdir().unwrap();
@@ -366,7 +478,7 @@ mod tests {
             run,
             others: vec![],
         };
-        write_agent_dir(&agent, &models, None).unwrap();
+        AgentDir::new(&agent, &models, None).write().unwrap();
         let read = |name: &str| -> serde_json::Value {
             serde_json::from_str(&std::fs::read_to_string(agent.join(name)).unwrap()).unwrap()
         };
@@ -383,8 +495,8 @@ mod tests {
 
         let launch = PiLaunch::new("pi", "ollama/qwen3.8:27b")
             .env(vec![("A".into(), "1".into())])
-            .agent_dir(Path::new("rel/pi-agent"))
-            .agent_dir(&agent);
+            .agent_dir(agent_dir(Path::new("rel/pi-agent")))
+            .agent_dir(agent_dir(&agent));
         assert_eq!(
             launch.env,
             [

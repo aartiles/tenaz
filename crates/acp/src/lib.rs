@@ -249,6 +249,37 @@ pub fn agent_version(binary: &Path) -> io::Result<String> {
         .to_owned())
 }
 
+/// Puts the pinned skills `targets` (absolute paths to their folders) in
+/// `dir`, an agent's own skill folder in its isolated `HOME`, as links
+/// named after each folder. Links from an earlier run or session are
+/// replaced.
+pub(crate) fn link_skills(dir: &Path, targets: &[std::path::PathBuf]) -> io::Result<()> {
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)
+            .map_err(|e| context(&e, "cannot clear the agent's skill folder"))?;
+    }
+    if targets.is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir)
+        .map_err(|e| context(&e, "cannot create the agent's skill folder"))?;
+    for target in targets {
+        let name = target.file_name().unwrap_or(target.as_os_str());
+        std::os::unix::fs::symlink(target, dir.join(name)).map_err(|e| {
+            context(
+                &e,
+                &format!("cannot link the skill {}", name.to_string_lossy()),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// `error` with `what` in front.
+fn context(error: &io::Error, what: &str) -> io::Error {
+    io::Error::new(error.kind(), format!("{what}: {error}"))
+}
+
 /// Writes `value` as pretty JSON to `path`, creating its folder.
 pub(crate) fn write_json(path: &Path, value: &serde_json::Value) -> io::Result<()> {
     if let Some(dir) = path.parent() {
@@ -297,6 +328,21 @@ mod tests {
     use tenaz_adapters::testing::write_executable;
 
     use super::*;
+
+    #[test]
+    fn the_pinned_skills_replace_those_of_an_earlier_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills = dir.path().join("home/.qwen/skills");
+        std::fs::create_dir_all(skills.join("old")).unwrap();
+        let rust = dir.path().join(".tenaz/skills/rust");
+        link_skills(&skills, std::slice::from_ref(&rust)).unwrap();
+        let names: Vec<_> = std::fs::read_dir(&skills)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["rust"]);
+        assert_eq!(std::fs::read_link(skills.join("rust")).unwrap(), rust);
+    }
 
     #[test]
     fn the_version_is_the_first_line_of_the_agent_s_answer_trimmed() {

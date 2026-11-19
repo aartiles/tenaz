@@ -118,8 +118,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   settings, credentials (`auth.json`), extensions and context files are
   not used: a provider you signed in to with `/login` needs its `apiKey`
   in `models.json` instead.
-- fx's `settings.json` is written again before each session, for that
-  session's model.
+- Each agent's own files under `.tenaz/private/` are written again
+  before each session: fx's `settings.json` (for that session's model)
+  and `mcp.json`, Pi's agent directory, OpenCode's, Qwen Code's and
+  dsh's configuration, the generic agent's `acp-session.json`, and the
+  links to the pinned skills. A shell command can remove them: in the
+  Raycaster Shooter run of 2026-11-19 (Pi 1.4.0) one removed
+  `.tenaz/private`, and every later Pi session exited at once with
+  `Model "<provider>/<id>" not found` until `--resume` wrote them again.
+  Tested with unit tests that remove the folder and open a session; no
+  run has removed it since.
 - `verify` and heavy jobs run in a process group of their own, killed
   when they end. Afterwards Tenaz reads `ps` (up to three times) and
   stops what they left in a session of their own, using `lsof` (macOS)

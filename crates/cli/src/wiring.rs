@@ -695,7 +695,7 @@ mod tests {
         };
         let agent = dir.path().join("pi-agent");
         let base_url = "http://127.0.0.1:4001/v1";
-        let models =
+        let (models, _) =
             super::harness::write_pi_agent(&agent, &config, base_url, Some(&user_models)).unwrap();
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(agent.join("models.json")).unwrap())

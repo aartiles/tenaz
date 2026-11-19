@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Each harness's own files under `.tenaz/private/` (Pi's agent directory,
+  fx's `mcp.json` and the links to the pinned skills, besides the
+  settings already written per session) are written again before every
+  session. A shell command that removed `.tenaz/private` left every later
+  Pi session exiting at once with `Model "<provider>/<id>" not found`.
+
 ## [0.8.0] - 2026-11-19
 
 ### Added

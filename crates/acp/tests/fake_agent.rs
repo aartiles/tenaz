@@ -568,6 +568,8 @@ fn fx_agent(home: &Path) -> Arc<dyn AgentProfile> {
     Arc::new(FxAgent {
         launch: FxLaunch::new("fx", home),
         settings: fx_settings(),
+        mcp: Vec::new(),
+        skills: Vec::new(),
     })
 }
 
@@ -664,6 +666,7 @@ async fn opencode_starts_each_session_with_its_model_in_the_configuration() {
         let agent: Arc<dyn AgentProfile> = Arc::new(OpenCodeAgent {
             launch: OpenCodeLaunch::new("opencode", home),
             config: opencode_config(),
+            skills: Vec::new(),
         });
         let opencode = configured(agent, acp, &run_model());
         Box::new(opencode.unwrap())
@@ -694,6 +697,7 @@ async fn qwen_starts_each_session_with_its_window_in_the_settings() {
         let agent: Arc<dyn AgentProfile> = Arc::new(QwenAgent {
             launch: QwenLaunch::new("qwen", home, "http://127.0.0.1:1/v1"),
             settings,
+            skills: Vec::new(),
         });
         let qwen = configured(agent, acp, &run_model());
         Box::new(qwen.unwrap())

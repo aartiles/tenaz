@@ -9,7 +9,7 @@ use tenaz_core::ledger::HarnessKind;
 use tenaz_core::ports::{SessionModel, SessionSpec};
 
 use crate::agent::AgentProfile;
-use crate::{ProfileMcpServer, write_json};
+use crate::{ProfileMcpServer, link_skills, write_json};
 
 /// The opening of Qwen Code's request to summarize its conversation
 /// (`getCompressionPrompt` in 0.26.6). It cannot be turned off: the engine
@@ -130,11 +130,14 @@ impl QwenLaunch {
 }
 
 /// Qwen Code as an [`AgentProfile`]: each session on its own model, named on
-/// the command line, with its home prepared for that model.
+/// the command line, with its home prepared for that model and the links
+/// to the pinned skills.
 #[derive(Clone, Debug)]
 pub struct QwenAgent {
     pub launch: QwenLaunch,
     pub settings: QwenSettings,
+    /// The pinned skills' folders, linked into `<home>/.qwen/skills`.
+    pub skills: Vec<PathBuf>,
 }
 
 impl AgentProfile for QwenAgent {
@@ -165,7 +168,8 @@ impl AgentProfile for QwenAgent {
     }
 
     fn write_config(&self, model: &SessionModel) -> io::Result<()> {
-        prepare_home(&self.launch.home, &self.settings.for_model(model))
+        prepare_home(&self.launch.home, &self.settings.for_model(model))?;
+        link_skills(&self.launch.home.join(".qwen/skills"), &self.skills)
     }
 }
 

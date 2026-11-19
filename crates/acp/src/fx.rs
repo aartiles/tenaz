@@ -9,7 +9,7 @@ use tenaz_core::ledger::HarnessKind;
 use tenaz_core::ports::{SessionModel, SessionSpec};
 
 use crate::agent::AgentProfile;
-use crate::{ProfileMcpServer, write_json};
+use crate::{ProfileMcpServer, link_skills, write_json};
 
 /// `~/.fx/settings.json` as the spike used it: one OpenAI-compatible provider
 /// (the engine proxy) with the model's metadata, and `ask` permissions so
@@ -92,7 +92,7 @@ impl FxSettings {
 
 /// Writes `mcp.json` under `<home>/.fx/`: the MCP servers fx lists in
 /// every session.
-pub fn write_mcp(home: &Path, mcp: &[ProfileMcpServer]) -> io::Result<()> {
+fn write_mcp(home: &Path, mcp: &[ProfileMcpServer]) -> io::Result<()> {
     let servers: serde_json::Map<String, serde_json::Value> = mcp
         .iter()
         .map(|s| (s.name.clone(), serde_json::json!({ "type": "http", "url": s.url, "enabled": true, "operation_timeout_ms": s.operation_timeout_ms })))
@@ -189,7 +189,9 @@ impl FxLaunch {
     }
 }
 
-/// fx as an [`AgentProfile`]: its profile written for each session's model,
+/// fx as an [`AgentProfile`]: its profile (settings for each session's
+/// model, the MCP servers and the links to the pinned skills) written
+/// before every session,
 /// `HOME` set to the profile, its upgrade check off (no network beyond
 /// the engine) and the user's caches. With a `shim` (a program that runs
 /// `shim fx-shim <fx> <args>` and passes fx's stdout through
@@ -198,6 +200,9 @@ impl FxLaunch {
 pub struct FxAgent {
     pub launch: FxLaunch,
     pub settings: FxSettings,
+    pub mcp: Vec<ProfileMcpServer>,
+    /// The pinned skills' folders, linked into `<home>/.agents/skills`.
+    pub skills: Vec<PathBuf>,
 }
 
 impl AgentProfile for FxAgent {
@@ -242,7 +247,9 @@ impl AgentProfile for FxAgent {
     }
 
     fn write_config(&self, model: &SessionModel) -> io::Result<()> {
-        write_settings(&self.launch.home, &self.settings.for_model(model))
+        write_settings(&self.launch.home, &self.settings.for_model(model))?;
+        write_mcp(&self.launch.home, &self.mcp)?;
+        link_skills(&self.launch.home.join(".agents/skills"), &self.skills)
     }
 }
 
@@ -381,6 +388,8 @@ mod tests {
                 effort: None,
                 skill_catalog: false,
             },
+            mcp: Vec::new(),
+            skills: Vec::new(),
         };
         assert_eq!(agent.program(), Path::new("/opt/fx"));
         assert_eq!(agent.args(&spec("001-bootstrap")), ["acp"]);

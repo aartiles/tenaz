@@ -8,7 +8,7 @@ use tenaz_core::ledger::HarnessKind;
 use tenaz_core::ports::{SessionModel, SessionSpec};
 
 use crate::agent::AgentProfile;
-use crate::{ProfileMcpServer, write_json};
+use crate::{ProfileMcpServer, link_skills, write_json};
 
 /// What Tenaz writes into `OpenCode`'s configuration: one OpenAI-compatible
 /// provider (the engine proxy) with the session's model, and permissions
@@ -165,11 +165,14 @@ impl OpenCodeLaunch {
 }
 
 /// `OpenCode` as an [`AgentProfile`]: `opencode acp` with its configuration
-/// written for each session's model.
+/// written for each session's model, and the links to the pinned skills.
 #[derive(Clone, Debug)]
 pub struct OpenCodeAgent {
     pub launch: OpenCodeLaunch,
     pub config: OpenCodeConfig,
+    /// The pinned skills' folders, linked into `<home>/.agents/skills`,
+    /// where `OpenCode` finds skills as fx does.
+    pub skills: Vec<PathBuf>,
 }
 
 impl AgentProfile for OpenCodeAgent {
@@ -198,7 +201,8 @@ impl AgentProfile for OpenCodeAgent {
     }
 
     fn write_config(&self, model: &SessionModel) -> io::Result<()> {
-        write_config(&self.launch.home, &self.config.for_model(model))
+        write_config(&self.launch.home, &self.config.for_model(model))?;
+        link_skills(&self.launch.home.join(".agents/skills"), &self.skills)
     }
 }
 
@@ -380,6 +384,7 @@ mod tests {
         let agent = OpenCodeAgent {
             launch: OpenCodeLaunch::new("/opt/opencode", "/run/home"),
             config: config(),
+            skills: Vec::new(),
         };
         assert_eq!(agent.program(), Path::new("/opt/opencode"));
         assert_eq!(agent.args(&spec("001-bootstrap")), ["acp"]);

@@ -60,6 +60,7 @@ async fn qwen_starts_each_session_on_its_model() {
                     mcp: Vec::new(),
                     discover_skills: false,
                 },
+                skills: Vec::new(),
             });
             let opened = tokio::time::timeout(
                 Duration::from_secs(10),
