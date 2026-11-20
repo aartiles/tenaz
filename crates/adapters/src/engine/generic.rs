@@ -187,20 +187,24 @@ mod tests {
 
     use super::*;
 
+    /// When each listing was answered, and whether it listed the model.
+    type Listings = Arc<Mutex<Vec<(SystemTime, bool)>>>;
+
     /// A server at `/v1/models` that lists nothing the first time, then
-    /// `m`; and when it was first asked.
-    async fn serving_on_the_second_listing() -> (u16, Arc<Mutex<Option<SystemTime>>>) {
-        let asked: Arc<Mutex<Option<SystemTime>>> = Arc::default();
+    /// `m`; and its listings.
+    async fn serving_on_the_second_listing() -> (u16, Listings) {
+        let listings = Listings::default();
         let app = axum::Router::new().route(
             "/v1/models",
             axum::routing::get({
-                let asked = asked.clone();
+                let listings = listings.clone();
                 move || async move {
-                    let mut asked = asked.lock().unwrap();
-                    let data = if asked.is_some() {
+                    let mut listings = listings.lock().unwrap();
+                    let serves = !listings.is_empty();
+                    listings.push((SystemTime::now(), serves));
+                    let data = if serves {
                         serde_json::json!([{"id": "m"}])
                     } else {
-                        *asked = Some(SystemTime::now());
                         serde_json::json!([])
                     };
                     axum::Json(serde_json::json!({ "data": data }))
@@ -210,7 +214,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (port, asked)
+        (port, listings)
     }
 
     /// An engine on `port` whose start runs `start`, noted in `spans`.
@@ -232,11 +236,13 @@ mod tests {
     /// that time is spared by the sweep after a session (ADR 0039).
     #[tokio::test]
     async fn a_start_is_noted_from_its_command_until_the_model_serves() {
-        let (port, asked) = serving_on_the_second_listing().await;
+        let (port, listings) = serving_on_the_second_listing().await;
         let spans = EngineSpans::default();
         noted(port, "sleep 0.3", &spans).load("m").await.unwrap();
         let ran = spans.ran();
-        let first_listing = asked.lock().unwrap().expect("listed");
+        let listings = listings.lock().unwrap().clone();
+        let first_listing = listings.first().expect("listed").0;
+        let served = listings.iter().find(|l| l.1).expect("served").0;
         assert_eq!(ran.len(), 1);
         let command = first_listing.duration_since(ran[0].began);
         assert!(
@@ -244,7 +250,7 @@ mod tests {
             "the span began after the command: {ran:?}"
         );
         assert!(
-            ran[0].ended.is_some_and(|ended| ended > first_listing),
+            ran[0].ended.is_some_and(|ended| ended >= served),
             "the span ended before the model served: {ran:?}"
         );
     }

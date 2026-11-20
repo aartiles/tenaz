@@ -341,7 +341,8 @@ pub async fn wire(
         .clone()
         .context("the ledger has no engine base URL")?;
     // When Tenaz's own engine commands ran: a session's sweep spares what
-    // they started (ADR 0039).
+    // they started (ADR 0039). The engine and the swept harness below must
+    // share this one record, or a restarted engine is stopped.
     let engine_spans = EngineSpans::default();
     let engine_adapter = engine_adapter(&engine.kind, &base_url, &engine_spans);
     let gate = Gate::new();
