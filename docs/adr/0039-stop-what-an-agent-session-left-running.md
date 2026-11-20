@@ -81,8 +81,15 @@ When it restarts the engine during a session, the engine is born in
 the window and adopted by pid 1 once the script returns. So Tenaz notes
 when each of its engine commands runs, with its wait for the model to
 serve or go, and spares what was born then, widened by 5 seconds on
-each side, as `ps` may be read seconds after the window on a machine
-short of memory. These times, and the session's start, are read from
+each side, for rounding and for small differences between the wall
+clock and the one `ps` ages come from. `ps` may take seconds on a
+machine short of memory, so Tenaz reads its clock before and after
+each `ps`. The session's start is the later of the two readings'
+starts, so nothing older is taken. Each span runs from where the
+second reading puts its start to where the first puts its end, so the
+engine is found inside whenever `ps` read its age. The first reading's
+spans are kept too, in case the clock was set back between the two.
+These times, and the session's start, are read from
 the wall clock. `Instant` stops while the machine sleeps, and `ps`
 ages do not: after a sleep, a span read from it would no longer cover
 the engine.

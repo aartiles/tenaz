@@ -48,7 +48,7 @@ pub struct Started<'a> {
     pub root: &'a Path,
 }
 
-/// When things happened, as how long ago, read again for each round.
+/// When things happened, as how long ago at one reading of the clock.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Window {
     /// How long ago the command started.
@@ -70,9 +70,9 @@ impl Window {
 
     /// Whether a process `age` old (rounded down, as `ps` reports it) may
     /// have been born in one of the spared spans. Each span is widened by
-    /// [`SPAN_SLACK`] on both sides, then to whole seconds: the table is
-    /// read a moment after the window, longer when memory is short, and
-    /// sparing one too many is safe; stopping the engine is not.
+    /// [`SPAN_SLACK`] on both sides, then to whole seconds, as `ps` rounds
+    /// ages down: sparing one too many is safe; stopping the engine is
+    /// not.
     fn spares(&self, age: Duration) -> bool {
         self.spared.iter().any(|span| {
             let newest = span.ended.saturating_sub(SPAN_SLACK).as_secs();
@@ -93,7 +93,9 @@ pub struct Span {
 /// may have started another just before.
 const ROUNDS: usize = 3;
 
-/// How far a spared span is widened on each side.
+/// How far a spared span is widened on each side: for rounding, and for
+/// small differences between the wall clock and the one `ps` ages come
+/// from (time since boot on Linux).
 const SPAN_SLACK: Duration = Duration::from_secs(5);
 
 /// The one process name never stopped: `git gc --auto` detaches as a
@@ -105,7 +107,9 @@ const SUBREAPER: &str = "systemd";
 
 /// Stops what the command in `started` left behind, as long as rounds find
 /// more; the pids it stopped. `window` says when it started, and what is
-/// spared.
+/// spared. `window` is read before and after each listing of the table,
+/// as `ps` may take seconds on a machine short of memory and reads each
+/// age somewhere between the two (see [`between`]).
 pub fn sweep(
     table: &dyn ProcessTable,
     started: &Started<'_>,
@@ -113,7 +117,7 @@ pub fn sweep(
 ) -> Vec<u32> {
     let mut stopped = BTreeSet::new();
     for _ in 0..ROUNDS {
-        let tree = round(table, started, &window(), &stopped);
+        let tree = round(table, started, &window, &stopped);
         if tree.is_empty() || !table.kill(&tree) {
             break;
         }
@@ -122,20 +126,43 @@ pub fn sweep(
     stopped.into_iter().collect()
 }
 
+/// The window for ages read between the readings `before` and `after`.
+/// How long ago the command started is the shorter of the two, so
+/// nothing older is taken, even with the clock set back; one born in the
+/// first moments of the command may be missed when `ps` reads late. Each
+/// span runs from its start as `after` has it to its end as `before` has
+/// it, so the engine is inside whenever its age was read. A span that began between the two
+/// is in `after` alone. With the clock set back, `after` may read too
+/// young; `before`'s spans are kept as well, which covers the engine as
+/// long as `ps` read soon after `before`.
+fn between(before: Window, after: Window) -> Window {
+    let drift = after.ran.saturating_sub(before.ran);
+    let widened = after.spared.into_iter().map(|span| Span {
+        began: span.began,
+        ended: span.ended.saturating_sub(drift),
+    });
+    Window {
+        ran: before.ran.min(after.ran),
+        spared: before.spared.into_iter().chain(widened).collect(),
+    }
+}
+
 /// What one reading of the table finds left behind and not yet in
 /// `stopped`: each process whose directory is in the project, with
 /// Tenaz's user's processes under it (another user's cannot be killed).
 fn round(
     table: &dyn ProcessTable,
     started: &Started<'_>,
-    window: &Window,
+    window: &dyn Fn() -> Window,
     stopped: &BTreeSet<u32>,
 ) -> Vec<u32> {
+    let before = window();
     let rows = table.list();
+    let window = between(before, window());
     let Some(own) = rows.iter().find(|r| r.pid == started.own) else {
         return Vec::new();
     };
-    let found: Vec<u32> = candidates(&rows, own, started.group, window)
+    let found: Vec<u32> = candidates(&rows, own, started.group, &window)
         .into_iter()
         .filter(|pid| !stopped.contains(pid))
         .collect();
@@ -308,6 +335,8 @@ pub fn parse_lsof_cwds(text: &str) -> Vec<(u32, PathBuf)> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
     use crate::testing::ScriptedProcesses;
 
@@ -576,8 +605,7 @@ mod tests {
 
     /// The span is widened by [`SPAN_SLACK`], then outward to whole
     /// seconds: one from 120.4 s to 90.7 s ago spares ages 85 to 126, not
-    /// 84 or 127. So `ps`, read seconds after the window on a machine
-    /// short of memory, still finds the engine inside.
+    /// 84 or 127.
     #[test]
     fn a_spared_span_is_widened_by_the_slack_and_to_whole_seconds() {
         let rows = with(vec![
@@ -595,6 +623,136 @@ mod tests {
             }],
         };
         assert_eq!(candidates(&rows, own, None, &window), vec![800, 803]);
+    }
+
+    /// A table whose every listing takes `took` seconds of the clock it
+    /// shares with the window, as `ps` on a machine short of memory. Its
+    /// rows give each process's age when the clock was at zero; `ps`
+    /// reads the ages `read` seconds into its run.
+    struct Slow {
+        table: ScriptedProcesses,
+        clock: AtomicU64,
+        took: u64,
+        read: u64,
+    }
+
+    impl Slow {
+        fn now(&self) -> u64 {
+            self.clock.load(Ordering::SeqCst)
+        }
+    }
+
+    impl ProcessTable for Slow {
+        fn list(&self) -> Vec<ProcessRow> {
+            let began = self.clock.fetch_add(self.took, Ordering::SeqCst);
+            self.table
+                .list()
+                .into_iter()
+                .map(|r| ProcessRow {
+                    age: r.age + Duration::from_secs(began + self.read),
+                    ..r
+                })
+                .collect()
+        }
+        fn cwds(&self, pids: &[u32]) -> Vec<(u32, PathBuf)> {
+            self.table.cwds(pids)
+        }
+        fn kill(&self, pids: &[u32]) -> bool {
+            self.table.kill(pids)
+        }
+    }
+
+    /// When the sweep begins: a session that began 600 s before, an
+    /// engine command from 92 s to 90 s before, the agent's server born
+    /// 30 s before, an engine born as the command began and one as it
+    /// ended, and a daemon born 2 s before the session. `ps` takes 20 s,
+    /// more than the span and twice the slack together, so the two
+    /// readings' spans leave a gap; it reads the ages `read` seconds in.
+    fn slow_ps(read: u64) -> Vec<u32> {
+        let rows = with(vec![
+            row(800, 1, 800, 30),
+            row(900, 1, 900, 92),
+            row(902, 1, 902, 90),
+            row(901, 1, 901, 602),
+        ]);
+        let table = Slow {
+            table: ScriptedProcesses::new(vec![rows])
+                .cwd(800, "/p")
+                .cwd(900, "/p")
+                .cwd(901, "/p")
+                .cwd(902, "/p"),
+            clock: AtomicU64::new(0),
+            took: 20,
+            read,
+        };
+        let started = Started {
+            own: TENAZ,
+            group: None,
+            root: Path::new("/p"),
+        };
+        let swept = sweep(&table, &started, || {
+            let now = table.now();
+            session(600 + now, &[(92 + now, 90 + now)])
+        });
+        assert_eq!(table.table.killed(), vec![swept.clone()]);
+        swept
+    }
+
+    /// Wherever in its run `ps` reads the ages, both engines are spared,
+    /// the daemon older than the session is not taken, and the agent's
+    /// server is stopped.
+    #[test]
+    fn a_slow_ps_still_spares_the_engine_and_takes_nothing_older() {
+        for read in [0, 10, 20] {
+            assert_eq!(slow_ps(read), vec![800], "ages read {read} s in");
+        }
+    }
+
+    /// A span as how long ago it began and ended, in seconds.
+    fn span(began: u64, ended: u64) -> Span {
+        Span {
+            began: Duration::from_secs(began),
+            ended: Duration::from_secs(ended),
+        }
+    }
+
+    /// The two readings of the window around a listing, combined: each
+    /// case is (before, after, the window used).
+    #[test]
+    fn the_readings_around_a_listing_are_combined() {
+        let window = |ran, spared| Window {
+            ran: Duration::from_secs(ran),
+            spared,
+        };
+        let cases = [
+            (
+                "the clock moved on 10 s: the span runs from after's start to before's end",
+                window(600, vec![span(120, 90)]),
+                window(610, vec![span(130, 100)]),
+                window(600, vec![span(120, 90), span(130, 90)]),
+            ),
+            (
+                "a span began between the readings: after alone has it",
+                window(600, vec![]),
+                window(610, vec![span(4, 0)]),
+                window(600, vec![span(4, 0)]),
+            ),
+            (
+                "a span ended between the readings: it ends now",
+                window(600, vec![span(30, 0)]),
+                window(610, vec![span(40, 5)]),
+                window(600, vec![span(30, 0), span(40, 0)]),
+            ),
+            (
+                "the clock was set back 60 s: the shorter `ran`, and before's spans kept",
+                window(600, vec![span(120, 90)]),
+                window(540, vec![span(60, 30)]),
+                window(540, vec![span(120, 90), span(60, 30)]),
+            ),
+        ];
+        for (why, before, after, combined) in cases {
+            assert_eq!(between(before, after), combined, "{why}");
+        }
     }
 
     /// An engine command still running spares everything born since it
