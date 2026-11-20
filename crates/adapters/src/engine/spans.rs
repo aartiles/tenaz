@@ -88,3 +88,21 @@ impl Drop for EngineSpan {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A command still running ends now: what it starts until the sweep
+    /// is spared.
+    #[test]
+    fn a_span_still_running_ends_now() {
+        let spans = EngineSpans::default();
+        let _running = spans.begin();
+        let ages = spans.ages();
+        assert_eq!(ages.len(), 1);
+        assert_eq!(ages[0].ended, Duration::ZERO);
+        assert!(ages[0].began < Duration::from_secs(1), "{ages:?}");
+        assert!(spans.ran()[0].ended.is_none());
+    }
+}

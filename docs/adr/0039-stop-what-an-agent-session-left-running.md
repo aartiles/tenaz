@@ -126,7 +126,15 @@ the engine.
 - On macOS `ps` ages come from the wall clock, so a clock set back or
   forward moves the window and the spans with the processes. Linux
   `procps` counts them from boot: there a clock step of more than the
-  slack during a session moves the spans off the engine.
+  slack during a session moves the spans off the engine, and a step
+  forward widens the window, so a detached process from the project
+  born that much before the session may be stopped. Reading the boot
+  clock (`/proc/uptime`, as `procps` does) would avoid it on Linux;
+  Tenaz does not yet, to keep one clock on both systems.
+- An ACP agent is killed as its session closes, not waited for. If it
+  has not exited by the time `ps` reads the table, what it left still
+  has a parent and is missed; no later sweep takes it, as it was born
+  before that sweep's window.
 - A run killed by a signal Tenaz does not handle, or one that crashes,
   sweeps nothing after its last session.
 - Tested with the scripted process table; with a real detached process

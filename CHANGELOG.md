@@ -17,7 +17,7 @@ uses [Semantic Versioning](https://semver.org/).
 ### Added
 
 - When an agent session ends (any role, any harness, settled, aborted or
-  failed), Tenaz stops what it left running in a session of its own from
+  failed), Tenaz stops what it left running detached (`setsid`) from
   inside the project, with the rules it already used after `verify`. A
   reviewer in a run of 2026-11-19 left nine `vite preview` servers on
   ports 4173 and up, alive hours later. What Tenaz's own engine commands

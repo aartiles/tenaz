@@ -232,31 +232,45 @@ mod tests {
     }
 
     /// Opens a session of `harness` in `project` and closes it, if it
-    /// opened.
-    async fn run_session(harness: &SweptHarness, project: &Path) {
-        if let Ok(mut session) = harness.open(spec(project)).await {
-            session.close(Duration::ZERO).await;
-        }
+    /// opened; whether it did.
+    async fn run_session(harness: &SweptHarness, project: &Path) -> Result<(), HarnessError> {
+        let mut session = harness.open(spec(project)).await?;
+        session.close(Duration::ZERO).await;
+        Ok(())
+    }
+
+    /// Whether the server whose pid is in `pidfile` is gone.
+    fn gone(pidfile: &Path) -> bool {
+        let server = KillOnDrop::read(pidfile);
+        gone_within(server.pid(), Duration::from_secs(5))
     }
 
     /// The reviewer of the 2026-11-19 run started `npx vite preview`
     /// detached from its shell tool and never stopped it: here a detached
     /// `sleep`, started from the project during the session, is gone once
-    /// the session is closed; and once a harness that started it failed
-    /// to open the session.
+    /// the session is closed.
     #[tokio::test]
-    async fn stops_what_a_session_left_in_a_session_of_its_own() {
-        for fails in [false, true] {
-            let project = tempfile::tempdir().unwrap();
-            let (shell, pidfile) = server(project.path(), fails);
-            let harness = SweptHarness::new(shell, EngineSpans::default());
-            run_session(&harness, project.path()).await;
-            let server = KillOnDrop::read(&pidfile);
-            assert!(
-                gone_within(server.pid(), Duration::from_secs(5)),
-                "the server the session left still runs (open fails: {fails})"
-            );
-        }
+    async fn stops_what_a_closed_session_left() {
+        let project = tempfile::tempdir().unwrap();
+        let (shell, pidfile) = server(project.path(), false);
+        let harness = SweptHarness::new(shell, EngineSpans::default());
+        run_session(&harness, project.path()).await.unwrap();
+        assert!(gone(&pidfile), "the server the session left still runs");
+    }
+
+    /// A harness that started the server and then failed to open the
+    /// session gives its error, and the server is gone all the same.
+    #[tokio::test]
+    async fn stops_what_a_session_that_failed_to_open_left() {
+        let project = tempfile::tempdir().unwrap();
+        let (shell, pidfile) = server(project.path(), true);
+        let harness = SweptHarness::new(shell, EngineSpans::default());
+        let opened = run_session(&harness, project.path()).await;
+        assert!(gone(&pidfile), "the server the session left still runs");
+        assert!(
+            matches!(opened, Err(HarnessError::Protocol(_))),
+            "{opened:?}"
+        );
     }
 
     /// An engine command that ended before the server was born, by more
@@ -269,12 +283,8 @@ mod tests {
         let now = SystemTime::now();
         spans.noted(now - Duration::from_secs(20), now - Duration::from_secs(18));
         let harness = SweptHarness::new(shell, spans);
-        run_session(&harness, project.path()).await;
-        let server = KillOnDrop::read(&pidfile);
-        assert!(
-            gone_within(server.pid(), Duration::from_secs(5)),
-            "the server was spared with the engine"
-        );
+        run_session(&harness, project.path()).await.unwrap();
+        assert!(gone(&pidfile), "the server was spared with the engine");
     }
 
     /// The engine Tenaz restarts during a session may detach from the

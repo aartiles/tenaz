@@ -227,18 +227,22 @@ mod tests {
         .with_spans(spans.clone())
     }
 
-    /// A start is noted with its wait for the model: the span ends after
-    /// the model serves, not when the command returns. What the engine
-    /// starts in that time is spared by the sweep after a session
-    /// (ADR 0039).
+    /// A start is noted from before its command runs to after the model
+    /// serves, not only while the command runs. What the engine starts in
+    /// that time is spared by the sweep after a session (ADR 0039).
     #[tokio::test]
-    async fn a_start_is_noted_until_the_model_serves() {
+    async fn a_start_is_noted_from_its_command_until_the_model_serves() {
         let (port, asked) = serving_on_the_second_listing().await;
         let spans = EngineSpans::default();
-        noted(port, "true", &spans).load("m").await.unwrap();
+        noted(port, "sleep 0.3", &spans).load("m").await.unwrap();
         let ran = spans.ran();
         let first_listing = asked.lock().unwrap().expect("listed");
         assert_eq!(ran.len(), 1);
+        let command = first_listing.duration_since(ran[0].began);
+        assert!(
+            command.is_ok_and(|took| took >= Duration::from_millis(300)),
+            "the span began after the command: {ran:?}"
+        );
         assert!(
             ran[0].ended.is_some_and(|ended| ended > first_listing),
             "the span ended before the model served: {ran:?}"

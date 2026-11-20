@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, try_run};
-use crate::orchestrator::RunOptions;
+use crate::orchestrator::{RunError, RunOptions};
 use crate::ports::{
     Harness, HarnessError, HarnessInfo, PermissionDecision, Session, SessionExit, SessionSpec,
 };
@@ -93,11 +93,10 @@ async fn a_session_that_fails_is_closed() {
         RunOptions::default(),
     )
     .await;
-    assert!(ended.is_err(), "the run went on: {ended:?}");
-    let closed = closed.lock().unwrap().clone();
-    assert_eq!(
-        closed.len(),
-        1,
-        "the failed session was not closed: {closed:?}"
+    assert!(
+        matches!(ended, Err(RunError::Harness(HarnessError::Closed))),
+        "{ended:?}"
     );
+    let closed = closed.lock().unwrap().clone();
+    assert_eq!(closed.len(), 1, "the failed session was not closed");
 }
