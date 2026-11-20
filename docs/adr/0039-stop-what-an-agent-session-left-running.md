@@ -142,5 +142,5 @@ the engine.
   sweep), and by a harness that then failed to open; with one started
   while an engine span is open (it stays; it is stopped without the
   span), and one started after a span that ended earlier (it is
-  stopped). Run on macOS; not yet in CI on Linux. Not yet seen in a
-  real run.
+  stopped). They pass on macOS and in CI on Ubuntu (`ubuntu-latest`).
+  Not yet seen in a real run.

@@ -198,8 +198,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   last session of a run killed by a signal Tenaz does not handle.
   Busybox `ps` (Alpine) does not take the columns Tenaz asks for; there
   nothing is stopped. Tested with a detached `sleep` (through `perl`'s
-  `setsid`) on macOS and in CI on Ubuntu, for an agent session with a
-  test harness on macOS, not yet in CI; not yet seen in a real run, nor
+  `setsid`) on macOS and in CI on Ubuntu, also for an agent session
+  with a test harness; not yet seen in a real run, nor
   with `npx vite preview` (the 2026-11-19 reviewer that left nine of
   them ran before this sweep), nor with a real engine restarted during a
   session, nor on a Linux desktop with a `systemd --user` subreaper.
