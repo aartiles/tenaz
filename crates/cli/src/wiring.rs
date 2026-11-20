@@ -11,6 +11,7 @@ use tenaz_acp::{EngineObservation, McpEndpoint, stop_reason_for_finish};
 use tenaz_adapters::clock::SystemClock;
 use tenaz_adapters::engine::generic::{Commands, GenericEngine};
 use tenaz_adapters::engine::load_api::LoadApiEngine;
+use tenaz_adapters::engine::spans::EngineSpans;
 use tenaz_adapters::git::GitRepo;
 use tenaz_adapters::job::JobProcess;
 use tenaz_adapters::media::comfyui::ComfyUi;
@@ -20,6 +21,7 @@ use tenaz_adapters::metrics::PrometheusMetrics;
 use tenaz_adapters::notify::DesktopNotifier;
 use tenaz_adapters::probe_macos::MacMemoryProbe;
 use tenaz_adapters::sandbox::{Guard, GuardedHarness, GuardedJobs, GuardedVerify, Policy};
+use tenaz_adapters::swept::SweptHarness;
 use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::cache_report::CacheReport;
 use tenaz_core::effort::EffortDial;
@@ -301,6 +303,28 @@ fn mcp_endpoints(media_url: Option<String>, own: &BTreeMap<String, String>) -> V
         .collect()
 }
 
+/// The engine adapter `kind` names, at `base_url`; a generic engine notes
+/// when its commands run in `spans`.
+fn engine_adapter(
+    kind: &EngineChoice,
+    base_url: &str,
+    spans: &EngineSpans,
+) -> Arc<dyn EngineAdapter> {
+    match kind {
+        EngineChoice::LoadApi => Arc::new(LoadApiEngine::new(base_url)),
+        EngineChoice::Generic { start, stop } => {
+            let commands = Commands {
+                start: start.as_deref().map(split_command),
+                stop: stop.as_deref().map(split_command),
+            };
+            Arc::new(
+                GenericEngine::new("generic", base_url, commands, Duration::from_mins(20))
+                    .with_spans(spans.clone()),
+            )
+        }
+    }
+}
+
 /// Builds everything a run needs.
 pub async fn wire(
     project: &Project,
@@ -316,21 +340,11 @@ pub async fn wire(
         .base_url
         .clone()
         .context("the ledger has no engine base URL")?;
-    let engine_adapter: Arc<dyn EngineAdapter> = match &engine.kind {
-        EngineChoice::LoadApi => Arc::new(LoadApiEngine::new(&base_url)),
-        EngineChoice::Generic { start, stop } => {
-            let commands = Commands {
-                start: start.as_deref().map(split_command),
-                stop: stop.as_deref().map(split_command),
-            };
-            Arc::new(GenericEngine::new(
-                "generic",
-                &base_url,
-                commands,
-                Duration::from_mins(20),
-            ))
-        }
-    };
+    // When Tenaz's own engine commands ran: a session's sweep spares what
+    // they started (ADR 0039). The engine and the swept harness below must
+    // share this one record, or a restarted engine is stopped.
+    let engine_spans = EngineSpans::default();
+    let engine_adapter = engine_adapter(&engine.kind, &base_url, &engine_spans);
     let gate = Gate::new();
     let lease = lease_over(project, engine_adapter.clone(), config, &gate);
     let mut lease = swapping(lease, engine.swap)?;
@@ -391,6 +405,13 @@ pub async fn wire(
     if let Some(sandbox) = sandbox {
         harness = Arc::new(GuardedHarness::new(harness, sandbox.guard));
     }
+    // What a session leaves running is stopped after it (ADR 0039). Not
+    // with the fake harness, which starts nothing: `tenaz demo` and the
+    // tests run no `ps` or `lsof` after each of its sessions.
+    let real = config.harness != HarnessKind::Fake;
+    if real {
+        harness = Arc::new(SweptHarness::new(harness, engine_spans));
+    }
     let port = reqwest_url(&base_url)?.2;
     let deps = Deps {
         harness,
@@ -399,8 +420,8 @@ pub async fn wire(
         jobs,
         clock: Arc::new(SystemClock::new()),
         notifier: Arc::new(notifier(project)),
-        engine: (config.harness != HarnessKind::Fake).then_some(engine_adapter),
-        lease: (config.harness != HarnessKind::Fake).then_some(lease),
+        engine: real.then_some(engine_adapter),
+        lease: real.then_some(lease),
         engine_metrics: PrometheusMetrics::from_base_url(&base_url)
             .map(|m| Arc::new(m) as Arc<dyn tenaz_core::ports::EngineMetricsSource>),
         memory: cfg!(target_os = "macos").then(|| {

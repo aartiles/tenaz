@@ -1,14 +1,17 @@
 //! What `verify` and heavy jobs share when Tenaz starts them: the command
 //! as a model would see it run, in a process group of its own, and the
 //! group killed when it ends, with what the command left running outside
-//! it (ADR 0031).
+//! it (ADR 0031). Agent sessions share the search for what was left
+//! (ADR 0039).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
-use tenaz_core::leftover::{self, ProcessRow, Started};
+use tenaz_core::leftover::{self, ProcessRow, Started, Window};
 use tenaz_core::ports::ProcessTable;
+
+use crate::engine::spans::{EngineSpans, ago};
 
 /// `program args` through `wrapper` (the sandbox launcher, or nothing),
 /// from `root`, with `CI=1` and `NO_COLOR=1`, no stdin, in a process group
@@ -41,7 +44,7 @@ pub(crate) struct Spawned {
     child: tokio::process::Child,
     group: Option<u32>,
     root: PathBuf,
-    at: Instant,
+    at: SystemTime,
 }
 
 impl Spawned {
@@ -60,7 +63,7 @@ pub(crate) fn spawn(command: &mut tokio::process::Command) -> std::io::Result<Sp
         .get_current_dir()
         .map(Path::to_path_buf)
         .ok_or_else(|| std::io::Error::other("no working directory to run from"))?;
-    let at = Instant::now();
+    let at = SystemTime::now();
     let child = command.spawn()?;
     Ok(Spawned {
         group: child.id(),
@@ -82,37 +85,67 @@ pub(crate) async fn reap(spawned: &mut Spawned) {
     let _ = spawned.child.kill().await;
     let Some(group) = spawned.group else { return };
     kill_group(group).await;
-    let (root, at) = (spawned.root.clone(), spawned.at);
+    let left = Left {
+        root: spawned.root.clone(),
+        at: spawned.at,
+        group: Some(group),
+        spared: None,
+    };
+    sweep(left, "a command").await;
+}
+
+/// What a command or a session may have left: what was born since `at`
+/// from `root`, in a session of its own, with `group` the command's
+/// process group, except what was born while one of the engine
+/// commands in `spared` ran (ADR 0039).
+///
+/// Times are the wall clock's, as `ps` ages are: `Instant` stops while
+/// the machine sleeps, and a span read from it would drift away from the
+/// engine it spares.
+pub(crate) struct Left {
+    pub(crate) root: PathBuf,
+    pub(crate) at: SystemTime,
+    pub(crate) group: Option<u32>,
+    pub(crate) spared: Option<EngineSpans>,
+}
+
+/// Stops what `left` names, giving up after [`SWEEP_LIMIT`], and logs the
+/// pids it stopped as left by `who`.
+pub(crate) async fn sweep(left: Left, who: &str) {
     let table = SystemProcesses {
         until: Instant::now() + SWEEP_LIMIT,
     };
     let swept = tokio::task::spawn_blocking(move || {
-        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        let root = std::fs::canonicalize(&left.root).unwrap_or(left.root);
         let started = Started {
             own: std::process::id(),
-            group,
+            group: left.group,
             root: &root,
         };
-        let swept = leftover::sweep(&table, &started, || at.elapsed());
+        let swept = leftover::sweep(&table, &started, || Window {
+            ran: ago(left.at),
+            spared: left
+                .spared
+                .as_ref()
+                .map(EngineSpans::ages)
+                .unwrap_or_default(),
+        });
         (swept, table.out_of_time())
     })
     .await;
     let (swept, late) = match swept {
         Ok(found) => found,
         Err(error) => {
-            tracing::warn!(%error, "the search for what a command left running failed");
+            tracing::warn!(%error, "the search for what {who} left running failed");
             return;
         }
     };
     if !swept.is_empty() {
-        tracing::warn!(
-            pids = ?swept,
-            "stopped processes a command left running outside its process group"
-        );
+        tracing::warn!(pids = ?swept, "stopped processes {who} left running");
     }
     // Also when it stopped some: it may have missed others.
     if late {
-        tracing::warn!("gave up looking for what a command left running");
+        tracing::warn!("gave up looking for what {who} left running");
     }
 }
 

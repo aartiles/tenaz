@@ -3,3 +3,4 @@
 pub mod generic;
 pub mod load_api;
 pub mod openai;
+pub mod spans;

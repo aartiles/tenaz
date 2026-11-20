@@ -3,6 +3,7 @@
 
 mod conflict;
 mod external_bootstrap;
+mod failed_session;
 mod harness_exit;
 mod harness_start;
 mod job;

@@ -16,6 +16,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- When an agent session ends (any role, any harness, settled, aborted or
+  failed), Tenaz stops what it left running detached (`setsid`) from
+  inside the project, with the rules it already used after `verify`. A
+  reviewer in a run of 2026-11-19 left nine `vite preview` servers on
+  ports 4173 and up, alive hours later. What Tenaz's own engine commands
+  started is kept. A daemon you start from inside the project while a
+  run goes (`code .`, a new tmux server, `nohup setsid ...`) is stopped
+  too: start it from elsewhere. See ADR 0039.
 - A session that removes `.tenaz/private/` is named in the journal
   (`private-removed`, with its label) and in `orchestrator.log`, and
   Tenaz writes its prompt file there again. A run whose lock file was

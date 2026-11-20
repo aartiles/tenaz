@@ -183,6 +183,9 @@ the bootstrap, leaving implementation to the local model.
 
 1. `tenaz run --project <dir>` in the background. Do not wait on it in the
    foreground and do not start a second one on the same project.
+   While it runs, do not start background processes (servers, editors,
+   tmux) from inside the project: after each session Tenaz stops what
+   was started there detached, as it does what its agent leaves running.
 2. Check `tenaz status --project <dir> --json` now and then, not in a tight
    loop: sessions take minutes. `state` says `running`, `paused`, `blocked`,
    `interrupted`, `complete` or `complete_with_gaps`.

@@ -168,34 +168,50 @@ above), so a 32k context is the practical floor (`contextFloor`).
   measured; the model, runtime and image backend also differ from the
   historical run.
 
-- **What verify leaves in a session of its own is found by its age,
-  group, parent and directory** (ADR 0031). A process `verify` or a
-  heavy job started is stopped afterwards only if it was born while the
-  command ran, leads a process group of its own, pid 1 or a `systemd`
-  above Tenaz adopted it (or its parent is still in the command's
-  group), it has no terminal, it runs as Tenaz's user, it is not `git`,
-  and its working directory is inside the project, at any depth. Missed: one that changed directory to outside
-  the project; on Linux one adopted by a subreaper with another name;
-  everything when Tenaz runs as pid 1 (a container). Stopped with
-  everything under it, though Tenaz did not start it: a daemon (`code
-  .`, a new tmux server, `nohup setsid ...`) that the user or the agent
-  driving Tenaz starts from inside the project, a nested worktree
-  included, while a `verify` or a heavy job runs. Only Tenaz's stderr
-  names the pids stopped, not the journal. `./verify` the agent runs in its own shell is not
-  covered. Busybox `ps` (Alpine) does not take the columns Tenaz asks
-  for; there nothing is stopped. Tested with a detached `sleep`
-  (through `perl`'s `setsid`) on macOS and in CI on Ubuntu; not yet seen
-  in a real run, nor with `npx vite preview`, nor on a Linux desktop
-  with a `systemd --user` subreaper. Never stopped: Tenaz or a process
-  above it. In the Hardball 3D run (2026-11-13) a supervisor started
-  Tenaz detached, from the project, and Tenaz, resumed straight into a
-  review, ran `verify` a moment later: the supervisor looked left
-  behind, and stopping it and everything under it stopped Tenaz too,
-  with no exit code. Tested with a process table modelled on that case;
-  not yet seen in a real run since. Still stopped: another process a
-  launcher starts from the project in a session of its own, beside
-  Tenaz rather than above it, in the same second as Tenaz's first
-  `verify`.
+- **What verify or an agent session leaves in a session of its own is
+  found by its age, group, parent and directory** (ADR 0031, ADR 0039).
+  A process `verify`, a heavy job or an agent session started is
+  stopped afterwards only if it was born while the command or the
+  session ran, leads a process group of its own, pid 1 or a `systemd`
+  above Tenaz adopted it (or, for `verify` and heavy jobs, its parent
+  is still in the command's group), it has no terminal, it runs as
+  Tenaz's user, it is not `git`, and its working directory is inside
+  the project, at any depth. Missed: one that changed directory to
+  outside the project; on Linux one adopted by a subreaper with
+  another name; everything when Tenaz runs as pid 1 (a container).
+  Stopped with everything under it, though Tenaz did not start it: a
+  daemon (`code .`, a new tmux server, `nohup setsid ...`, and build
+  daemons such as watchman, Gradle's, sccache's or Bazel's server when
+  they start detached) that the user, their editor or the agent driving
+  Tenaz starts from inside the project, a nested worktree included,
+  while a `verify`, a heavy job or an agent session runs. Sessions run
+  back to back, so that is in effect the whole run. Spared: what was
+  born while one of Tenaz's own engine commands (`--engine-start`,
+  `--engine-stop`) ran or waited for the model, as the engine they start
+  may detach while still in the project directory `tenaz run` was
+  started from; so is what an agent leaves in that time. On Linux a
+  clock step of more than 5 seconds during a session can move that span
+  off the engine, and a step forward widens the window by the size of
+  the step (a step back narrows it, and misses what was left early), as
+  `ps` counts ages from boot there. Only Tenaz's stderr names the pids
+  stopped (and the session), not the journal. Nothing is swept after the
+  last session of a run killed by a signal Tenaz does not handle.
+  Busybox `ps` (Alpine) does not take the columns Tenaz asks for; there
+  nothing is stopped. Tested with a detached `sleep` (through `perl`'s
+  `setsid`) on macOS and in CI on Ubuntu, for an agent session with a
+  test harness on macOS, not yet in CI; not yet seen in a real run, nor
+  with `npx vite preview` (the 2026-11-19 reviewer that left nine of
+  them ran before this sweep), nor with a real engine restarted during a
+  session, nor on a Linux desktop with a `systemd --user` subreaper.
+  Never stopped: Tenaz or a process above it. In the Hardball 3D run
+  (2026-11-13) a supervisor started Tenaz detached, from the project,
+  and Tenaz, resumed straight into a review, ran `verify` a moment
+  later: the supervisor looked left behind, and stopping it and
+  everything under it stopped Tenaz too, with no exit code. Tested with
+  a process table modelled on that case; not yet seen in a real run
+  since. Still stopped: another process a launcher starts from the
+  project in a session of its own, beside Tenaz rather than above it, in
+  the same second as Tenaz's first `verify`.
 
 - **Shell reads count for the idle rule from text alone** (ADR 0029). The
   words of a command that look like paths are taken without a shell

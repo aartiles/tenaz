@@ -101,6 +101,8 @@ dependency.
   needs one to wrap around in that time.
 - `./verify` the agent runs in its own shell is not covered: Tenaz does
   not start it, and its leftovers are older than any later window.
+  (2026-11-20) Covered since by the same search after every agent
+  session (ADR 0039), whose window is the whole session.
 - `crates/adapters/src/verify.rs` has a test with a real detached
   process in the project and one outside it, and `job.rs` one in the
   project; they pass on macOS and in CI on Ubuntu (`ubuntu-latest`).
