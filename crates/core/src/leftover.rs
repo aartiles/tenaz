@@ -1,5 +1,5 @@
-//! What `verify` or a heavy job left running outside the process group
-//! Tenaz kills when it ends (ADR 0031).
+//! What `verify`, a heavy job or an agent session left running outside
+//! what Tenaz kills when it ends (ADR 0031, ADR 0039).
 //!
 //! A check may start a server in a session of its own (Node's
 //! `spawn(..., { detached: true })`, `setsid`) and never stop it. When the
@@ -12,7 +12,9 @@
 //! same user as Tenaz, and its working directory is inside the project.
 //! It is stopped with its descendants. `git` is left alone: `git gc
 //! --auto` detaches the same way, and one killed mid-write leaves its
-//! locks behind.
+//! locks behind. So is what was born while one of Tenaz's own engine
+//! commands ran: the engine they start may detach the same way, from the
+//! project, during an agent session.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -36,17 +38,63 @@ pub struct ProcessRow {
 }
 
 /// A command Tenaz started: from Tenaz's process (`own`), in process
-/// group `group`, from `root`.
+/// group `group`, from `root`. An agent session has none to give: Pi runs
+/// in Tenaz's own group, as the engine Tenaz starts may, and an ACP
+/// agent's group is killed with it before the sweep.
 #[derive(Clone, Debug)]
 pub struct Started<'a> {
     pub own: u32,
-    pub group: u32,
+    pub group: Option<u32>,
     pub root: &'a Path,
+}
+
+/// When things happened, as how long ago, read again for each round.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Window {
+    /// How long ago the command started.
+    pub ran: Duration,
+    /// When Tenaz's own engine commands ran: what was born then is the
+    /// engine's.
+    pub spared: Vec<Span>,
+}
+
+impl Window {
+    /// Since the command started `ran` ago, with nothing spared.
+    #[cfg(test)]
+    fn since(ran: Duration) -> Self {
+        Self {
+            ran,
+            spared: Vec::new(),
+        }
+    }
+
+    /// Whether a process `age` old (rounded down, as `ps` reports it) may
+    /// have been born in one of the spared spans. Each span is widened by
+    /// [`SPAN_SLACK`] on both sides, then to whole seconds: the table is
+    /// read a moment after the window, longer when memory is short, and
+    /// sparing one too many is safe; stopping the engine is not.
+    fn spares(&self, age: Duration) -> bool {
+        self.spared.iter().any(|span| {
+            let newest = span.ended.saturating_sub(SPAN_SLACK).as_secs();
+            newest <= age.as_secs() && age <= round_up(span.began + SPAN_SLACK)
+        })
+    }
+}
+
+/// A span of time, as how long ago it began and ended; one still going
+/// ended zero ago.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Span {
+    pub began: Duration,
+    pub ended: Duration,
 }
 
 /// How many times the table is read again: a process stopped in one round
 /// may have started another just before.
 const ROUNDS: usize = 3;
+
+/// How far a spared span is widened on each side.
+const SPAN_SLACK: Duration = Duration::from_secs(5);
 
 /// The one process name never stopped: `git gc --auto` detaches as a
 /// daemon does, and one killed mid-write leaves its locks behind.
@@ -56,15 +104,16 @@ const NEVER_STOPPED: &str = "git";
 const SUBREAPER: &str = "systemd";
 
 /// Stops what the command in `started` left behind, as long as rounds find
-/// more; the pids it stopped. `ran` says how long ago the command started.
+/// more; the pids it stopped. `window` says when it started, and what is
+/// spared.
 pub fn sweep(
     table: &dyn ProcessTable,
     started: &Started<'_>,
-    ran: impl Fn() -> Duration,
+    window: impl Fn() -> Window,
 ) -> Vec<u32> {
     let mut stopped = BTreeSet::new();
     for _ in 0..ROUNDS {
-        let tree = round(table, started, ran(), &stopped);
+        let tree = round(table, started, &window(), &stopped);
         if tree.is_empty() || !table.kill(&tree) {
             break;
         }
@@ -79,14 +128,14 @@ pub fn sweep(
 fn round(
     table: &dyn ProcessTable,
     started: &Started<'_>,
-    ran: Duration,
+    window: &Window,
     stopped: &BTreeSet<u32>,
 ) -> Vec<u32> {
     let rows = table.list();
     let Some(own) = rows.iter().find(|r| r.pid == started.own) else {
         return Vec::new();
     };
-    let found: Vec<u32> = candidates(&rows, own, started.group, ran)
+    let found: Vec<u32> = candidates(&rows, own, started.group, window)
         .into_iter()
         .filter(|pid| !stopped.contains(pid))
         .collect();
@@ -103,23 +152,30 @@ fn round(
 }
 
 /// The processes that may have been left behind, before their working
-/// directory is known: born within `ran` (rounded up to whole seconds,
-/// as `ps` rounds ages down), detached (see [`detached`]), run by
-/// Tenaz's user, and with a parent that adopts orphans or is in the
-/// command's `group`. `own` is Tenaz's row. Never Tenaz or one of its
-/// ancestors: a supervisor that started Tenaz detached, in the project,
-/// a moment before its first `verify` looks left behind, and stopping it
-/// would stop Tenaz with it.
-fn candidates(rows: &[ProcessRow], own: &ProcessRow, group: u32, ran: Duration) -> Vec<u32> {
+/// directory is known: born within the window's `ran` (rounded up to
+/// whole seconds, as `ps` rounds ages down) and not in one of its spared
+/// spans, detached (see [`detached`]), run by Tenaz's user, and with a
+/// parent that adopts orphans or is in the command's `group`. `own` is
+/// Tenaz's row. Never Tenaz or one of its ancestors: a supervisor that
+/// started Tenaz detached, in the project, a moment before its first
+/// `verify` looks left behind, and stopping it would stop Tenaz with it.
+fn candidates(
+    rows: &[ProcessRow],
+    own: &ProcessRow,
+    group: Option<u32>,
+    window: &Window,
+) -> Vec<u32> {
     let by_pid: HashMap<u32, &ProcessRow> = rows.iter().map(|r| (r.pid, r)).collect();
     let above = ancestors(&by_pid, own);
     let adopters = adopters(&by_pid, &above, own);
     let spared: BTreeSet<u32> = above.iter().copied().chain([own.pid]).collect();
-    let window = Duration::from_secs(ran.as_secs() + u64::from(ran.subsec_nanos() > 0));
-    let in_group = |pid: u32| by_pid.get(&pid).is_some_and(|p| p.pgid == group);
+    let ran = round_up(window.ran);
+    let in_group =
+        |pid: u32| group.is_some_and(|group| by_pid.get(&pid).is_some_and(|p| p.pgid == group));
     rows.iter()
         .filter(|r| {
-            r.age <= window
+            r.age <= ran
+                && !window.spares(r.age)
                 && !spared.contains(&r.pid)
                 && detached(r)
                 && r.uid == own.uid
@@ -127,6 +183,11 @@ fn candidates(rows: &[ProcessRow], own: &ProcessRow, group: u32, ran: Duration) 
         })
         .map(|r| r.pid)
         .collect()
+}
+
+/// `time` rounded up to whole seconds.
+fn round_up(time: Duration) -> Duration {
+    Duration::from_secs(time.as_secs() + u64::from(time.subsec_nanos() > 0))
 }
 
 /// It leads a process group of its own and has no terminal, as a daemon
@@ -293,7 +354,7 @@ mod tests {
     fn started(root: &Path) -> Started<'_> {
         Started {
             own: TENAZ,
-            group: GROUP,
+            group: Some(GROUP),
             root,
         }
     }
@@ -304,7 +365,7 @@ mod tests {
             .iter()
             .find(|r| r.pid == TENAZ)
             .expect("Tenaz is listed");
-        candidates(rows, own, GROUP, ran)
+        candidates(rows, own, Some(GROUP), &Window::since(ran))
     }
 
     fn with(extra: Vec<ProcessRow>) -> Vec<ProcessRow> {
@@ -314,7 +375,7 @@ mod tests {
     }
 
     fn sweep_p(table: &ScriptedProcesses) -> Vec<u32> {
-        sweep(table, &started(Path::new("/p")), || RAN)
+        sweep(table, &started(Path::new("/p")), || Window::since(RAN))
     }
 
     #[test]
@@ -462,7 +523,114 @@ mod tests {
             },
             row(800, 1, 800, 1),
         ];
-        assert!(candidates(&rows, &rows[0], GROUP, RAN).is_empty());
+        assert!(candidates(&rows, &rows[0], Some(GROUP), &Window::since(RAN)).is_empty());
+    }
+
+    /// An agent session's window, with Tenaz's engine commands that ran
+    /// `spans` ago (began, ended), in seconds.
+    fn session(ran: u64, spans: &[(u64, u64)]) -> Window {
+        Window {
+            ran: Duration::from_secs(ran),
+            spared: spans
+                .iter()
+                .map(|&(began, ended)| Span {
+                    began: Duration::from_secs(began),
+                    ended: Duration::from_secs(ended),
+                })
+                .collect(),
+        }
+    }
+
+    /// A session has no group of its own: the harness runs in Tenaz's.
+    /// What a process of that group starts detached is not taken for left
+    /// behind while its parent lives (the engine Tenaz started may be
+    /// one); what pid 1 adopted is.
+    #[test]
+    fn without_a_group_only_what_was_adopted_is_a_candidate() {
+        let rows = with(vec![
+            row(600, TENAZ, TENAZ, 300),
+            row(810, 600, 810, 30),
+            row(800, 1, 800, 30),
+        ]);
+        let own = rows.iter().find(|r| r.pid == TENAZ).unwrap();
+        assert_eq!(candidates(&rows, own, None, &session(600, &[])), vec![800]);
+    }
+
+    /// The engine Tenaz restarted mid-session, detached and from the
+    /// project, as `setsid nohup splash serve` in an `--engine-start`
+    /// script run from inside it: born while the start command ran (from
+    /// 120 s to 90 s ago), it is spared, and so is what was born within
+    /// [`SPAN_SLACK`] of it; the agent's server, born 30 s ago, is not.
+    #[test]
+    fn what_was_born_while_an_engine_command_ran_is_spared() {
+        let rows = with(vec![
+            row(800, 1, 800, 30),
+            row(900, 1, 900, 100),
+            row(901, 1, 901, 125),
+            row(902, 1, 902, 85),
+        ]);
+        let own = rows.iter().find(|r| r.pid == TENAZ).unwrap();
+        let window = session(600, &[(120, 90)]);
+        assert_eq!(candidates(&rows, own, None, &window), vec![800]);
+    }
+
+    /// The span is widened by [`SPAN_SLACK`], then outward to whole
+    /// seconds: one from 120.4 s to 90.7 s ago spares ages 85 to 126, not
+    /// 84 or 127. So `ps`, read seconds after the window on a machine
+    /// short of memory, still finds the engine inside.
+    #[test]
+    fn a_spared_span_is_widened_by_the_slack_and_to_whole_seconds() {
+        let rows = with(vec![
+            row(800, 1, 800, 84),
+            row(801, 1, 801, 85),
+            row(802, 1, 802, 126),
+            row(803, 1, 803, 127),
+        ]);
+        let own = rows.iter().find(|r| r.pid == TENAZ).unwrap();
+        let window = Window {
+            ran: Duration::from_secs(600),
+            spared: vec![Span {
+                began: Duration::from_millis(120_400),
+                ended: Duration::from_millis(90_700),
+            }],
+        };
+        assert_eq!(candidates(&rows, own, None, &window), vec![800, 803]);
+    }
+
+    /// An engine command still running spares everything born since it
+    /// began.
+    #[test]
+    fn an_engine_command_still_running_spares_what_it_started_so_far() {
+        let rows = with(vec![row(800, 1, 800, 0), row(801, 1, 801, 40)]);
+        let own = rows.iter().find(|r| r.pid == TENAZ).unwrap();
+        let window = session(600, &[(10, 0)]);
+        assert_eq!(candidates(&rows, own, None, &window), vec![801]);
+    }
+
+    /// The whole session, through the table: the agent's `vite preview`
+    /// and the `node` under it go, and the engine restarted mid-session
+    /// from the project stays, with its child.
+    #[test]
+    fn a_session_sweep_stops_the_agents_server_and_keeps_the_engine() {
+        let rows = with(vec![
+            row(600, TENAZ, TENAZ, 500),
+            row(800, 1, 800, 30),
+            row(801, 800, 800, 30),
+            row(900, 1, 900, 100),
+            row(901, 900, 900, 99),
+        ]);
+        let table = ScriptedProcesses::new(vec![rows])
+            .cwd(600, "/p")
+            .cwd(800, "/p")
+            .cwd(900, "/p");
+        let started = Started {
+            own: TENAZ,
+            group: None,
+            root: Path::new("/p"),
+        };
+        let swept = sweep(&table, &started, || session(600, &[(120, 90)]));
+        assert_eq!(swept, vec![800, 801]);
+        assert_eq!(table.killed(), vec![vec![800, 801]]);
     }
 
     /// `ps` rounds ages down: after 4.0 s an age of 4 counts and 5 does

@@ -183,7 +183,10 @@ impl Runner {
             kill_at: None,
             resume: None,
         };
-        session.run().await?;
+        if let Err(error) = session.run().await {
+            session.close_after_failure().await;
+            return Err(error);
+        }
         Ok(session.finish(stderr_log.as_deref()).await)
     }
 }
@@ -507,6 +510,13 @@ impl SessionLoop<'_> {
                 }
             }
         }
+    }
+
+    /// Closes the session at once after it failed. Closed rather than
+    /// dropped: a harness that cleans up after its sessions (ADR 0039)
+    /// does so on this path too.
+    async fn close_after_failure(mut self) {
+        self.session.close(Duration::ZERO).await;
     }
 
     /// Closes the session (at once when its kill time passed) and gives its

@@ -265,6 +265,11 @@ it best; a run takes hours.
    ```
 
    It probes the engine, then works until the goal is met or a task blocks.
+   Do not start background processes from inside the project while it
+   runs: after each session Tenaz stops what was started there in a
+   session of its own (`code .`, a new tmux server, `nohup setsid ...`),
+   as it does what the agent leaves running
+   ([ADR 0039](docs/adr/0039-stop-what-an-agent-session-left-running.md)).
 
 3. From another terminal, check on it:
 

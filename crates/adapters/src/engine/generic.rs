@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use tenaz_core::ports::{EngineAdapter, EngineError, ModelState, serves};
 
 use super::openai::{list_models, wait_for_model};
+use super::spans::EngineSpans;
 
 /// How to start and stop the engine process.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -44,6 +45,9 @@ pub struct GenericEngine {
     /// How long a load may take (cold weights from SSD).
     load_wait: Duration,
     client: reqwest::Client,
+    /// Where each start or stop, with its wait, is noted: what the engine
+    /// starts then is spared by the sweep after a session (ADR 0039).
+    spans: EngineSpans,
 }
 
 impl GenericEngine {
@@ -59,11 +63,21 @@ impl GenericEngine {
             commands,
             load_wait,
             client: crate::http::local_client(),
+            spans: EngineSpans::default(),
         }
     }
 
+    /// Notes each start and stop, with its wait, in `spans`.
+    #[must_use]
+    pub fn with_spans(mut self, spans: EngineSpans) -> Self {
+        self.spans = spans;
+        self
+    }
+
     /// Runs the start or stop command, then waits for each of `models` to
-    /// serve, or to be gone, all within the one wait.
+    /// serve, or to be gone, all within the one wait, noted as one span.
+    /// The span ends if this is dropped while the command still runs: no
+    /// caller cancels a load or an unload.
     async fn step(&self, step: Step, models: &[String]) -> Result<(), EngineError> {
         let (command, what, wait) = match step {
             Step::Start => (self.commands.start.as_ref(), "start", self.load_wait),
@@ -72,6 +86,7 @@ impl GenericEngine {
         let command = command.ok_or_else(|| {
             EngineError::Refused(format!("no {what} command configured for this engine"))
         })?;
+        let _running = self.spans.begin();
         Self::run(command).await?;
         let deadline = Instant::now() + wait;
         for id in models {
@@ -165,9 +180,81 @@ impl EngineAdapter for GenericEngine {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::SystemTime;
+
     use axum::response::IntoResponse as _;
 
     use super::*;
+
+    /// A server at `/v1/models` that lists nothing the first time, then
+    /// `m`; and when it was first asked.
+    async fn serving_on_the_second_listing() -> (u16, Arc<Mutex<Option<SystemTime>>>) {
+        let asked: Arc<Mutex<Option<SystemTime>>> = Arc::default();
+        let app = axum::Router::new().route(
+            "/v1/models",
+            axum::routing::get({
+                let asked = asked.clone();
+                move || async move {
+                    let mut asked = asked.lock().unwrap();
+                    let data = if asked.is_some() {
+                        serde_json::json!([{"id": "m"}])
+                    } else {
+                        *asked = Some(SystemTime::now());
+                        serde_json::json!([])
+                    };
+                    axum::Json(serde_json::json!({ "data": data }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (port, asked)
+    }
+
+    /// An engine on `port` whose start runs `start`, noted in `spans`.
+    fn noted(port: u16, start: &str, spans: &EngineSpans) -> GenericEngine {
+        GenericEngine::new(
+            "generic",
+            format!("http://127.0.0.1:{port}/v1"),
+            Commands {
+                start: Some(vec!["sh".into(), "-c".into(), start.into()]),
+                stop: None,
+            },
+            Duration::from_secs(5),
+        )
+        .with_spans(spans.clone())
+    }
+
+    /// A start is noted with its wait for the model: the span ends after
+    /// the model serves, not when the command returns. What the engine
+    /// starts in that time is spared by the sweep after a session
+    /// (ADR 0039).
+    #[tokio::test]
+    async fn a_start_is_noted_until_the_model_serves() {
+        let (port, asked) = serving_on_the_second_listing().await;
+        let spans = EngineSpans::default();
+        noted(port, "true", &spans).load("m").await.unwrap();
+        let ran = spans.ran();
+        let first_listing = asked.lock().unwrap().expect("listed");
+        assert_eq!(ran.len(), 1);
+        assert!(
+            ran[0].ended.is_some_and(|ended| ended > first_listing),
+            "the span ended before the model served: {ran:?}"
+        );
+    }
+
+    /// A start that fails ends its span too.
+    #[tokio::test]
+    async fn a_failed_start_ends_its_span() {
+        let (port, _) = serving_on_the_second_listing().await;
+        let spans = EngineSpans::default();
+        noted(port, "exit 1", &spans).load("m").await.unwrap_err();
+        let ran = spans.ran();
+        assert_eq!(ran.len(), 1);
+        assert!(ran[0].ended.is_some(), "{ran:?}");
+    }
 
     #[tokio::test]
     async fn load_runs_the_command_then_waits_for_the_model() {
