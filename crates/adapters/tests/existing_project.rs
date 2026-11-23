@@ -136,7 +136,9 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
 
     let brief = work.path().join("goal.md");
     std::fs::write(&brief, "# Goal\n\nAdd a flag.\n").unwrap();
-    let project = Project::new(&root);
+    // As the CLI sets it: the private folder in the git directory (ADR 0040).
+    let git_dir = GitRepo::new(&root).git_dir().unwrap();
+    let project = Project::new(&root).with_private_dir(tenaz_core::project::private_in(&git_dir));
     let templates =
         Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();
     let params = params();
@@ -184,11 +186,21 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
         })
         .await
         .unwrap();
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert_eq!(
         project.load_ledger().unwrap().phase,
         Phase::Complete,
         "run did not complete:\n{log}"
     );
     assert_after_the_run(&project);
+    assert_private_out_of_reach(&project, &git_dir, &log);
+}
+
+/// The run's log is in the git directory, and a `git clean -fdx` of the
+/// project, as an agent cleaning it runs, leaves it (ADR 0040).
+fn assert_private_out_of_reach(project: &Project, git_dir: &Path, log: &str) {
+    assert!(project.private_dir().starts_with(git_dir));
+    assert!(!project.exists(".tenaz/private/orchestrator.log"));
+    git(project.root(), &["clean", "-fdxq"]);
+    assert_eq!(project.read_private("orchestrator.log").unwrap(), log);
 }

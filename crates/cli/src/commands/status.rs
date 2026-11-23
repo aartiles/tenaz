@@ -9,7 +9,7 @@ use crate::worktree;
 
 /// `tenaz status`: the run's state as text, or as one JSON object.
 pub(crate) fn execute(project: PathBuf, json: bool) -> anyhow::Result<()> {
-    let project = Project::new(project);
+    let project = super::with_private(Project::new(project));
     if json {
         return print_json(&project);
     }

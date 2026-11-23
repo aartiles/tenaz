@@ -498,6 +498,13 @@ fn init_at(
         runner_version: runner_version(),
     };
     let mut ledger = init(&project, &vcs, &clock, &templates(), options)?;
+    match super::set_aside_private(project.root()) {
+        Ok(Some(aside)) => println!("An earlier run's private folder is now {}", aside.display()),
+        Ok(None) => {}
+        Err(error) => eprintln!(
+            "warning: the earlier run's private folder was not set aside ({error}); this run will add to it"
+        ),
+    }
     if let Some(mut origin) = placement_origin(placement) {
         origin.init_commit.clone_from(&ledger.checkpoint);
         ledger.origin = Some(origin);

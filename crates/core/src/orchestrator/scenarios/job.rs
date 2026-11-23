@@ -63,7 +63,7 @@ async fn play(
     );
     deps.jobs = jobs;
     run(project, deps, CancellationToken::new()).await;
-    project.read(".tenaz/private/orchestrator.log").unwrap()
+    project.read_private("orchestrator.log").unwrap()
 }
 
 /// Plays the fake goal with T002's first builder declaring a job whose
@@ -424,7 +424,7 @@ async fn a_builder_rerun_after_the_engine_ran_out_of_memory_is_told_to_declare_a
         Arc::new(VirtualClock::new()),
     );
     run(&project, deps, CancellationToken::new()).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert_eq!(
         project.load_ledger().unwrap().phase,
         Phase::Complete,
@@ -577,7 +577,7 @@ async fn under_lease_with(
     deps.lease = Some(lease);
     deps.jobs = Arc::new(ScriptedJobs::taking(JOB_TAKES));
     run(&project, deps, stop).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     let seen = harness.seen.lock().unwrap().clone();
     (work, project, log, seen)
 }
@@ -766,7 +766,7 @@ async fn a_job_file_a_paused_session_wrote_runs_on_resume() {
         Arc::new(VirtualClock::new()),
     );
     run(&project, deps, stop).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert!(project.read_if(".tenaz/jobs/T002.json").is_some(), "{log}");
 
     let jobs = Arc::new(ScriptedJobs::default());

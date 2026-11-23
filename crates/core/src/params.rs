@@ -137,7 +137,7 @@ pub struct RunParams {
     pub agent_skills: bool,
     /// The engine proxy parses back tool-call arguments the engine sent as
     /// JSON text where the tool's schema accepts only an object, and logs
-    /// each repair in `.tenaz/private/tool-repairs.jsonl`.
+    /// each repair in `tool-repairs.jsonl` in the private folder.
     pub repair_tool_args: bool,
     /// The engine proxy sends the reasoning of every earlier assistant
     /// message. Off, it removes it as `past_reasoning_tokens` says

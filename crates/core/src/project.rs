@@ -1,6 +1,7 @@
 //! The project on disk: `verify` and everything Tenaz keeps under `.tenaz/`
-//! (the brief, the protocol, the role prompts and the run's state). Outside
-//! `.tenaz/` Tenaz writes only what the sessions build.
+//! (the brief, the protocol, the role prompts and the run's state), and the
+//! run's private folder, which a run keeps in the git directory (ADR 0040).
+//! Outside `.tenaz/` Tenaz writes only what the sessions build.
 
 use std::fs;
 use std::io;
@@ -23,12 +24,67 @@ pub const PROTOCOL: &str = ".tenaz/protocol.md";
 pub const GITIGNORE: &str = ".tenaz/.gitignore";
 /// The run's ledger: the pinned setup and where the run is.
 pub const LEDGER: &str = ".tenaz/run.json";
-/// The file a run holds a lock on while it works.
-pub const RUN_LOCK: &str = ".tenaz/private/run.lock";
+/// The agent's scratch folder, out of git: temporary files, contact sheets
+/// and media outputs. Before ADR 0040 it was also the private folder.
+pub const SCRATCH: &str = ".tenaz/private";
+/// The file a run holds a lock on while it works, in the private folder.
+pub const RUN_LOCK: &str = "run.lock";
+/// The run log, in the private folder.
+pub const ORCHESTRATOR_LOG: &str = "orchestrator.log";
 
-/// Where the prompt of the session `label` is kept.
-pub fn prompt_path(label: &str) -> String {
-    format!(".tenaz/private/{label}.prompt.md")
+/// The name of the prompt of the session `label`, in the private folder.
+pub fn prompt_name(label: &str) -> String {
+    format!("{label}.prompt.md")
+}
+
+/// The private folder of a run whose git directory is `git_dir`.
+pub fn private_in(git_dir: &Path) -> PathBuf {
+    git_dir.join("tenaz")
+}
+
+/// Where a project's private folder is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrivatePlace {
+    /// In use at this path.
+    At(PathBuf),
+    /// A run of the old layout keeps it in `from`, inside the project;
+    /// `to` is where it belongs.
+    Move { from: PathBuf, to: PathBuf },
+}
+
+impl PrivatePlace {
+    /// Where the folder is now, for reading it.
+    pub fn current(&self) -> &Path {
+        match self {
+            Self::At(path) | Self::Move { from: path, .. } => path,
+        }
+    }
+}
+
+/// Where the private folder of the project at `root` is (ADR 0040): in
+/// `git_dir`, out of reach of the commands that clean the project, unless
+/// `.tenaz/private` already holds a run's files (`legacy_run`) and the git
+/// directory has none yet (`moved`); without a git directory, in the
+/// project as before.
+pub fn private_place(
+    root: &Path,
+    git_dir: Option<&Path>,
+    legacy_run: bool,
+    moved: bool,
+) -> PrivatePlace {
+    let legacy = root.join(SCRATCH);
+    let Some(git_dir) = git_dir else {
+        return PrivatePlace::At(legacy);
+    };
+    let place = private_in(git_dir);
+    if legacy_run && !moved {
+        PrivatePlace::Move {
+            from: legacy,
+            to: place,
+        }
+    } else {
+        PrivatePlace::At(place)
+    }
 }
 
 /// The last ledger text this process saved, by ledger path. A sandboxed run
@@ -57,11 +113,32 @@ impl RunLock {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
     root: PathBuf,
+    private: PathBuf,
 }
 
 impl Project {
+    /// The project at `root` with its private folder in `.tenaz/private`,
+    /// the layout before ADR 0040. Every CLI command that reads or runs a
+    /// run sets the folder it finds with [`Project::with_private_dir`];
+    /// tests and `init`, which writes nothing there, need not.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        let root = root.into();
+        let private = root.join(SCRATCH);
+        Self { root, private }
+    }
+
+    /// The same project with its private folder at `dir`.
+    #[must_use]
+    pub fn with_private_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.private = dir.into();
+        self
+    }
+
+    /// Whether `.tenaz/private` holds a run's own files, as runs before
+    /// ADR 0040 left it.
+    pub fn legacy_private_run(&self) -> bool {
+        let legacy = self.root.join(SCRATCH);
+        legacy.join(RUN_LOCK).exists() || legacy.join(ORCHESTRATOR_LOG).exists()
     }
 
     pub fn root(&self) -> &Path {
@@ -114,12 +191,41 @@ impl Project {
         ))
     }
 
+    /// Where the run keeps what it keeps out of git and out of reach of
+    /// the commands that clean the project: the run log, the prompts and
+    /// logs of the sessions, the run lock and each harness's own files.
     pub fn private_dir(&self) -> PathBuf {
-        self.tenaz_dir().join("private")
+        self.private.clone()
     }
 
-    fn run_lock_path(&self) -> PathBuf {
-        self.path(RUN_LOCK)
+    /// The file `name` in the private folder.
+    pub fn private_path(&self, name: &str) -> PathBuf {
+        self.private.join(name)
+    }
+
+    /// The agent's scratch folder, `.tenaz/private`.
+    pub fn scratch_dir(&self) -> PathBuf {
+        self.root.join(SCRATCH)
+    }
+
+    pub fn read_private(&self, name: &str) -> io::Result<String> {
+        fs::read_to_string(self.private_path(name))
+    }
+
+    pub fn read_private_if(&self, name: &str) -> Option<String> {
+        self.read_private(name).ok()
+    }
+
+    pub fn write_private(&self, name: &str, text: &str) -> io::Result<()> {
+        write_creating(&self.private_path(name), text)
+    }
+
+    pub fn append_private(&self, name: &str, text: &str) -> io::Result<()> {
+        append_creating(&self.private_path(name), text)
+    }
+
+    pub fn run_lock_path(&self) -> PathBuf {
+        self.private_path(RUN_LOCK)
     }
 
     /// Takes the lock a run holds while it works on the project, or `None`
@@ -183,19 +289,17 @@ impl Project {
         self.root.join(relative)
     }
 
-    /// Creates the `.tenaz/` layout.
+    /// Creates the `.tenaz/` layout, with the agent's scratch folder.
     pub fn create_layout(&self) -> io::Result<()> {
-        for dir in [
-            "prompts",
-            "tasks",
-            "notes",
-            "reviews",
-            "private",
-            "private/sessions",
-        ] {
+        for dir in ["prompts", "tasks", "notes", "reviews", "private"] {
             fs::create_dir_all(self.tenaz_dir().join(dir))?;
         }
         Ok(())
+    }
+
+    /// Creates the private folder, with the harness's session folder.
+    pub fn create_private(&self) -> io::Result<()> {
+        fs::create_dir_all(self.private.join("sessions"))
     }
 
     pub fn read(&self, relative: &str) -> io::Result<String> {
@@ -230,31 +334,15 @@ impl Project {
     }
 
     pub fn write(&self, relative: &str, text: &str) -> io::Result<()> {
-        let path = self.path(relative);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, text)
+        write_creating(&self.path(relative), text)
     }
 
     pub fn remove(&self, relative: &str) -> io::Result<()> {
-        match fs::remove_file(self.path(relative)) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            other => other,
-        }
+        remove_if_there(&self.path(relative))
     }
 
     pub fn append(&self, relative: &str, text: &str) -> io::Result<()> {
-        use io::Write as _;
-        let path = self.path(relative);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        file.write_all(text.as_bytes())
+        append_creating(&self.path(relative), text)
     }
 
     /// Writes through a temporary file so a crash leaves the old content.
@@ -477,6 +565,35 @@ impl Project {
     }
 }
 
+/// Writes `text` to `path`, creating its folder.
+fn write_creating(path: &Path, text: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, text)
+}
+
+/// Appends `text` to `path`, creating the file and its folder.
+fn append_creating(path: &Path, text: &str) -> io::Result<()> {
+    use io::Write as _;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(text.as_bytes())
+}
+
+/// Removes the file at `path`; one already gone is fine.
+fn remove_if_there(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
 /// Where the notes of `id` (a task, `BOOTSTRAP` or `PLANNER`) are kept.
 pub fn note_path(id: &str) -> String {
     format!(".tenaz/notes/{id}.md")
@@ -543,6 +660,59 @@ mod tests {
         assert!(!only_minor_findings(
             "Verdict: CHANGES\n- the page is blank"
         ));
+    }
+
+    #[test]
+    fn the_private_folder_is_in_the_git_directory() {
+        let root = Path::new("/w/game");
+        let git = Path::new("/w/repo/.git/worktrees/game");
+        assert_eq!(
+            private_place(root, Some(git), false, false),
+            PrivatePlace::At(git.join("tenaz"))
+        );
+        assert_eq!(
+            private_place(root, Some(git), true, true),
+            PrivatePlace::At(git.join("tenaz")),
+            "once moved, a lock left in .tenaz/private does not matter"
+        );
+    }
+
+    #[test]
+    fn either_the_log_or_the_lock_marks_a_run_of_the_old_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Project::new(dir.path());
+        assert!(!p.legacy_private_run());
+        p.write(".tenaz/private/notes.txt", "scratch").unwrap();
+        assert!(!p.legacy_private_run(), "the agent's scratch files are not");
+        for name in [RUN_LOCK, ORCHESTRATOR_LOG] {
+            p.write_private(name, "").unwrap();
+            assert!(p.legacy_private_run(), "{name}");
+            std::fs::remove_file(p.private_path(name)).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_run_of_the_old_layout_keeps_its_folder_until_it_is_moved() {
+        let root = Path::new("/w/game");
+        let git = Path::new("/w/game/.git");
+        let place = private_place(root, Some(git), true, false);
+        assert_eq!(
+            place,
+            PrivatePlace::Move {
+                from: root.join(".tenaz/private"),
+                to: git.join("tenaz"),
+            }
+        );
+        assert_eq!(place.current(), root.join(".tenaz/private"));
+    }
+
+    #[test]
+    fn without_a_git_directory_the_private_folder_stays_in_the_project() {
+        let root = Path::new("/w/game");
+        assert_eq!(
+            private_place(root, None, true, false),
+            PrivatePlace::At(root.join(".tenaz/private"))
+        );
     }
 
     #[test]

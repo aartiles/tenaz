@@ -8,7 +8,7 @@ use crate::orchestrator::phases::PlannerSession;
 use crate::orchestrator::{RunError, Runner, take_run_lock};
 use crate::ownership;
 use crate::ports::{SessionModel, Vcs};
-use crate::project::{RUN_LOCK, prompt_path};
+use crate::project::prompt_name;
 use crate::role::Role;
 use crate::session::SessionMetrics;
 use crate::task::TaskId;
@@ -92,7 +92,7 @@ impl Runner {
             started_at: self.now(),
         });
         self.save()?;
-        self.project.write(&prompt_path(&label), prompt)?;
+        self.project.write_private(&prompt_name(&label), prompt)?;
         self.log(&format!("Session {label} started"));
         let model = self.ledger.config.model_for(role);
         let watch = WatchConfig {
@@ -151,23 +151,26 @@ impl Runner {
         })
     }
 
-    /// Notes a session that removed `.tenaz/private`, or its prompts: the
-    /// prompt written there when it started is gone. The prompt is written
-    /// again (which makes the folder again), then the journal and the log
-    /// say so. Each harness writes its own files there before its next
-    /// session; the session's logs and the harness's state may be lost.
+    /// Notes a session that removed the private folder, or its prompts:
+    /// the prompt written there when it started is gone. The folder is out
+    /// of the project (ADR 0040), so only a command that names it reaches
+    /// it. The prompt is written again (which makes the folder again), then
+    /// the journal and the log say so. Each harness writes its own files
+    /// there before its next session; the session's logs and the harness's
+    /// state may be lost.
     fn note_private_removed(&mut self, started: &Started<'_>) -> Result<(), RunError> {
-        let prompt = prompt_path(&started.label);
-        if self.project.exists(&prompt) {
+        let prompt = prompt_name(&started.label);
+        if self.project.private_path(&prompt).exists() {
             return Ok(());
         }
-        self.project.write(&prompt, started.prompt)?;
+        self.project.write_private(&prompt, started.prompt)?;
         self.journal(JournalRecord::PrivateRemoved {
             label: started.label.clone(),
         });
         self.log(&format!(
-            "  {}: the prompt Tenaz wrote in .tenaz/private is gone: the session removed the folder, or that much of it. Tenaz wrote the prompt again; the session's logs and what the harness kept there may be lost",
-            started.label
+            "  {}: the prompt Tenaz wrote in {} is gone: the session removed the folder, or that much of it. Tenaz wrote the prompt again; the session's logs and what the harness kept there may be lost",
+            started.label,
+            self.project.private_dir().display()
         ));
         Ok(())
     }
@@ -179,7 +182,7 @@ impl Runner {
         let held = self
             .lock
             .as_ref()
-            .is_none_or(|lock| lock.is_at(&self.project.path(RUN_LOCK)));
+            .is_none_or(|lock| lock.is_at(&self.project.run_lock_path()));
         if held {
             return Ok(());
         }
@@ -195,7 +198,8 @@ impl Runner {
             Err(other) => return Err(other),
         }
         self.log(&format!(
-            "  {label}: the run lock's file in .tenaz/private was removed; Tenaz took the lock again"
+            "  {label}: the run lock's file in {} was removed; Tenaz took the lock again",
+            self.project.private_dir().display()
         ));
         Ok(())
     }

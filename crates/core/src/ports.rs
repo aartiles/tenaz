@@ -40,15 +40,15 @@ pub struct SessionSpec {
     /// `003-builder-T007`; names the raw logs.
     pub label: String,
     pub cwd: PathBuf,
-    /// Where the harness may keep its own session state (`.tenaz/private/sessions`).
+    /// Where the harness may keep its own session state (`sessions` in the private folder).
     /// `None` asks for no persistence.
     pub persist_dir: Option<PathBuf>,
-    /// Where the raw event stream is appended (`.tenaz/private/<label>.rpc.jsonl`):
+    /// Where the raw event stream is appended (`<label>.rpc.jsonl` in the private folder):
     /// the harness's own records where it has a line protocol (Pi), else the
     /// translated session events (an ACP agent).
     pub raw_log: Option<PathBuf>,
     /// Where the model's reasoning text is appended
-    /// (`.tenaz/private/<label>.thinking.md`), for harnesses whose raw
+    /// (`<label>.thinking.md` in the private folder), for harnesses whose raw
     /// stream does not keep it.
     pub thinking_log: Option<PathBuf>,
     /// Where the harness's stderr is appended.

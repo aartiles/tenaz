@@ -47,7 +47,7 @@ async fn run_with(
         ..deps(&project, vcs, Arc::new(harness), clock)
     };
     super::run(&project, deps, CancellationToken::new()).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert_eq!(
         project.load_ledger().unwrap().phase,
         Phase::Complete,
@@ -184,7 +184,7 @@ async fn a_harness_exit_during_a_tool_call_charges_the_attempt_and_names_the_cal
         .expect("T001 runs again");
     assert_eq!(next.attempt, Some(2), "the crash cost T001 an attempt");
     let prompt = project
-        .read(&format!(".tenaz/private/{}.prompt.md", next.label))
+        .read_private(&format!("{}.prompt.md", next.label))
         .unwrap();
     assert!(
         prompt.contains("head -c 400 checks/result.json"),
@@ -233,7 +233,7 @@ async fn a_reply_cut_at_the_output_limit_charges_the_attempt_and_lowers_the_effo
         .expect("T001 runs again");
     assert_eq!(next.attempt, Some(2), "the cut cost T001 an attempt");
     let prompt = project
-        .read(&format!(".tenaz/private/{}.prompt.md", next.label))
+        .read_private(&format!("{}.prompt.md", next.label))
         .unwrap();
     assert!(prompt.contains("reason briefly"), "{prompt}");
     assert!(log.contains(&lowered_effort_note(&next.label)), "{log}");
@@ -363,11 +363,7 @@ async fn the_next_bootstrap_is_told_which_files_the_previous_one_left() {
         .collect();
     // The partial session, then the full one.
     let (last, earlier) = labels.split_last().unwrap();
-    let prompt = |label: &str| {
-        project
-            .read(&format!(".tenaz/private/{label}.prompt.md"))
-            .unwrap()
-    };
+    let prompt = |label: &str| project.read_private(&format!("{label}.prompt.md")).unwrap();
     for label in earlier {
         assert!(!prompt(label).contains("previous bootstrap sessions left"));
     }
@@ -402,9 +398,7 @@ async fn the_files_a_bootstrap_left_are_clipped() {
             _ => None,
         })
         .unwrap();
-    let prompt = project
-        .read(&format!(".tenaz/private/{last}.prompt.md"))
-        .unwrap();
+    let prompt = project.read_private(&format!("{last}.prompt.md")).unwrap();
     let left = prompt
         .split("Files the previous bootstrap sessions left (kept)")
         .nth(1)
@@ -452,11 +446,7 @@ async fn the_bootstrap_runs_one_session_per_step() {
     let [first, second, last] = labels.as_slice() else {
         panic!("three step sessions: {labels:?}");
     };
-    let prompt = |label: &str| {
-        project
-            .read(&format!(".tenaz/private/{label}.prompt.md"))
-            .unwrap()
-    };
+    let prompt = |label: &str| project.read_private(&format!("{label}.prompt.md")).unwrap();
     let first = prompt(first);
     assert!(first.contains("Step: 1 of 3 (spec and map)"), "{first}");
     assert!(first.contains("## Step 1: spec and map"), "{first}");
@@ -609,9 +599,7 @@ async fn the_reviewer_s_list_of_images_is_clipped() {
             _ => None,
         })
         .unwrap();
-    let prompt = project
-        .read(&format!(".tenaz/private/{label}.prompt.md"))
-        .unwrap();
+    let prompt = project.read_private(&format!("{label}.prompt.md")).unwrap();
     assert!(
         prompt.contains("## Images this change adds or replaces\n\n[... clipped 1 line]"),
         "{prompt}"
@@ -636,11 +624,7 @@ async fn the_reviewer_is_given_the_images_the_change_adds() {
             _ => None,
         })
         .collect();
-    let prompt = |label: &str| {
-        project
-            .read(&format!(".tenaz/private/{label}.prompt.md"))
-            .unwrap()
-    };
+    let prompt = |label: &str| project.read_private(&format!("{label}.prompt.md")).unwrap();
     let t004 = reviewers
         .iter()
         .find(|l| l.ends_with("-reviewer-T004"))
@@ -663,7 +647,7 @@ async fn the_reviewer_is_given_the_images_the_change_adds() {
 #[tokio::test(start_paused = true)]
 async fn each_request_line_records_what_the_request_asked_for() {
     let (_work, project, _log) = run(ScriptedHarness::default(), 3).await;
-    let lines = project.read(".tenaz/private/requests.jsonl").unwrap();
+    let lines = project.read_private("requests.jsonl").unwrap();
     let recorded: Vec<serde_json::Value> = lines
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
@@ -701,7 +685,7 @@ async fn an_attempt_that_leaves_fewer_passing_checks_fails() {
         "T004 is tried again: {builders:?}\n{log}"
     );
     let second = project
-        .read(&format!(".tenaz/private/{}.prompt.md", builders[1]))
+        .read_private(&format!("{}.prompt.md", builders[1]))
         .unwrap();
     assert!(second.contains("fewer than the"), "{second}");
     assert!(
@@ -748,7 +732,7 @@ async fn a_builder_stopped_at_its_turn_budget_is_continued_not_charged() {
         .expect("a fresh session continues T001");
     assert_eq!(next.attempt, Some(1), "the turn stop cost no attempt");
     let prompt = project
-        .read(&format!(".tenaz/private/{}.prompt.md", next.label))
+        .read_private(&format!("{}.prompt.md", next.label))
         .unwrap();
     assert!(prompt.contains("used up its turn budget"), "{prompt}");
 }
@@ -766,9 +750,7 @@ async fn the_final_reviewer_judges_the_product_against_the_brief_as_a_whole() {
             _ => None,
         })
         .expect("a final review ran");
-    let prompt = project
-        .read(&format!(".tenaz/private/{label}.prompt.md"))
-        .unwrap();
+    let prompt = project.read_private(&format!("{label}.prompt.md")).unwrap();
     assert!(prompt.contains("judge the product as a whole"), "{prompt}");
     assert!(prompt.contains("under `## Overall`"), "{prompt}");
 }
@@ -812,7 +794,7 @@ async fn a_tool_call_over_its_time_is_stopped_and_the_session_goes_on() {
         .expect("the timeout is in the session record");
     assert_eq!(stopped.detail.as_deref(), Some("./verify --all"));
     let raw = project
-        .read(&format!(".tenaz/private/{}.rpc.jsonl", first.label))
+        .read_private(&format!("{}.rpc.jsonl", first.label))
         .unwrap();
     assert!(
         raw.contains("src/T001.txt"),
@@ -857,7 +839,7 @@ async fn a_second_tool_call_over_its_time_ends_the_session() {
         .unwrap_or_else(|| panic!("the next attempt does the task: {sessions:?}"));
     // It is told why the first attempt's session was stopped.
     let prompt = project
-        .read(&format!(".tenaz/private/{}.prompt.md", second.label))
+        .read_private(&format!("{}.prompt.md", second.label))
         .unwrap();
     assert!(
         prompt.contains("The session was stopped: a tool call ran over 1 minutes twice.\n"),
@@ -894,7 +876,7 @@ async fn the_write_in_the_reply_that_crosses_the_context_stop_lands() {
         "{first:?}"
     );
     let raw = project
-        .read(&format!(".tenaz/private/{}.rpc.jsonl", first.label))
+        .read_private(&format!("{}.rpc.jsonl", first.label))
         .unwrap();
     let write = raw
         .lines()
@@ -974,7 +956,7 @@ async fn a_bootstrap_that_writes_outside_the_project_is_told_where_its_files_wen
     let note = format!("{spec}, {map}");
     assert!(problems[0].contains(&note), "{problems:?}");
     let prompt = project
-        .read(&format!(".tenaz/private/{}.prompt.md", retry.label))
+        .read_private(&format!("{}.prompt.md", retry.label))
         .expect("the retry's prompt is kept");
     assert!(prompt.contains(&note), "{prompt}");
 }

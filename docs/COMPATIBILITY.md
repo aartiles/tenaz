@@ -67,7 +67,7 @@ inside it (`{"request": {...}, "timeout_ms": 5000}`) are moved in when the
 variant its `action` selects takes them all and `request` does not already
 hold them, and an integer outside the range the variant declares (a
 `yield_time_ms` above 30000) is clamped to it. Each repair is logged in
-`.tenaz/private/tool-repairs.jsonl` and counted by `tenaz status`;
+`tool-repairs.jsonl` in the run's private folder and counted by `tenaz status`;
 `--set repairToolArgs=false` turns it off. Pi's tools take flat
 arguments, so nothing of theirs is repaired; with `--no-proxy` nothing
 is.
@@ -106,9 +106,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
   running `verify` with `HOME` set by hand, often 10 to 25 turns in.
   Tested with unit tests and a fake agent that reports its environment;
   no run has used it with fx, OpenCode or Qwen Code yet.
-- fx runs with an isolated `HOME` under `.tenaz/private/fx-home/`, so your
-  own fx settings and MCP servers are not touched. Pi runs with its own
-  agent directory, `.tenaz/private/pi-agent/` (`PI_CODING_AGENT_DIR`),
+- fx runs with an isolated `HOME`, `fx-home/` in the run's private
+  folder (in the git directory, ADR 0040), so your own fx settings and
+  MCP servers are not touched. Pi runs with its own agent directory,
+  `pi-agent/` there (`PI_CODING_AGENT_DIR`),
   holding a `models.json` with the run's models, pointed at the proxy,
   and a `settings.json` with a 15-minute HTTP idle timeout and install
   telemetry off. A model your `~/.pi/agent/models.json` lists is copied
@@ -118,7 +119,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
   settings, credentials (`auth.json`), extensions and context files are
   not used: a provider you signed in to with `/login` needs its `apiKey`
   in `models.json` instead.
-- Each agent's own files under `.tenaz/private/` are written again
+- Each agent's own files in the private folder are written again
   before each session: fx's `settings.json` (for that session's model)
   and `mcp.json`, Pi's agent directory, OpenCode's, Qwen Code's and
   dsh's configuration, the generic agent's `acp-session.json`, and the
@@ -126,8 +127,8 @@ above), so a 32k context is the practical floor (`contextFloor`).
   Raycaster Shooter run of 2026-11-19 (Pi 1.4.0) one removed
   `.tenaz/private`, and every later Pi session exited at once with
   `Model "<provider>/<id>" not found` until `--resume` wrote them again.
-  Tested with unit tests that remove the folder and open a session; no
-  run has removed it since.
+  Tested with unit tests that remove the folder and open a session. The
+  folder is out of the project now (ADR 0040).
 - `verify` and heavy jobs run in a process group of their own, killed
   when they end. Afterwards Tenaz reads `ps` (up to three times) and
   stops what they left in a session of their own, using `lsof` (macOS)
@@ -143,13 +144,26 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
-- **`.tenaz/private` removed by the agent.** Tenaz notices after the
-  session (journal `private-removed`, a log line), writes its prompt
-  and each harness's files again, and takes the run lock again (ADR
-  0038). Until the session ends, another `tenaz run` could take the
-  lock; this run then stops. A harness that cannot start after the
-  removal blocks as `harness failed:` (ADR 0037). Tested with the
-  scripted harness only; no real run has removed the folder since.
+- **The private folder removed by the agent.** It was `.tenaz/private/`
+  until ADR 0040, and agents removed it in runs of 2026-11-19 and
+  2026-11-23 (Pi 1.6.0: Pi's sessions, the request records and memory
+  samples of sessions 001 to 069 were lost). It is in the git directory
+  now; `.tenaz/private/` is the agent's scratch folder. Tested with the
+  scripted harness (a builder that removes the scratch folder loses
+  nothing) and a real git repository; not yet in a real run, nor on
+  Linux. A command that names the private
+  folder can still remove it: Tenaz notices after the session (journal
+  `private-removed`, a log line), writes its prompt and each harness's
+  files again, and takes the run lock again (ADR 0038). Until the
+  session ends, another `tenaz run` could take the lock; this run then
+  stops. A harness that cannot start after the removal blocks as
+  `harness failed:` (ADR 0037).
+- **Harness homes outside the project.** fx's, OpenCode's, Qwen Code's
+  and dsh's `HOME`, with the links to the pinned skills, are in the
+  private folder, outside the project, since ADR 0040. A harness whose
+  file tools are confined to the project (Qwen Code) may refuse to read
+  a pinned skill's other files through those links. Not yet checked
+  with any of them.
 - **Bootstrap prepared by a frontier agent.** The skill now asks the agent
   driving Tenaz to write the brief, initialise the run, and write the spec,
   map, verify, notes and task cards in the run's worktree before `run`.
@@ -676,7 +690,7 @@ above), so a 32k context is the practical floor (`contextFloor`).
   as `length`. Tested against a fake engine only: no reply reached the
   limit in the run since.
   Each fx session's reasoning text is kept in
-  `.tenaz/private/<label>.thinking.md` to show what such a reply was
+  `<label>.thinking.md` in the private folder to show what such a reply was
   doing; fx 0.0.14 sends it as ACP thought chunks, seen in the
   image-landing runs of 2026-10-25.
 - **fx 0.0.17 ends a cut turn with a stop reason ACP does not have.**

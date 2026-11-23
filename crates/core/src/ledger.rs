@@ -680,7 +680,7 @@ pub enum JournalRecord {
         context_cap: u64,
         retry: u32,
     },
-    /// `.tenaz/private` lost, during the session `label`, the prompt Tenaz
+    /// The private folder lost, during the session `label`, the prompt Tenaz
     /// wrote there when it started: something the session ran removed it.
     PrivateRemoved {
         label: String,

@@ -57,7 +57,7 @@ impl HarnessInputs<'_> {
             .collect()
     }
 
-    /// The agent's isolated `HOME`, `.tenaz/private/<name>`.
+    /// The agent's isolated `HOME`, `<name>` in the private folder.
     fn home(&self, name: &str) -> PathBuf {
         self.project.private_dir().join(name)
     }
@@ -68,7 +68,7 @@ impl HarnessInputs<'_> {
     /// agent that takes them) written for the run's model: a home that
     /// cannot be written stops the run here, not in its first session.
     /// The agent writes it again before every session, so a shell command
-    /// that removed `.tenaz/private` does not leave the next one without it.
+    /// that removed the private folder does not leave the next one without it.
     fn acp_agent(
         &self,
         agent: Arc<dyn AgentProfile>,
@@ -148,7 +148,7 @@ fn pi_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     Ok(Arc::new(launch.harness(config.harness_version.clone())))
 }
 
-/// fx with its profile in `.tenaz/private/fx-home`.
+/// fx with its profile in `fx-home` in the private folder.
 fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     let HarnessInputs {
         project,
@@ -201,7 +201,7 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     )
 }
 
-/// `OpenCode` with its configuration in `.tenaz/private/opencode-home`.
+/// `OpenCode` with its configuration in `opencode-home` in the private folder.
 fn opencode_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     let config = inputs.config;
     let home = inputs.home("opencode-home");
@@ -232,7 +232,7 @@ fn opencode_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harnes
     )
 }
 
-/// Qwen Code with its settings in `.tenaz/private/qwen-home`.
+/// Qwen Code with its settings in `qwen-home` in the private folder.
 fn qwen_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     let home = inputs.home("qwen-home");
     let settings = QwenSettings {
@@ -254,7 +254,7 @@ fn qwen_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> 
 }
 
 /// `DeepSeek` Harness with its patch and its own `DSH_HOME` in
-/// `.tenaz/private/dsh-home`. It is given neither the media MCP server nor
+/// `dsh-home` in the private folder. It is given neither the media MCP server nor
 /// the pinned skills yet (see Known gaps in docs/COMPATIBILITY.md).
 fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     let config = inputs.config;
@@ -280,7 +280,7 @@ fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
 }
 
 /// The user's ACP command, told about each session in
-/// `.tenaz/private/acp-session.json`; it keeps the user's `HOME`.
+/// `acp-session.json` in the private folder; it keeps the user's `HOME`.
 fn generic_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     let config = inputs.config;
     let agent = GenericAgent {

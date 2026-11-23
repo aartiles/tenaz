@@ -267,7 +267,8 @@ impl Swapped {
             runner_version: "test".into(),
             ..Default::default()
         };
-        self.result = runner.run(options).await;
+        // The run's future is large; boxed, it does not make each test's.
+        self.result = Box::pin(runner.run(options)).await;
     }
 
     fn opened(&self) -> Vec<Opened> {
@@ -281,7 +282,7 @@ impl Swapped {
 
     fn log(&self) -> String {
         self.project
-            .read(".tenaz/private/orchestrator.log")
+            .read_private("orchestrator.log")
             .unwrap_or_default()
     }
 }

@@ -22,7 +22,7 @@ pub fn status_text(project: &Project) -> String {
     let sessions = sessions(project);
     let requests = requests(project);
     let samples: Vec<MemorySample> = project
-        .read_if(".tenaz/private/memory.jsonl")
+        .read_private_if("memory.jsonl")
         .unwrap_or_default()
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
@@ -86,19 +86,30 @@ pub fn status_text(project: &Project) -> String {
         engine_line(&requests, cache_percent(&ledger, &requests)),
         memory_line(&samples),
     ]);
-    let mut text = lines.join("\n");
+    format!("{}{}\n", lines.join("\n"), files_lines(project))
+}
+
+/// The lines on the run's own files: the tool calls the proxy repaired,
+/// when any, and where the private folder is.
+fn files_lines(project: &Project) -> String {
+    let mut text = String::new();
     let repairs = tool_repairs(project);
     if repairs > 0 {
         let _ = write!(
             text,
             "
-Tool-call repairs: {repairs} (tool-call arguments the proxy fixed before the harness saw them; .tenaz/private/{TOOL_REPAIRS})"
+Tool-call repairs: {repairs} (tool-call arguments the proxy fixed before the harness saw them; {TOOL_REPAIRS} in the private folder)"
         );
     }
-    format!("{text}\n")
+    let _ = write!(
+        text,
+        "\nPrivate folder: {} (the run log, the sessions' prompts and logs)",
+        project.private_dir().display()
+    );
+    text
 }
 
-/// The engine proxy's log of repaired tool-call arguments, under `.tenaz/private/`.
+/// The engine proxy's log of repaired tool-call arguments, in the private folder.
 pub const TOOL_REPAIRS: &str = "tool-repairs.jsonl";
 
 /// `Context budget: N tokens`, the builder's when roles have their own
@@ -148,7 +159,7 @@ fn model_lines(ledger: &Ledger) -> Vec<String> {
 
 /// How many tool calls the engine proxy repaired.
 fn tool_repairs(project: &Project) -> usize {
-    std::fs::read_to_string(project.private_dir().join(TOOL_REPAIRS)).map_or(0, |text| {
+    project.read_private_if(TOOL_REPAIRS).map_or(0, |text| {
         text.lines().filter(|l| !l.trim().is_empty()).count()
     })
 }
@@ -168,7 +179,7 @@ fn task_counts(project: &Project) -> Vec<(String, usize)> {
 
 fn requests(project: &Project) -> Vec<RequestRecord> {
     project
-        .read_if(".tenaz/private/requests.jsonl")
+        .read_private_if("requests.jsonl")
         .unwrap_or_default()
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
@@ -264,6 +275,7 @@ pub fn status_json(project: &Project) -> Value {
         "swap_models": ledger.launch.swap_models,
         "harness": ledger.config.harness,
         "origin": ledger.origin,
+        "private_dir": project.private_dir(),
     })
 }
 
@@ -327,7 +339,15 @@ mod tests {
             ),
             "{text}"
         );
+        assert!(
+            text.contains(&format!(
+                "\nPrivate folder: {} ",
+                project.private_dir().display()
+            )),
+            "{text}"
+        );
         let json = status_json(&project);
+        assert_eq!(json["private_dir"], json!(project.private_dir()));
         assert_eq!(json["model"], "sushi/A");
         assert_eq!(
             json["role_models"],

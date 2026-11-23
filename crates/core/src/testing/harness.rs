@@ -335,13 +335,15 @@ pub struct ScriptedUnstartable {
 
 /// The first builder session of `task` that does its work first removes
 /// `what` with a shell command, once in the run: `done` keeps the count,
-/// as the counts in `.tenaz/private` go with it. The next builder session
-/// sets `lock_held` to whether a run still holds the project's run lock.
-/// `another_run` keeps the lock [`Removed::LockForAnotherRun`] takes.
+/// as the counts in `.tenaz/private` may go with it. `private` is the
+/// run's private folder. The next builder session sets `lock_held` to
+/// whether a run still holds the project's run lock. `another_run` keeps
+/// the lock [`Removed::LockForAnotherRun`] takes.
 #[derive(Clone, Debug, Default)]
 pub struct ScriptedRemoval {
     pub task: String,
     pub what: Removed,
+    pub private: std::path::PathBuf,
     pub done: Arc<std::sync::atomic::AtomicBool>,
     pub lock_held: Arc<std::sync::OnceLock<bool>>,
     pub another_run: Arc<std::sync::Mutex<Option<crate::project::RunLock>>>,
@@ -350,9 +352,11 @@ pub struct ScriptedRemoval {
 /// What a [`ScriptedRemoval`] removes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Removed {
-    /// All of `.tenaz/private`.
+    /// All of the private folder.
     #[default]
     Folder,
+    /// All of `.tenaz/private`, the agent's scratch folder.
+    Scratch,
     /// The prompt files there.
     Prompts,
     /// The run lock's file.

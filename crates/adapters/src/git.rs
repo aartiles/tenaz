@@ -147,6 +147,14 @@ impl GitRepo {
             .map(|s| PathBuf::from(s.trim()))
     }
 
+    /// The git directory of the working tree `root` is in, absolute and
+    /// canonical: `.git`, or a worktree's `.git/worktrees/<name>`; `None`
+    /// outside one.
+    pub fn git_dir(&self) -> Option<PathBuf> {
+        let dir = self.git(&["rev-parse", "--absolute-git-dir"]).ok()?;
+        std::fs::canonicalize(dir.trim()).ok()
+    }
+
     /// HEAD names a commit.
     pub fn has_commits(&self) -> bool {
         self.ok(&["rev-parse", "--verify", "-q", "HEAD^{commit}"])

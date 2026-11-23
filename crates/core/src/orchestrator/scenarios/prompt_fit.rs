@@ -48,7 +48,7 @@ async fn play(
         Arc::new(VirtualClock::new()),
     );
     run(&project, deps, CancellationToken::new()).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     (work, project, log)
 }
 
@@ -129,9 +129,7 @@ async fn a_review_diff_takes_its_share_of_the_reviewer_budget() {
             _ => None,
         })
         .expect("T001 is reviewed");
-    let prompt = project
-        .read(&format!(".tenaz/private/{label}.prompt.md"))
-        .unwrap();
+    let prompt = project.read_private(&format!("{label}.prompt.md")).unwrap();
     let after_note = prompt
         .split_once("clipped. Read the changed files directly.]\n\n")
         .expect("the diff is clipped")

@@ -19,8 +19,10 @@ pub(crate) struct FinishArgs {
     #[arg(long)]
     force: bool,
     /// Then remove the run's worktree. Its run.json and journal are not
-    /// committed and go with it; the committed history stays on the run
-    /// branch.
+    /// committed and go with it, and so does its private folder (the run
+    /// log, the sessions' prompts and logs; `tenaz status` names it):
+    /// copy them first to keep them. The committed history stays on the
+    /// run branch.
     #[arg(long)]
     remove_worktree: bool,
     /// With --remove-worktree, delete the run branch too.

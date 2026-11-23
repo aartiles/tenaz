@@ -42,7 +42,7 @@ use crate::ports::{
     Clock, EngineAdapter, EngineError, EngineMetricsSource, Harness, HarnessError, MemoryProbe,
     Notifier, Vcs, VcsError, VerifyRunner,
 };
-use crate::project::{BRIEF, PROTOCOL, Project, RunLock};
+use crate::project::{BRIEF, ORCHESTRATOR_LOG, PROTOCOL, Project, RunLock};
 use crate::util::sha256_hex;
 
 /// The ports a run needs.
@@ -187,14 +187,14 @@ impl Runner {
         self.deps.clock.now_rfc3339()
     }
 
-    /// Writes to the run log (stdout through tracing, and `.tenaz/private/orchestrator.log`).
+    /// Writes to the run log (stdout through tracing, and `orchestrator.log`
+    /// in the private folder).
     pub(crate) fn log(&self, message: &str) {
         tracing::info!("{message}");
-        if self.project.exists(".tenaz/private") {
-            let _ = self.project.append(
-                ".tenaz/private/orchestrator.log",
-                &format!("[{}] {message}\n", self.now()),
-            );
+        if self.project.private_dir().exists() {
+            let _ = self
+                .project
+                .append_private(ORCHESTRATOR_LOG, &format!("[{}] {message}\n", self.now()));
         }
     }
 
@@ -624,8 +624,10 @@ impl Runner {
     }
 }
 
-/// The project's run lock, or the error that names the run holding it.
+/// The project's run lock, in its private folder, made when missing; or
+/// the error that names the run holding it.
 pub(crate) fn take_run_lock(project: &Project) -> Result<RunLock, RunError> {
+    project.create_private()?;
     project.lock_run()?.ok_or_else(|| {
         let pid = project
             .active_run()

@@ -279,8 +279,10 @@ it best; a run takes hours.
 
    `tenaz watch` follows it session by session instead. Each session's
    prompt, events (Pi's own records with Pi) and, with an ACP agent (fx,
-   OpenCode, Qwen Code), the model's reasoning are kept in
-   `.tenaz/private/` (`<label>.prompt.md`, `.rpc.jsonl`, `.thinking.md`).
+   OpenCode, Qwen Code), the model's reasoning are kept in the run's
+   private folder (`<label>.prompt.md`, `.rpc.jsonl`, `.thinking.md`),
+   in the git directory: `tenaz status` names it, and
+   `tenaz status --json` has it as `private_dir`.
 
 4. When the run is done (or stopped), turn it into something to review:
 
@@ -343,8 +345,9 @@ interface the skill relies on:
   gaps, 4 when it is blocked and 5 when it pauses; 1 is an error.
 - `tenaz status --json` prints the phase, the state (`running`, `paused`,
   `blocked`, `interrupted`, `complete`, `complete_with_gaps`), the block
-  reason, the tasks and the prompt cache share (`null` when the engine does
-  not report it) as one JSON object.
+  reason, the tasks, the prompt cache share (`null` when the engine does
+  not report it) and the private folder (`private_dir`) as one JSON
+  object.
 
 ## Reference
 
@@ -475,8 +478,8 @@ lists the model, the wizard offers it and the run keeps its settings there
 ### OpenCode or Qwen Code
 
 `--harness opencode` and `--harness qwen` drive OpenCode and Qwen Code
-over ACP, as fx is. Each runs in a `HOME` of its own under
-`.tenaz/private/`, with a configuration Tenaz writes for each session's
+over ACP, as fx is. Each runs in a `HOME` of its own in the run's
+private folder, with a configuration Tenaz writes for each session's
 model, so your own settings, plugins, MCP servers and memories stay out of
 the run ([ADR 0019](docs/adr/0019-opencode-and-qwen-code.md)). fx,
 OpenCode, Qwen Code and dsh each get your Playwright and npm caches
@@ -496,7 +499,7 @@ than fx and Pi; see [Compatibility](docs/COMPATIBILITY.md).
 (`dsh --profile acp`); `--dsh-bin` names its executable, for example
 `~/.local/dsh/node_modules/.bin/dsh`. The wizard and `tenaz doctor` do not look for it, since
 another program is called `dsh` too. It runs with `HOME` and `DSH_HOME`
-under `.tenaz/private/dsh-home`, and Tenaz writes a patch there for each
+under `dsh-home` in the run's private folder, and Tenaz writes a patch there for each
 session's model that points dsh's `acp` profile at the engine proxy
 instead of DeepSeek's own service and turns off dsh's own automatic
 compaction, so Tenaz's context budget ends a session; a summary request
@@ -513,7 +516,7 @@ one a 19-hour game brief; pass `--vision` for it to read images. See
 `--harness acp --acp-bin <command>` runs any agent that speaks ACP;
 `tenaz run --acp-args "<args>"` gives the arguments that put it in ACP
 mode, and `<command> --version` must answer. Before each session Tenaz
-writes `.tenaz/private/acp-session.json` and passes its path in
+writes `acp-session.json` in the run's private folder and passes its path in
 `TENAZ_AGENT_SESSION`: the engine's base URL (the proxy), the session's
 model, its context window, output limit and inputs, the reasoning effort
 and the media MCP servers. A small script reads it, configures the agent
@@ -670,9 +673,21 @@ journal record (`outside_writes`), and tells the session once that its
 files belong in the project. A bootstrap step whose files are then missing
 says where they went. Writes from shell commands are not seen (ADR 0008).
 
-Neither mode protects `.tenaz/private/`: it is inside the project, and the
-harness keeps its own state there. When a session removes it (`rm -rf`,
-`git clean -fdx`), Tenaz notices after the session: the journal records
+The run keeps its own files out of the project, in a private folder in
+the git directory: `.git/tenaz/`, or `.git/worktrees/<name>/tenaz/` of
+the repository for a run in its own worktree. There are the run log
+(`orchestrator.log`), each session's prompt and logs, the engine requests
+(`requests.jsonl`), the memory samples, the run lock and each harness's
+own files. Commands that clean the project (`rm -rf .tenaz`,
+`git clean -fdx`) do not reach it. `.tenaz/private/` is still there, out
+of git, for the agent's temporary files and the media tools' outputs;
+removing it loses nothing of the run's
+([ADR 0040](docs/adr/0040-keep-the-private-folder-in-the-git-directory.md)).
+A run started by an earlier version keeps its folder in `.tenaz/private/`
+until it ends.
+
+Neither mode stops a command that names the private folder. When a
+session removes it, Tenaz notices after the session: the journal records
 `private-removed` with the session's label, `orchestrator.log` says so,
 and Tenaz writes its prompt file there again. When the run lock's file
 went, Tenaz takes the lock again when the session ends; if another

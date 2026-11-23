@@ -44,9 +44,7 @@ impl Played {
     }
 
     fn read(work: tempfile::TempDir, project: Project) -> Self {
-        let log = project
-            .read(".tenaz/private/orchestrator.log")
-            .unwrap_or_default();
+        let log = project.read_private("orchestrator.log").unwrap_or_default();
         let records = project.journal().into_iter().map(|e| e.record).collect();
         Self {
             _work: work,
@@ -654,7 +652,7 @@ async fn a_pause_during_a_builder_is_resumed_without_counting_the_attempt() {
     let clock = Arc::new(VirtualClock::new());
     let paused = deps(&project, vcs.clone(), Arc::new(stopping), clock.clone());
     run(&project, paused, stop).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert!(
         log.contains("PAUSED during") && log.contains("builder-T002"),
         "{log}"
@@ -770,7 +768,7 @@ async fn a_stop_during_the_preflight_pauses_the_run() {
         stop,
     )
     .await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert!(log.contains("PAUSED during the preflight"), "{log}");
     let ledger = project.load_ledger().unwrap();
     assert!(ledger.paused_at.is_some());

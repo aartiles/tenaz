@@ -80,7 +80,8 @@ Levels:
 Example:
   tenaz watch --project ./my-app --level full
 
-Everything shown is in .tenaz/private/: orchestrator.log and, per session,
+Everything shown is in the run's private folder, in the git directory
+(tenaz status names it): orchestrator.log and, per session,
 <label>.rpc.jsonl (the events; Pi's own records with Pi), <label>.prompt.md, <label>.thinking.md (the
 reasoning, with an ACP agent) and the harness logs.
 ";

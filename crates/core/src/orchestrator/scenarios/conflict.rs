@@ -57,7 +57,7 @@ async fn play(
         CancellationToken::new(),
     )
     .await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     (work, project, log)
 }
 
@@ -388,7 +388,7 @@ async fn a_resumed_run_with_no_task_ready_replans_again() {
     assert!(blocked.stuck_replanned, "{:?}", blocked.blocked_reason);
     let again = harness(Routing::ReopenWithoutAmendThenDrop);
     resume(&project, deps(&project, vcs, again, clock)).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert_eq!(status(&project, "T003"), "dropped", "{log}");
 }
 

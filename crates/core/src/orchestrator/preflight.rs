@@ -388,7 +388,9 @@ pub(crate) fn engine_error_note(preflight: &Preflight) -> Option<String> {
 /// fx's own log of the session (Pi and the scripted harness keep none).
 fn details(harness: HarnessKind) -> &'static str {
     match harness {
-        HarnessKind::Fx => ".tenaz/run.json \"preflight\" and .tenaz/private/preflight.fx-acp.log",
+        HarnessKind::Fx => {
+            ".tenaz/run.json \"preflight\" and preflight.fx-acp.log in the private folder, which `tenaz status` names"
+        }
         HarnessKind::Pi
         | HarnessKind::OpenCode
         | HarnessKind::Qwen
@@ -934,7 +936,9 @@ mod tests {
         };
         let fx = stop_with(HarnessKind::Fx);
         assert!(
-            fx.contains("and .tenaz/private/preflight.fx-acp.log;"),
+            fx.contains(
+                "and preflight.fx-acp.log in the private folder, which `tenaz status` names;"
+            ),
             "{fx}"
         );
         for harness in [

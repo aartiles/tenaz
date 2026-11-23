@@ -1,6 +1,9 @@
 //! A session that removes `.tenaz/private`, as a shell command of the
-//! agent's did in the Raycaster Shooter run of 2026-11-19. Nothing said so
-//! then: the journal had only the harness's errors that followed. Now the
+//! agent's did in the Raycaster Shooter run of 2026-11-19 and the Digger 3D
+//! run of 2026-11-23, when it was the private folder. It is only the
+//! agent's scratch folder now, and the private folder is out of the
+//! project (ADR 0040): nothing of the run's is lost. A session that names
+//! the private folder and removes it is still noticed (ADR 0038): the
 //! journal and the log name the session, Tenaz writes its prompt there
 //! again and keeps the run locked, and the run goes on.
 
@@ -11,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use super::{RunOptions, deps, fake_project, try_run};
 use crate::ledger::{JournalRecord, Phase};
 use crate::orchestrator::RunError;
-use crate::project::{Project, prompt_path};
+use crate::project::{Project, SCRATCH, prompt_name};
 use crate::testing::{Removed, ScriptedHarness, ScriptedRemoval, VirtualClock};
 
 /// A run of the fake goal whose T001 builder removed `what`: the project,
@@ -25,11 +28,24 @@ struct Removal {
 
 impl Removal {
     async fn run(what: Removed) -> Self {
+        Self::run_with(what, |project| project).await
+    }
+
+    /// The private folder is `.tenaz/private`, as it was before ADR 0040
+    /// and still is for a run started then.
+    async fn run_old_layout(what: Removed) -> Self {
+        Self::run_with(what, |project| Project::new(project.root())).await
+    }
+
+    /// `layout` gives the project the run uses, from the fake project.
+    async fn run_with(what: Removed, layout: impl FnOnce(Project) -> Project) -> Self {
         let work = tempfile::tempdir().unwrap();
         let (project, vcs) = fake_project(work.path(), &[]);
+        let project = layout(project);
         let script = ScriptedRemoval {
             task: "T001".into(),
             what,
+            private: project.private_dir(),
             ..ScriptedRemoval::default()
         };
         let harness = ScriptedHarness {
@@ -53,9 +69,7 @@ impl Removal {
     }
 
     fn log(&self) -> String {
-        self.project
-            .read(".tenaz/private/orchestrator.log")
-            .unwrap()
+        self.project.read_private("orchestrator.log").unwrap()
     }
 
     /// The run completed, and a run held the lock after the removal.
@@ -87,6 +101,47 @@ impl Removal {
     }
 }
 
+/// `rm -rf .tenaz/private` removes the agent's scratch folder only: the
+/// run's log, prompts and lock are where they were, and nothing is noted.
+#[tokio::test(start_paused = true)]
+async fn a_session_that_removes_the_scratch_folder_loses_nothing_of_the_run() {
+    let run = Removal::run(Removed::Scratch).await;
+    run.assert_completed_locked();
+    assert_eq!(run.removed(), Vec::<String>::new());
+    let log = run.log();
+    assert!(
+        log.contains("Session 001-"),
+        "the log lost its start:\n{log}"
+    );
+    assert!(!log.contains("the run lock's file"), "{log}");
+    assert!(
+        run.script.done.load(std::sync::atomic::Ordering::SeqCst),
+        "the session ran its removal"
+    );
+    let prompts = std::fs::read_dir(run.project.private_dir()).unwrap();
+    assert!(
+        prompts.flatten().any(|e| e
+            .file_name()
+            .to_string_lossy()
+            .ends_with("-builder-T001.prompt.md")),
+        "the builder's prompt is still there"
+    );
+}
+
+/// In a run of the old layout `.tenaz/private` is still the private
+/// folder: removing it is noticed as ADR 0038 says.
+#[tokio::test(start_paused = true)]
+async fn in_the_old_layout_removing_the_scratch_folder_is_noticed() {
+    let run = Removal::run_old_layout(Removed::Scratch).await;
+    run.assert_completed_locked();
+    let removed = run.removed();
+    let [label] = removed.as_slice() else {
+        panic!("{removed:?}\n{}", run.log());
+    };
+    assert!(label.ends_with("-builder-T001"), "{label}");
+    assert!(run.log().contains(SCRATCH), "{}", run.log());
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_session_that_removes_the_private_folder_is_named_and_the_run_goes_on() {
     let run = Removal::run(Removed::Folder).await;
@@ -105,7 +160,7 @@ async fn a_session_that_removes_the_private_folder_is_named_and_the_run_goes_on(
         log.contains(&format!("{label}: the run lock's file")),
         "{log}"
     );
-    assert!(run.project.exists(&prompt_path(label)));
+    assert!(run.project.private_path(&prompt_name(label)).exists());
 }
 
 /// Only the prompts removed, the lock file is still the run's: the session

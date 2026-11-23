@@ -40,7 +40,9 @@ use crate::write_scope::WriteScope;
 fn fake_project(work: &Path, overrides: &[&str]) -> (Project, Arc<SnapshotVcs>) {
     let brief = work.join("brief.md");
     std::fs::write(&brief, "# Fake brief\n\nBuild four trivial files.\n").unwrap();
-    let project = Project::new(work.join("project"));
+    // The private folder is out of the project, as a run keeps it in the
+    // git directory (ADR 0040).
+    let project = Project::new(work.join("project")).with_private_dir(work.join("git/tenaz"));
     let mut params = RunParams::default();
     for pair in ["notify=false", "engineRetryBaseSec=0"]
         .iter()
@@ -188,7 +190,7 @@ struct Blocked {
 impl Blocked {
     /// The run of `project`, which must have blocked.
     fn read(work: tempfile::TempDir, project: Project) -> Self {
-        let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+        let log = project.read_private("orchestrator.log").unwrap();
         let ledger = project.load_ledger().unwrap();
         assert_eq!(ledger.phase, Phase::Blocked, "{log}");
         let reason = ledger.blocked_reason.unwrap_or_default();

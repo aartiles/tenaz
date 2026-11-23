@@ -77,7 +77,7 @@ async fn an_engine_that_refuses_the_preflight_stops_the_run_with_its_error() {
     assert!(!preflight.ok && !preflight.accepted_weak);
     let saved = run_json_preflight(&project);
     assert_eq!(saved["engine_errors"].as_array().map(Vec::len), Some(3));
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert!(
         log.contains("preflight: the engine answered 503: not enough memory"),
         "{log}"
@@ -146,7 +146,7 @@ fn preflight_line_in_status_and_log(project: &Project) -> String {
         .lines()
         .find(|l| l.starts_with("Preflight: "))
         .unwrap_or_else(|| panic!("{status}"));
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert!(
         log.lines().any(|l| l
             .split_once("] ")

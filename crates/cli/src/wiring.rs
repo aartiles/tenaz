@@ -273,7 +273,7 @@ async fn media_server(
     if engines.image.is_none() && engines.mesh.is_none() {
         return Ok(None);
     }
-    let mut tools = MediaTools::new(lease.clone(), project.private_dir().join("media"));
+    let mut tools = MediaTools::new(lease.clone(), project.scratch_dir().join("media"));
     if let Some(adapter) = &engines.image {
         tools = tools.with_images(adapter.name(), media.workflows.clone());
     }

@@ -133,7 +133,7 @@ fn retry_causes(project: &Project) -> Vec<String> {
 #[tokio::test(start_paused = true)]
 async fn a_harness_that_once_ends_before_the_engine_is_rerun() {
     let (_work, project, _) = run_unstartable(1, None, &[]).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert_eq!(
         project.load_ledger().unwrap().phase,
         Phase::Complete,
@@ -152,7 +152,7 @@ async fn a_harness_that_once_ends_before_the_engine_is_rerun() {
 #[tokio::test(start_paused = true)]
 async fn a_harness_that_twice_ends_before_the_engine_blocks_the_run() {
     let (_work, project, vcs) = run_unstartable(ALWAYS, None, &[]).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     let ledger = project.load_ledger().unwrap();
     assert_eq!(ledger.phase, Phase::Blocked, "{log}");
     let reason = ledger.blocked_reason.unwrap_or_default();
@@ -174,7 +174,7 @@ async fn a_harness_that_twice_ends_before_the_engine_blocks_the_run() {
         Arc::new(VirtualClock::new()),
     );
     resume(&project, fixed).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert_eq!(
         project.load_ledger().unwrap().phase,
         Phase::Complete,
@@ -197,7 +197,7 @@ async fn a_harness_is_blamed_with_no_engine_retry_left() {
 /// its block reason.
 async fn blocked(outage: Outage, overrides: &[&str]) -> (tempfile::TempDir, Project, String) {
     let (work, project, _) = run_unstartable(ALWAYS, Some(outage), overrides).await;
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     let ledger = project.load_ledger().unwrap();
     assert_eq!(ledger.phase, Phase::Blocked, "{log}");
     assert_eq!(t001_builders(&project).len(), 3, "{log}");

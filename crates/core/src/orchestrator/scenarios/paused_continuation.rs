@@ -44,7 +44,7 @@ async fn blocked_after_pause(
     ))
     .await;
     let mut ledger = project.load_ledger().unwrap();
-    let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+    let log = project.read_private("orchestrator.log").unwrap();
     assert!(ledger.pending_continuation, "T001 was not paused:\n{log}");
     edit(&mut ledger);
     project.save_ledger(&ledger).unwrap();
@@ -103,7 +103,7 @@ impl BlockedAfterPause {
     /// continues anything.
     fn assert_continued(&self) {
         let project = &self.run.project;
-        let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+        let log = project.read_private("orchestrator.log").unwrap();
         let ledger = project.load_ledger().unwrap();
         assert_eq!(ledger.phase, Phase::Complete, "{log}");
         assert!(
@@ -129,10 +129,8 @@ impl BlockedAfterPause {
     /// work; the run's log as it is now is shown if not.
     fn assert_note(&self, label: &str, continues: bool) {
         let project = &self.run.project;
-        let prompt = project
-            .read(&format!(".tenaz/private/{label}.prompt.md"))
-            .unwrap();
-        let log = project.read(".tenaz/private/orchestrator.log").unwrap();
+        let prompt = project.read_private(&format!("{label}.prompt.md")).unwrap();
+        let log = project.read_private("orchestrator.log").unwrap();
         assert_eq!(
             prompt.contains("## Continuation"),
             continues,

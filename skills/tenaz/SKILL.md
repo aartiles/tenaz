@@ -216,11 +216,14 @@ A builder may declare a heavy job (a render, a long build) in
 sessions with the engine's memory freed where the engine can, logs it to
 `.tenaz/private/jobs/`, and journals `job-started` and `job-finished`.
 While a job runs no session is in flight (`inflight` is null in
-`tenaz status --json`): `.tenaz/private/orchestrator.log` names the job,
-and its log grows in `.tenaz/private/jobs/`.
+`tenaz status --json`): `orchestrator.log` names the job, and its log
+grows in `.tenaz/private/jobs/`.
+The run log and the sessions' files are in the run's private folder, in
+the git directory (`private_dir` in `tenaz status --json`; `.tenaz/private/`
+in the project is only the agent's scratch folder).
 To see why a session went wrong, read its briefing and, with fx, OpenCode
-or Qwen Code, the model's reasoning: `.tenaz/private/<label>.prompt.md`
-and `<label>.thinking.md` (the label is in `tenaz status`). Fix what you
+or Qwen Code, the model's reasoning: `<label>.prompt.md` and
+`<label>.thinking.md` there (the label is in `tenaz status`). Fix what you
 can (an engine down, an unclear brief: tell the user, since the brief
 cannot change after `init`), then `tenaz run --project <dir> --resume`;
 after updating Tenaz, add `--refresh-templates` so the run gets the new

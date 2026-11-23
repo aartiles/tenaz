@@ -43,7 +43,7 @@ pub(crate) struct HarnessRun<'a> {
     /// The model the session runs.
     pub model: SessionModel,
     pub watch: Option<WatchConfig>,
-    /// Keep the raw stream and the harness state under `.tenaz/private/`.
+    /// Keep the raw stream and the harness state in the private folder.
     pub persist: bool,
     /// A builder's task: a session that answered every prompt while
     /// `./verify --task` runs no passing check of it gets one more prompt
@@ -114,7 +114,7 @@ struct SessionLoop<'a> {
 
 impl Runner {
     /// How to open the session of `run`; `persist` keeps its logs and
-    /// state under `.tenaz/private/`.
+    /// state in the private folder.
     fn session_spec(&self, run: &HarnessRun<'_>) -> SessionSpec {
         let private = self.project.private_dir();
         let label = run.label;

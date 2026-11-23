@@ -8,6 +8,19 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- A run keeps its private folder (the run log, the sessions' prompts and
+  logs, Pi's sessions, the engine requests, the memory samples, the run
+  lock and each harness's `HOME`) in the git directory, `.git/tenaz/` or
+  the worktree's `.git/worktrees/<name>/tenaz/`, out of reach of the
+  commands that clean the project. It was `.tenaz/private/`: in a run of
+  2026-11-23 two sessions removed it, and the records of half the run
+  were lost. `.tenaz/private/` stays as the agent's scratch folder
+  (temporary files, media outputs, job logs). `tenaz status` names the
+  folder and `tenaz status --json` adds `private_dir`; read the run log
+  from there. A run started by an earlier version keeps its folder in
+  `.tenaz/private/`. `init` in a checkout that held a run sets the
+  earlier run's folder aside as `tenaz-before-<seconds>-<pid>`. See ADR 0040.
+
 - A harness that exits before it sends the engine anything, in a session
   and in its rerun, while the engine serves, now blocks the run at once
   with `harness failed:` and the harness's stderr. Before, it was counted

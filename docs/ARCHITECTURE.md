@@ -104,7 +104,12 @@ or stops a session, a prompt over its budget included, `session/reasons.rs`.
 
 State lives on disk under `.tenaz/` in the project, so a run survives the
 process and the user's existing tooling (`jq` over the journal, `git log`)
-keeps working.
+keeps working. What the run keeps out of git and out of reach of the
+commands that clean the project (the run log, the sessions' prompts and logs, the run lock, each harness's
+own files) is in the private folder, `tenaz/` in the git directory: a CLI
+command finds it with `git rev-parse --absolute-git-dir` and sets it on the
+`Project` (`core::project::private_place`, ADR 0040). `.tenaz/private/` is
+the agent's scratch folder.
 
 ## Harness adapters
 
@@ -123,7 +128,7 @@ module with unit tests turns the harness's own records into those events.
 | Permissions | `request_permission`, answered by the runner | none: Pi's built-in tools run unasked in RPC mode |
 | Raw log | the translated events, one JSON line each; the reasoning text goes to `<label>.thinking.md` | Pi's own stdout lines, verbatim |
 | Close | end the connection, wait, kill after the grace | end stdin (Pi's orderly shutdown), wait, kill after the grace |
-| Engine path | through the proxy (usage, hold while swapping) | the `baseUrl` of the run's own agent directory (`.tenaz/private/pi-agent/models.json`), which points at the proxy, or at the engine with `--no-proxy` |
+| Engine path | through the proxy (usage, hold while swapping) | the `baseUrl` of the run's own agent directory (`pi-agent/models.json` in the private folder), which points at the proxy, or at the engine with `--no-proxy` |
 
 `tenaz init --harness pi` pins `pi --version` and, when `~/.pi/agent/models.json`
 lists the provider, takes the base URL, context window and inputs from the
