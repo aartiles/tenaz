@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::memory::{MemorySample, MemoryWindow};
 use crate::ports::{Clock, MemoryProbe};
-use crate::project::Project;
+use crate::project::{MEMORY_SAMPLES, Project};
 
 #[derive(Default)]
 struct State {
@@ -68,7 +68,7 @@ impl Sampler {
         if let Ok(line) = serde_json::to_string(&sample) {
             let _ = self
                 .project
-                .append_private("memory.jsonl", &format!("{line}\n"));
+                .append_private(MEMORY_SAMPLES, &format!("{line}\n"));
         }
         if let Some(window) = &mut state.window {
             window.add(&sample);

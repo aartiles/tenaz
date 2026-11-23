@@ -1,6 +1,7 @@
 # ADR 0038: Note a removed private folder, and write Tenaz's files again
 
-Status: accepted, 2026-11-19.
+Status: accepted, 2026-11-19. Extended by ADR 0040, which moves the
+folder out of the project; this check stays as its fallback.
 
 ## Context
 

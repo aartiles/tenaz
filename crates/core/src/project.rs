@@ -31,6 +31,11 @@ pub const SCRATCH: &str = ".tenaz/private";
 pub const RUN_LOCK: &str = "run.lock";
 /// The run log, in the private folder.
 pub const ORCHESTRATOR_LOG: &str = "orchestrator.log";
+/// The engine requests of the run's sessions, one JSON line each, in the
+/// private folder.
+pub const REQUESTS: &str = "requests.jsonl";
+/// The memory samples, one JSON line each, in the private folder.
+pub const MEMORY_SAMPLES: &str = "memory.jsonl";
 
 mod private;
 pub use private::{LegacyMove, PrivatePlace, private_in, private_place};
@@ -78,6 +83,13 @@ impl Project {
         let root = root.into();
         let private = root.join(SCRATCH);
         Self { root, private }
+    }
+
+    /// The same project as runs before ADR 0040 kept it, its private
+    /// folder in `.tenaz/private`.
+    #[must_use]
+    pub fn old_layout(&self) -> Self {
+        Self::new(&self.root)
     }
 
     /// The same project with its private folder at `dir`.

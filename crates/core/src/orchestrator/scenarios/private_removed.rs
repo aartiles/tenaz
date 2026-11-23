@@ -34,7 +34,7 @@ impl Removal {
     /// The private folder is `.tenaz/private`, as it was before ADR 0040
     /// and still is for a run started then.
     async fn run_old_layout(what: Removed) -> Self {
-        Self::run_with(what, |project| Project::new(project.root())).await
+        Self::run_with(what, |project| project.old_layout()).await
     }
 
     /// `layout` gives the project the run uses, from the fake project.
@@ -42,12 +42,7 @@ impl Removal {
         let work = tempfile::tempdir().unwrap();
         let (project, vcs) = fake_project(work.path(), &[]);
         let project = layout(project);
-        let script = ScriptedRemoval {
-            task: "T001".into(),
-            what,
-            private: project.private_dir(),
-            ..ScriptedRemoval::default()
-        };
+        let script = ScriptedRemoval::new("T001", what, project.private_dir());
         let harness = ScriptedHarness {
             remove_private: Some(script.clone()),
             ..Default::default()

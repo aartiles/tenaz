@@ -64,7 +64,8 @@ pub struct ScriptedHarness {
     pub crash_task: Option<String>,
     /// Builder sessions that end before their first turn.
     pub unstartable: Option<ScriptedUnstartable>,
-    /// A builder session that removes `.tenaz/private`.
+    /// A builder session that removes the private folder, part of it, or
+    /// the scratch folder `.tenaz/private`.
     pub remove_private: Option<ScriptedRemoval>,
     /// The first builder session for this task dies while a shell call runs,
     /// as fx does on output that is not UTF-8.
@@ -347,6 +348,19 @@ pub struct ScriptedRemoval {
     pub done: Arc<std::sync::atomic::AtomicBool>,
     pub lock_held: Arc<std::sync::OnceLock<bool>>,
     pub another_run: Arc<std::sync::Mutex<Option<crate::project::RunLock>>>,
+}
+
+impl ScriptedRemoval {
+    /// The first builder session of `task` removes `what` of the run whose
+    /// private folder is `private`.
+    pub fn new(task: &str, what: Removed, private: std::path::PathBuf) -> Self {
+        Self {
+            task: task.to_owned(),
+            what,
+            private,
+            ..Self::default()
+        }
+    }
 }
 
 /// What a [`ScriptedRemoval`] removes.

@@ -149,9 +149,11 @@ fn pinned_workflows(specs: &[String]) -> anyhow::Result<BTreeMap<String, String>
 fn private_place(root: &Path) -> PrivatePlace {
     let repo = tenaz_adapters::git::GitRepo::new(root);
     let top = |dir: &Path| std::fs::canonicalize(dir).ok();
-    let git_dir = repo
-        .git_dir()
-        .filter(|_| repo.toplevel().and_then(|t| top(&t)) == top(root));
+    let at_top = matches!(
+        (repo.toplevel().and_then(|t| top(&t)), top(root)),
+        (Some(a), Some(b)) if a == b
+    );
+    let git_dir = repo.git_dir().filter(|_| at_top);
     let legacy = Project::new(root);
     let moved = git_dir
         .as_deref()
@@ -202,7 +204,8 @@ fn move_private(project: Project) -> anyhow::Result<Project> {
     let PrivatePlace::Move { to, .. } = private_place(project.root()) else {
         return Ok(project);
     };
-    let note = match project.clone().with_private_dir(&to).move_legacy_private() {
+    let outcome = project.clone().with_private_dir(&to).move_legacy_private();
+    let note = match &outcome {
         LegacyMove::Moved { from } => Some(format!(
             "Moved the private folder of this run from {} to {} (ADR 0040)",
             from.display(),
@@ -214,7 +217,8 @@ fn move_private(project: Project) -> anyhow::Result<Project> {
             to.display()
         )),
         LegacyMove::Busy => {
-            let pid = Project::new(project.root())
+            let pid = project
+                .old_layout()
                 .active_run()
                 .or_else(|| project.clone().with_private_dir(&to).active_run())
                 .filter(|p| *p > 0)
@@ -229,7 +233,7 @@ fn move_private(project: Project) -> anyhow::Result<Project> {
     let project = with_private(project);
     if let Some(note) = note {
         use tenaz_core::ports::Clock as _;
-        if note.starts_with("warning: ") {
+        if matches!(outcome, LegacyMove::Failed { .. }) {
             tracing::warn!("{note}");
         } else {
             tracing::info!("{note}");
@@ -393,8 +397,76 @@ mod tests {
         let (_dir, root, _git_dir) = repo();
         let running = with_private(Project::new(&root));
         let _lock = running.lock_run().unwrap().unwrap();
-        assert!(set_aside_private(&root).is_err());
+        let error = set_aside_private(&root).unwrap_err().to_string();
+        assert!(
+            error.contains(&format!("pid {}", std::process::id())),
+            "{error}"
+        );
         assert!(running.run_lock_path().exists());
+    }
+
+    /// A folder made read-only for as long as it lives, then writable again,
+    /// even when the test panics, so the temporary folder can go.
+    struct ReadOnly(PathBuf);
+
+    impl ReadOnly {
+        fn set(dir: &Path) -> Self {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            Self(dir.to_path_buf())
+        }
+    }
+
+    impl Drop for ReadOnly {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    /// An old-layout run: `.tenaz/private` with its log and lock.
+    fn old_layout_run(root: &Path) -> Project {
+        let old = Project::new(root);
+        old.append_private(ORCHESTRATOR_LOG, "[t] Session 001 started\n")
+            .unwrap();
+        drop(old.lock_run().unwrap().unwrap());
+        old
+    }
+
+    #[test]
+    fn a_run_stops_naming_an_old_run_that_holds_the_folder_s_lock() {
+        let (_dir, root, git_dir) = repo();
+        let old = old_layout_run(&root);
+        let _held = old.lock_run().unwrap().unwrap();
+        let error = move_private(with_private(Project::new(&root)))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&format!(
+                "Another tenaz run is working on this project (pid {})",
+                std::process::id()
+            )),
+            "{error}"
+        );
+        assert!(!git_dir.join("tenaz").exists());
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_moved_is_kept_and_the_log_says_why() {
+        let (_dir, root, git_dir) = repo();
+        old_layout_run(&root);
+        let _read_only = ReadOnly::set(&git_dir);
+        if std::fs::create_dir(git_dir.join("probe")).is_ok() {
+            eprintln!("skipped: this user (root?) writes a read-only folder");
+            return;
+        }
+        let kept = move_private(with_private(Project::new(&root))).unwrap();
+        assert_eq!(kept.private_dir(), root.join(".tenaz/private"));
+        let log = kept.read_private(ORCHESTRATOR_LOG).unwrap();
+        assert!(
+            log.contains("warning: cannot move the private folder"),
+            "{log}"
+        );
     }
 
     #[test]
@@ -414,10 +486,7 @@ mod tests {
     #[test]
     fn a_run_of_the_old_layout_is_read_in_place_and_moved_when_it_runs() {
         let (_dir, root, git_dir) = repo();
-        let old = Project::new(&root);
-        old.append_private(ORCHESTRATOR_LOG, "[t] Session 001 started\n")
-            .unwrap();
-        drop(old.lock_run().unwrap().unwrap());
+        old_layout_run(&root);
 
         let read = with_private(Project::new(&root));
         assert_eq!(read.private_dir(), root.join(".tenaz/private"));

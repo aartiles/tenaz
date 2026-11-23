@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use crate::ledger::{CacheCheck, JournalRecord, Ledger, Phase, SessionRecord};
 use crate::memory::{MemorySample, memory_line};
 use crate::metrics::{RequestRecord, engine_line, prompt_cache_percent};
-use crate::project::Project;
+use crate::project::{MEMORY_SAMPLES, Project, REQUESTS};
 
 /// The status text, or a note when the project is not initialized.
 pub fn status_text(project: &Project) -> String {
@@ -22,7 +22,7 @@ pub fn status_text(project: &Project) -> String {
     let sessions = sessions(project);
     let requests = requests(project);
     let samples: Vec<MemorySample> = project
-        .read_private_if("memory.jsonl")
+        .read_private_if(MEMORY_SAMPLES)
         .unwrap_or_default()
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
@@ -179,7 +179,7 @@ fn task_counts(project: &Project) -> Vec<(String, usize)> {
 
 fn requests(project: &Project) -> Vec<RequestRecord> {
     project
-        .read_private_if("requests.jsonl")
+        .read_private_if(REQUESTS)
         .unwrap_or_default()
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
@@ -296,7 +296,7 @@ mod tests {
         context_cap: Option<u64>,
     ) -> (tempfile::TempDir, Project) {
         let work = tempfile::tempdir().unwrap();
-        let project = Project::new(work.path());
+        let project = Project::new(work.path()).with_private_dir(work.path().join("git/tenaz"));
         let config = ModelConfig {
             harness: HarnessKind::Fx,
             harness_version: "0.0.14".into(),
@@ -342,12 +342,12 @@ mod tests {
         assert!(
             text.contains(&format!(
                 "\nPrivate folder: {} ",
-                project.private_dir().display()
+                project.root().join("git/tenaz").display()
             )),
             "{text}"
         );
         let json = status_json(&project);
-        assert_eq!(json["private_dir"], json!(project.private_dir()));
+        assert_eq!(json["private_dir"], json!(project.root().join("git/tenaz")));
         assert_eq!(json["model"], "sushi/A");
         assert_eq!(
             json["role_models"],

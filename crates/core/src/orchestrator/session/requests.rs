@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::metrics::{EngineCounters, RequestRecord, delta};
 use crate::ports::{Clock, EngineMetricsSource};
-use crate::project::Project;
+use crate::project::{Project, REQUESTS};
 use crate::session::{RequestSettings, ServerTimings, SessionEvent, StopReason, Usage};
 
 /// One model response to record.
@@ -67,7 +67,7 @@ impl RequestRecorder {
                 if let Some(project) = &project
                     && let Ok(line) = serde_json::to_string(&record)
                 {
-                    let _ = project.append_private("requests.jsonl", &format!("{line}\n"));
+                    let _ = project.append_private(REQUESTS, &format!("{line}\n"));
                 }
                 requests.push(record);
             }

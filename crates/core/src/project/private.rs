@@ -146,7 +146,7 @@ impl Project {
     /// made the file: only a run older than the lock, with a log and no
     /// lock file, gets one made.
     fn lock_legacy(&self) -> io::Result<(Option<RunLock>, bool)> {
-        let old = Self::new(&self.root);
+        let old = self.old_layout();
         match old.lock_existing_run() {
             Err(error) if error.kind() == io::ErrorKind::NotFound && self.has_legacy_to_move() => {
                 old.lock_run().map(|lock| (lock, true))
@@ -278,21 +278,19 @@ mod tests {
     #[test]
     fn a_run_that_lost_the_race_leaves_no_lock_in_the_scratch_folder() {
         let (_dir, project) = legacy_run();
-        // This run took the old folder's lock, making its file, and another
-        // run then moved the folder and left a scratch folder in its place.
-        let made = Project::new(project.root()).lock_run().unwrap().unwrap();
+        // Another run moved the folder; this run then took a lock, making a
+        // new lock file in the fresh scratch folder.
         std::fs::create_dir_all(project.private_dir().parent().unwrap()).unwrap();
         std::fs::rename(project.scratch_dir(), project.private_dir()).unwrap();
-        let late = Project::new(project.root()).lock_run().unwrap().unwrap();
-        drop(made);
-        assert!(!project.still_to_move(&late, true));
+        let this_run = project.old_layout().lock_run().unwrap().unwrap();
+        assert!(!project.still_to_move(&this_run, true));
         assert!(!project.legacy_private_run(), "{:?}", project.scratch_dir());
     }
 
     #[test]
     fn a_lock_taken_on_a_folder_moved_meanwhile_is_not_moved_again() {
         let (_dir, project) = legacy_run();
-        let lock = Project::new(project.root()).lock_run().unwrap().unwrap();
+        let lock = project.old_layout().lock_run().unwrap().unwrap();
         std::fs::create_dir_all(project.private_dir().parent().unwrap()).unwrap();
         std::fs::rename(project.scratch_dir(), project.private_dir()).unwrap();
         assert!(!project.still_to_move(&lock, false));
@@ -329,7 +327,7 @@ mod tests {
             project.move_legacy_private(),
             LegacyMove::Failed { .. }
         ));
-        let old = Project::new(project.root());
+        let old = project.old_layout();
         assert!(old.read_private(ORCHESTRATOR_LOG).is_ok());
         assert!(old.lock_run().unwrap().is_some(), "the lock was released");
     }
@@ -337,7 +335,7 @@ mod tests {
     #[test]
     fn the_old_folder_is_not_moved_while_a_run_holds_its_lock() {
         let (_dir, project) = legacy_run();
-        let running = Project::new(project.root()).lock_run().unwrap().unwrap();
+        let running = project.old_layout().lock_run().unwrap().unwrap();
         assert!(matches!(project.move_legacy_private(), LegacyMove::Busy));
         assert!(!project.private_dir().exists());
         drop(running);

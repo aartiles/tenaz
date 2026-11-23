@@ -108,7 +108,9 @@ name the folder.
   `tenaz-before-<seconds>-<pid>` in the git directory and says so, so the
   new run's log and records start empty; resuming the earlier run on its
   own branch then means moving that folder back to `tenaz` by hand. A
-  folder whose run still holds its lock is left, with a warning.
+  folder whose run still holds its lock is left, with a warning. An
+  old-layout `.tenaz/private/` left by hand after `run.json` was removed
+  is not set aside: the new run's first `tenaz run` takes it as its own.
   Removing `.tenaz/` no longer removes the earlier run's logs.
 - A `tenaz watch` started before the move follows the old path until it
   is started again.
