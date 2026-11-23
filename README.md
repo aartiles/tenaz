@@ -683,8 +683,9 @@ own files. Commands that clean the project (`rm -rf .tenaz`,
 of git, for the agent's temporary files and the media tools' outputs;
 removing it loses nothing of the run's
 ([ADR 0040](docs/adr/0040-keep-the-private-folder-in-the-git-directory.md)).
-A run started by an earlier version keeps its folder in `.tenaz/private/`
-until it ends.
+`tenaz run` moves the folder of a run started by an earlier version out
+of `.tenaz/private/` before it resumes it, and says so in
+`orchestrator.log`.
 
 Neither mode stops a command that names the private folder. When a
 session removes it, Tenaz notices after the session: the journal records

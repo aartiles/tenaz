@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use tenaz_core::ledger::EngineApi;
 use tenaz_core::orchestrator::Templates;
-use tenaz_core::project::{self, PrivatePlace, Project};
+use tenaz_core::project::{self, LegacyMove, ORCHESTRATOR_LOG, PrivatePlace, Project};
 
 use crate::{VERSION, wiring, worktree};
 
@@ -189,6 +189,55 @@ fn set_aside_private(root: &Path) -> std::io::Result<Option<PathBuf>> {
 fn with_private(project: Project) -> Project {
     let place = private_place(project.root());
     project.with_private_dir(place.current())
+}
+
+/// `project` with the private folder of a run of the old layout moved out
+/// of it, into the git directory (ADR 0040), before the run starts; the
+/// run's log and stderr say so. The folder is found again afterwards, so a
+/// run that lost a race to move it works with the folder where the winner
+/// put it. A folder whose lock another run holds stops this run, naming
+/// that run. When the folder cannot be moved, the run keeps it in
+/// `.tenaz/private` and its log says why.
+fn move_private(project: Project) -> anyhow::Result<Project> {
+    let PrivatePlace::Move { to, .. } = private_place(project.root()) else {
+        return Ok(project);
+    };
+    let note = match project.clone().with_private_dir(&to).move_legacy_private() {
+        LegacyMove::Moved { from } => Some(format!(
+            "Moved the private folder of this run from {} to {} (ADR 0040)",
+            from.display(),
+            to.display()
+        )),
+        LegacyMove::Failed { from, error } => Some(format!(
+            "warning: cannot move the private folder from {} to {}: {error}; this run keeps it in the project (ADR 0040)",
+            from.display(),
+            to.display()
+        )),
+        LegacyMove::Busy => {
+            let pid = Project::new(project.root())
+                .active_run()
+                .or_else(|| project.clone().with_private_dir(&to).active_run())
+                .filter(|p| *p > 0)
+                .map(|p| format!(" (pid {p})"))
+                .unwrap_or_default();
+            anyhow::bail!(
+                "Another tenaz run is working on this project{pid}; stop it with Ctrl-C or wait for it to end"
+            );
+        }
+        LegacyMove::NotNeeded => None,
+    };
+    let project = with_private(project);
+    if let Some(note) = note {
+        use tenaz_core::ports::Clock as _;
+        if note.starts_with("warning: ") {
+            tracing::warn!("{note}");
+        } else {
+            tracing::info!("{note}");
+        }
+        let now = tenaz_adapters::clock::SystemClock::new().now_rfc3339();
+        let _ = project.append_private(ORCHESTRATOR_LOG, &format!("[{now}] {note}\n"));
+    }
+    Ok(project)
 }
 
 /// The project at `dir` or, when `dir` has none, in the only one of its
@@ -363,13 +412,24 @@ mod tests {
     }
 
     #[test]
-    fn a_run_of_the_old_layout_is_read_in_place() {
-        let (_dir, root, _git_dir) = repo();
+    fn a_run_of_the_old_layout_is_read_in_place_and_moved_when_it_runs() {
+        let (_dir, root, git_dir) = repo();
         let old = Project::new(&root);
-        old.append_private(project::ORCHESTRATOR_LOG, "[t] Session 001 started\n")
+        old.append_private(ORCHESTRATOR_LOG, "[t] Session 001 started\n")
             .unwrap();
         drop(old.lock_run().unwrap().unwrap());
+
         let read = with_private(Project::new(&root));
         assert_eq!(read.private_dir(), root.join(".tenaz/private"));
+
+        let moved = move_private(read).unwrap();
+        assert_eq!(moved.private_dir(), git_dir.join("tenaz"));
+        let log = moved.read_private(ORCHESTRATOR_LOG).unwrap();
+        assert!(log.starts_with("[t] Session 001 started\n"), "{log}");
+        assert!(log.contains("Moved the private folder"), "{log}");
+        assert_eq!(
+            with_private(Project::new(&root)).private_dir(),
+            git_dir.join("tenaz")
+        );
     }
 }

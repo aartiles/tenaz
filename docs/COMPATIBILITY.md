@@ -150,14 +150,16 @@ above), so a 32k context is the practical floor (`contextFloor`).
   samples of sessions 001 to 069 were lost). It is in the git directory
   now; `.tenaz/private/` is the agent's scratch folder. Tested with the
   scripted harness (a builder that removes the scratch folder loses
-  nothing) and a real git repository; not yet in a real run, nor on
-  Linux. A command that names the private
-  folder can still remove it: Tenaz notices after the session (journal
-  `private-removed`, a log line), writes its prompt and each harness's
-  files again, and takes the run lock again (ADR 0038). Until the
-  session ends, another `tenaz run` could take the lock; this run then
-  stops. A harness that cannot start after the removal blocks as
-  `harness failed:` (ADR 0037).
+  nothing) and a real git repository, moving an old run's folder included;
+  not yet in a real run, nor on Linux. An old run's folder on another file
+  system than the git directory is not moved: the run keeps it in
+  `.tenaz/private/` and says so in its log. A command that names the
+  private folder can still remove it: Tenaz notices after the session
+  (journal `private-removed`, a log line), writes its prompt and each
+  harness's files again, and takes the run lock again (ADR 0038). Until
+  the session ends, another `tenaz run` could take the lock; this run then
+  stops. A harness that cannot start after the removal blocks as `harness
+  failed:` (ADR 0037).
 - **Harness homes outside the project.** fx's, OpenCode's, Qwen Code's
   and dsh's `HOME`, with the links to the pinned skills, are in the
   private folder, outside the project, since ADR 0040. A harness whose

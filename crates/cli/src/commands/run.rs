@@ -10,7 +10,9 @@ use tenaz_core::orchestrator::{RunOptions, Runner};
 use tokio_util::sync::CancellationToken;
 
 use super::harness_bins::HarnessBins;
-use super::{EngineKind, initialized, pinned_path, pinned_workflows, runner_version, templates};
+use super::{
+    EngineKind, initialized, move_private, pinned_path, pinned_workflows, runner_version, templates,
+};
 use crate::{wiring, worktree};
 
 /// `tenaz run`. Every launch flag is optional: without it the value pinned
@@ -152,7 +154,7 @@ fn replace<T: Clone>(slot: &mut Option<T>, flag: Option<&T>) {
 
 /// `tenaz run`: works on the goal until it ends, pauses or fails.
 pub(crate) async fn execute(args: RunArgs) -> anyhow::Result<ExitCode> {
-    let project = initialized(args.project.clone())?;
+    let project = move_private(initialized(args.project.clone())?)?;
     let mut ledger = project.load_ledger()?;
     if let Some(origin) = &ledger.origin {
         tracing::info!("{}", worktree::describe(origin));

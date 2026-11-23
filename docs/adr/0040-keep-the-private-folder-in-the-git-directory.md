@@ -75,8 +75,14 @@ inside another repository, where several projects would share one git
 directory. Tenaz makes a repository at `init`, so this is rare.
 
 A run of the old layout (a `.tenaz/private/` with `run.lock` or
-`orchestrator.log`, and no `<git dir>/tenaz/`) keeps its folder there:
-`tenaz status`, `tenaz watch` and `tenaz run` use it in place.
+`orchestrator.log`, and no `<git dir>/tenaz/`) is read in place by
+`tenaz status` and `tenaz watch`. `tenaz run` moves it, holding its run
+lock so that no other run is using it, and says so in `orchestrator.log`;
+when another run holds that lock, it stops and names it.
+Its `jobs/` and `media/`, which task notes name by their path, stay in
+`.tenaz/private/`; other scratch files of the agent's move with it. When
+it cannot be moved (another file system: the rename fails), the run
+keeps it where it is and its log says why.
 
 `tenaz status` prints the folder, and `tenaz status --json` has it as
 `private_dir`. There is no link to it in the project: a link the agent's
@@ -104,16 +110,23 @@ name the folder.
   own branch then means moving that folder back to `tenaz` by hand. A
   folder whose run still holds its lock is left, with a warning.
   Removing `.tenaz/` no longer removes the earlier run's logs.
+- A `tenaz watch` started before the move follows the old path until it
+  is started again.
 - `git worktree remove` removes the folder with the worktree, as it
   removed `.tenaz/private/` before.
 - Each harness's `HOME` is outside the project now. A harness whose file
   tools are confined to the project (Qwen Code) may refuse to read a
   pinned skill's other files through the link in its `HOME`. Not yet
   checked with a real harness.
-- A run of the old layout is as exposed as before until it ends. While
-  its `.tenaz/private/` is removed and not yet written again, a new
-  command finds no old run there and looks in the git directory, so a
-  second `tenaz run` could start beside it.
+- A run of the old layout is as exposed as before until a `tenaz run` of
+  this version moves its folder. While an earlier version runs it and its
+  `.tenaz/private/` is removed and not yet written again, a new command
+  finds no old run there and looks in the git directory, so a second
+  `tenaz run` could start beside it, and when only its lock file was
+  removed, `tenaz run` takes it for a run from before the lock and moves
+  the folder from under it, as it would under a still-working version
+  from before the lock. An earlier version started on a run after
+  the move takes a lock of its own in `.tenaz/private/`.
 - Tested with the scripted harness (a builder that removes the scratch
   folder, and one that removes the private folder) and with a real git
   repository; not yet in a real run, nor on Linux.
