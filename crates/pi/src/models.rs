@@ -129,6 +129,9 @@ pub struct AgentModels {
     pub base_url: String,
     pub run: AgentModel,
     pub others: Vec<AgentModel>,
+    /// The run's `maxOutputTokens`: every model's `maxTokens`. Unset, a
+    /// model keeps the `maxTokens` of the user's own file, else 16,384.
+    pub max_output_tokens: Option<std::num::NonZeroU64>,
 }
 
 impl AgentModels {
@@ -249,7 +252,7 @@ pub fn agent_models_json(
         .unwrap_or_default();
     let entries = models
         .all()
-        .map(|model| model_json(model, &listed))
+        .map(|model| model_json(model, &listed, models.max_output_tokens))
         .collect();
     provider.insert("baseUrl".to_owned(), Value::String(models.base_url.clone()));
     provider
@@ -266,8 +269,12 @@ pub fn agent_models_json(
 }
 
 /// `model`'s entry: the user's own from `listed`, if any, with the run's
-/// context window and inputs.
-fn model_json(model: &AgentModel, listed: &[serde_json::Value]) -> serde_json::Value {
+/// context window and inputs, and its output limit when the run sets one.
+fn model_json(
+    model: &AgentModel,
+    listed: &[serde_json::Value],
+    max_output_tokens: Option<std::num::NonZeroU64>,
+) -> serde_json::Value {
     use serde_json::{Value, json};
     let mut entry = listed
         .iter()
@@ -284,7 +291,11 @@ fn model_json(model: &AgentModel, listed: &[serde_json::Value]) -> serde_json::V
         .or_insert(Value::Bool(model.reasoning));
     entry.insert("input".to_owned(), json!(model.input));
     entry.insert("contextWindow".to_owned(), json!(model.context_window));
-    entry.entry("maxTokens").or_insert(json!(16_384));
+    let limit = max_output_tokens
+        .map(|limit| json!(limit.get()))
+        .or_else(|| entry.get("maxTokens").cloned())
+        .unwrap_or(json!(tenaz_core::params::DEFAULT_MAX_OUTPUT_TOKENS));
+    entry.insert("maxTokens".to_owned(), limit);
     Value::Object(entry)
 }
 
@@ -300,7 +311,7 @@ mod tests {
           "apiKey": "local",
           "models": [
             {"id": "Qwen3.8", "name": "Qwen", "reasoning": true, "input": ["text", "image"],
-             "contextWindow": 131072, "maxTokens": 16384, "thinkingLevelMap": {"off": "off"}},
+             "contextWindow": 131072, "maxTokens": 32768, "thinkingLevelMap": {"off": "off"}},
             {"id": "Small", "name": "Small"}
           ]
         }
@@ -377,6 +388,7 @@ mod tests {
             base_url: "http://127.0.0.1:4001/v1".into(),
             run,
             others,
+            max_output_tokens: None,
         }
     }
 
@@ -448,7 +460,27 @@ mod tests {
         assert_eq!(models[0]["thinkingLevelMap"]["off"], "off");
         assert_eq!(models[0]["contextWindow"], 65536);
         assert_eq!(models[0]["input"], serde_json::json!(["text"]));
-        assert_eq!(models[0]["maxTokens"], 16384);
+        assert_eq!(models[0]["maxTokens"], 32768);
+    }
+
+    /// The run's output limit replaces every model's, the user's own too.
+    #[test]
+    fn the_run_s_output_limit_is_every_model_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models.json");
+        std::fs::write(&path, SAMPLE).unwrap();
+        let ids = ["Qwen3.8", "Unlisted"].map(str::to_owned);
+        let template = provider_template(&path, "sushi", &ids).unwrap();
+        let model = |id: &str| AgentModel {
+            id: id.into(),
+            ..agent_model()
+        };
+        let mut models = on("sushi", model("Qwen3.8"), vec![model("Unlisted")]);
+        models.max_output_tokens = std::num::NonZeroU64::new(65_536);
+        let json = agent_models_json(&models, template);
+        let listed = json["providers"]["sushi"]["models"].as_array().unwrap();
+        let limits: Vec<_> = listed.iter().map(|m| m["maxTokens"].clone()).collect();
+        assert_eq!(limits, [65_536, 65_536]);
     }
 
     /// A model per role: every model of the run is listed, the run's first,

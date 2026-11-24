@@ -10,7 +10,7 @@ use axum::response::IntoResponse;
 use futures::StreamExt;
 use tenaz_core::lease::Gate;
 use tenaz_core::session::{ENGINE_UNREACHABLE, is_engine_unavailable};
-use tenaz_proxy::{Proxy, ProxyEvent, ProxyHandle, ProxyUsage};
+use tenaz_proxy::{OutputLimit, Proxy, ProxyEvent, ProxyHandle, ProxyUsage};
 
 /// The id a fresh proxy gives its first request.
 const FIRST_REQUEST: u64 = 1;
@@ -76,7 +76,10 @@ async fn fake_engine() -> SocketAddr {
                     let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"error\":{\"message\":\"error.GenerationOutOfMemory\",\"type\":\"server_error\",\"param\":null,\"code\":null},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\ndata: {\"error\":{\"message\":\"a later error\"}}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":67373,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n";
                     return ([("content-type", "text/event-stream")], sse).into_response();
                 }
-                if content == "cut in a tool call" {
+                if content == "cut at the run's limit" {
+                    assert_eq!(body["max_tokens"], 16, "the proxy puts in the run's limit");
+                }
+                if content == "cut in a tool call" || content == "cut at the run's limit" {
                     let sse = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"write\",\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":16}}\n\ndata: [DONE]\n\n";
                     return ([("content-type", "text/event-stream")], sse).into_response();
                 }
@@ -517,6 +520,47 @@ async fn a_reply_at_the_requested_output_limit_is_reported_as_cut() {
         ),
         "the request's settings are reported with its completion: {events:?}"
     );
+}
+
+/// A request that names no output limit, as Qwen Code's, is sent with
+/// the run's imposed one, and a reply that reaches it is reported as cut.
+#[tokio::test]
+async fn a_request_without_a_limit_is_sent_and_judged_with_the_run_s() {
+    let upstream = fake_engine().await;
+    let events: Arc<Mutex<Vec<ProxyEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let mut proxy = Proxy::new(
+        format!("http://{upstream}"),
+        Gate::new(),
+        Arc::new(move |e| sink.lock().unwrap().push(e)),
+    );
+    proxy.output_limit = Some(OutputLimit::Imposed(16));
+    let handle = Arc::new(proxy)
+        .start("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    reqwest::Client::new()
+        .post(format!("{}/chat/completions", handle.base_url()))
+        .json(&serde_json::json!({
+            "stream": true,
+            "messages": [{"role": "user", "content": "cut at the run's limit"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let events = settle(&events, 1).await;
+    assert!(
+        matches!(
+            &events[0],
+            ProxyEvent::Completed { finish_reason: Some(reason), sent: Some(sent), .. }
+                if reason == "length" && sent.max_tokens == Some(16)
+        ),
+        "{events:?}"
+    );
+    handle.stop().await;
 }
 
 /// The opening of Qwen Code 0.26.6's summarizing prompt

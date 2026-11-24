@@ -170,6 +170,11 @@ pub struct ServerTimings {
     pub accepted: Option<u64>,
 }
 
+/// The names the chat, completions and responses APIs give a request's
+/// output limit.
+pub const OUTPUT_LIMIT_FIELDS: [&str; 3] =
+    ["max_completion_tokens", "max_tokens", "max_output_tokens"];
+
 /// What a completion request asked of the engine, as the engine proxy
 /// forwarded it (after the proxy's own defaults). A field the request did
 /// not carry is `None`: the engine used its own default.
@@ -183,7 +188,7 @@ pub struct RequestSettings {
     pub top_k: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
-    /// `max_completion_tokens`, `max_tokens` or `max_output_tokens`.
+    /// Under any of [`OUTPUT_LIMIT_FIELDS`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
 }
@@ -202,9 +207,7 @@ impl RequestSettings {
                 .or_else(|| request.get("reasoning").and_then(|r| r.get("effort")))
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
-            max_tokens: ["max_completion_tokens", "max_tokens", "max_output_tokens"]
-                .into_iter()
-                .find_map(int),
+            max_tokens: OUTPUT_LIMIT_FIELDS.into_iter().find_map(int),
         }
     }
 }

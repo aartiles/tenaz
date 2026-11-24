@@ -51,9 +51,9 @@ pub struct Proxy {
     /// When turned, requests ask for one step less than the default
     /// `reasoning_effort`, whatever the harness sent.
     pub effort: Option<EffortDial>,
-    /// The harness's output limit, for requests that do not carry one: a
-    /// reply that reaches it is reported with `finish_reason: length`.
-    pub max_output_tokens: Option<u64>,
+    /// The output limit of a request that names none: a reply that
+    /// reaches it is reported with `finish_reason: length`.
+    pub output_limit: Option<OutputLimit>,
     /// The text that opens the harness's own request to summarize its
     /// conversation, for a harness whose summary requests Tenaz refuses.
     /// Such a request is answered with an error and never reaches the
@@ -132,7 +132,7 @@ impl Proxy {
             request_defaults: serde_json::Map::new(),
             repair_tool_args: true,
             effort: None,
-            max_output_tokens: None,
+            output_limit: None,
             compaction_prompt_opening: None,
             past_reasoning_budget: tenaz_core::params::RunParams::default().past_reasoning_budget(),
         }
@@ -203,12 +203,57 @@ fn forwardable(headers: &HeaderMap) -> reqwest::header::HeaderMap {
     out
 }
 
-/// Is this a request the engine answers with a completion (and usage)?
-fn is_completion(method: &axum::http::Method, path: &str) -> bool {
-    method == axum::http::Method::POST
-        && (path.ends_with("/chat/completions")
-            || path.ends_with("/completions")
-            || path.ends_with("/responses"))
+/// The output limit of the run's requests that name none (ADR 0041).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputLimit {
+    /// The harness's, assumed: the request goes on without one, and the
+    /// engine applies its own.
+    Assumed(u64),
+    /// The run's own, put into the request: a harness that sends none
+    /// would leave the engine's default in its place.
+    Imposed(u64),
+}
+
+impl OutputLimit {
+    pub fn tokens(self) -> u64 {
+        match self {
+            OutputLimit::Assumed(tokens) | OutputLimit::Imposed(tokens) => tokens,
+        }
+    }
+}
+
+/// The API of a request the engine answers with a completion (and usage).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Api {
+    /// `/chat/completions` and `/completions`.
+    Completions,
+    /// `/responses`.
+    Responses,
+}
+
+impl Api {
+    /// The name this API gives a request's output limit.
+    fn output_limit_field(self) -> &'static str {
+        match self {
+            Api::Completions => "max_tokens",
+            Api::Responses => "max_output_tokens",
+        }
+    }
+}
+
+/// The API of a request to `path` the engine answers with a completion,
+/// `None` for any other request.
+fn completion_api(method: &axum::http::Method, path: &str) -> Option<Api> {
+    if method != axum::http::Method::POST {
+        return None;
+    }
+    if path.ends_with("/completions") {
+        Some(Api::Completions)
+    } else if path.ends_with("/responses") {
+        Some(Api::Responses)
+    } else {
+        None
+    }
 }
 
 /// Is a chat request the harness's own request to summarize its
@@ -238,12 +283,18 @@ fn asks_to_compact(request: &serde_json::Value, opening: &str) -> bool {
 }
 
 impl Proxy {
+    /// The output limit of a request that names none, in tokens.
+    fn output_limit_tokens(&self) -> Option<u64> {
+        self.output_limit.map(OutputLimit::tokens)
+    }
+
     /// Rewrites a completion request: the earlier reasoning dropped unless
     /// kept, the lowered `reasoning_effort` when the dial is turned, the
-    /// defaults for absent fields, `stream_options.include_usage` on a
+    /// defaults for absent fields, the run's output limit on a request
+    /// without one, `stream_options.include_usage` on a
     /// streaming request that lacks it, and a note in place of each video
     /// file (`video`). `None` when nothing changed.
-    fn rewrite_request(&self, body: &[u8]) -> Option<Vec<u8>> {
+    fn rewrite_request(&self, api: Api, body: &[u8]) -> Option<Vec<u8>> {
         let mut json: serde_json::Value = serde_json::from_slice(body).ok()?;
         let object = json.as_object_mut()?;
         let dropped = self
@@ -253,9 +304,10 @@ impl Proxy {
             .lowered_effort()
             .is_some_and(|effort| set_effort(object, effort));
         let filled = fill_defaults(object, &self.request_defaults);
+        let limited = add_output_limit(object, self.output_limit, api);
         let usage = self.include_usage && ask_for_usage(object);
         let videos = video::replace_video_files(object);
-        if ![dropped, lowered, filled, usage, videos].contains(&true) {
+        if ![dropped, lowered, filled, limited, usage, videos].contains(&true) {
             return None;
         }
         serde_json::to_vec(&json).ok()
@@ -263,6 +315,19 @@ impl Proxy {
 }
 
 type JsonObject = serde_json::Map<String, serde_json::Value>;
+
+/// Gives a request of `api` that names no output limit an imposed
+/// `limit`, under the name `api` gives it; true when it did.
+fn add_output_limit(request: &mut JsonObject, limit: Option<OutputLimit>, api: Api) -> bool {
+    let Some(OutputLimit::Imposed(limit)) = limit else {
+        return false;
+    };
+    if events::output_limit_in(request).is_some() {
+        return false;
+    }
+    request.insert(api.output_limit_field().to_owned(), limit.into());
+    true
+}
 
 /// Sets `reasoning_effort`; true when it was different.
 fn set_effort(request: &mut JsonObject, effort: &str) -> bool {
@@ -314,7 +379,7 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
         .uri()
         .path_and_query()
         .map_or_else(|| "/".to_owned(), ToString::to_string);
-    let completion = is_completion(&method, request.uri().path());
+    let completion = completion_api(&method, request.uri().path());
     let headers = request.headers().clone();
     let body = match axum::body::to_bytes(request.into_body(), 256 * 1024 * 1024).await {
         Ok(body) => body,
@@ -322,11 +387,10 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
             return (StatusCode::BAD_REQUEST, format!("request body: {error}")).into_response();
         }
     };
-    let rewritten = completion.then(|| proxy.rewrite_request(&body)).flatten();
+    let rewritten = completion.and_then(|api| proxy.rewrite_request(api, &body));
     let body = rewritten.map_or(body, bytes::Bytes::from);
-    let request_json = completion
-        .then(|| serde_json::from_slice::<serde_json::Value>(&body).ok())
-        .flatten();
+    let request_json =
+        completion.and_then(|_| serde_json::from_slice::<serde_json::Value>(&body).ok());
     if let Some(refused) = proxy.refuse_if_compaction(id, request_json.as_ref()) {
         return refused;
     }
@@ -397,10 +461,10 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
         path,
         status.as_u16(),
         stream || event_stream,
-        completion,
+        completion.is_some(),
         started,
     )
-    .for_request(request_json.as_ref(), proxy.max_output_tokens);
+    .for_request(request_json.as_ref(), proxy.output_limit_tokens());
     let tapped = TappedStream::new(
         upstream
             .bytes_stream()
@@ -534,15 +598,54 @@ mod tests {
     fn streaming_requests_get_the_usage_option() {
         let mut proxy = proxy();
         let body = br#"{"model":"m","stream":true,"messages":[]}"#;
-        let rewritten = json(&proxy.rewrite_request(body).unwrap());
+        let rewritten = json(&proxy.rewrite_request(Api::Completions, body).unwrap());
         assert_eq!(rewritten["stream_options"]["include_usage"], true);
         assert_eq!(rewritten["messages"], serde_json::json!([]));
-        assert!(proxy.rewrite_request(br#"{"stream":false}"#).is_none());
+        assert!(
+            proxy
+                .rewrite_request(Api::Completions, br#"{"stream":false}"#)
+                .is_none()
+        );
         let asked = br#"{"stream":true,"stream_options":{"include_usage":false}}"#;
-        assert!(proxy.rewrite_request(asked).is_none());
-        assert!(proxy.rewrite_request(b"not json").is_none());
+        assert!(proxy.rewrite_request(Api::Completions, asked).is_none());
+        assert!(
+            proxy
+                .rewrite_request(Api::Completions, b"not json")
+                .is_none()
+        );
         proxy.include_usage = false;
-        assert!(proxy.rewrite_request(body).is_none());
+        assert!(proxy.rewrite_request(Api::Completions, body).is_none());
+    }
+
+    /// With the run's own limit, a request that names none is given it,
+    /// under the name its API uses; a request's own limit, under any name,
+    /// is left as it is.
+    #[test]
+    fn a_request_without_an_output_limit_is_given_the_run_s() {
+        let mut proxy = proxy();
+        let bare = br#"{"model":"m"}"#;
+        assert!(
+            proxy.rewrite_request(Api::Completions, bare).is_none(),
+            "nothing without the run's own"
+        );
+        proxy.output_limit = Some(OutputLimit::Assumed(65_536));
+        assert!(
+            proxy.rewrite_request(Api::Completions, bare).is_none(),
+            "an assumed limit is not put in"
+        );
+        proxy.output_limit = Some(OutputLimit::Imposed(65_536));
+        let chat = json(&proxy.rewrite_request(Api::Completions, bare).unwrap());
+        assert_eq!(chat["max_tokens"], 65_536);
+        let responses = json(&proxy.rewrite_request(Api::Responses, bare).unwrap());
+        assert_eq!(responses["max_output_tokens"], 65_536);
+        assert!(responses.get("max_tokens").is_none(), "{responses}");
+        for own in [
+            br#"{"max_tokens":100}"#.as_slice(),
+            br#"{"max_completion_tokens":100}"#,
+            br#"{"max_output_tokens":100}"#,
+        ] {
+            assert!(proxy.rewrite_request(Api::Completions, own).is_none());
+        }
     }
 
     /// A request whose only change is a video file is rewritten.
@@ -554,7 +657,7 @@ mod tests {
             ]}]}),
         )
         .unwrap();
-        let rewritten = json(&proxy().rewrite_request(&body).unwrap());
+        let rewritten = json(&proxy().rewrite_request(Api::Completions, &body).unwrap());
         assert_eq!(
             rewritten["messages"][0]["content"][0]["text"],
             video::VIDEO_NOTE
@@ -582,7 +685,11 @@ mod tests {
     fn a_zero_budget_keeps_only_the_last_assistant_messages_reasoning() {
         let mut proxy = proxy();
         proxy.past_reasoning_budget = Some(0);
-        let rewritten = json(&proxy.rewrite_request(&agent_request()).unwrap());
+        let rewritten = json(
+            &proxy
+                .rewrite_request(Api::Completions, &agent_request())
+                .unwrap(),
+        );
         let messages = &rewritten["messages"];
         assert_eq!(
             messages[1],
@@ -596,7 +703,11 @@ mod tests {
     #[test]
     fn earlier_reasoning_within_the_budget_is_kept() {
         let body = agent_request();
-        let sent = json(&proxy().rewrite_request(&body).unwrap_or(body));
+        let sent = json(
+            &proxy()
+                .rewrite_request(Api::Completions, &body)
+                .unwrap_or(body),
+        );
         assert_eq!(sent["messages"][1]["reasoning_content"], "old");
         assert_eq!(sent["messages"][1]["reasoning"], "old");
     }
@@ -604,7 +715,7 @@ mod tests {
     #[test]
     fn a_single_assistant_message_keeps_its_reasoning() {
         let one = br#"{"messages":[{"role":"assistant","reasoning_content":"r"}]}"#;
-        assert!(proxy().rewrite_request(one).is_none());
+        assert!(proxy().rewrite_request(Api::Completions, one).is_none());
     }
 
     /// Two assistant messages, the first with reasoning just past the
@@ -622,7 +733,7 @@ mod tests {
     fn earlier_reasoning_past_the_default_budget_is_removed() {
         let rewritten = json(
             &proxy()
-                .rewrite_request(&request_past_the_default_budget())
+                .rewrite_request(Api::Completions, &request_past_the_default_budget())
                 .unwrap(),
         );
         assert!(rewritten["messages"][0].get("reasoning_content").is_none());
@@ -635,7 +746,7 @@ mod tests {
         proxy.past_reasoning_budget = None;
         assert!(
             proxy
-                .rewrite_request(&request_past_the_default_budget())
+                .rewrite_request(Api::Completions, &request_past_the_default_budget())
                 .is_none()
         );
     }
@@ -647,11 +758,11 @@ mod tests {
             .request_defaults
             .insert("reasoning_effort".to_owned(), "medium".into());
         let body = br#"{"model":"m","stream":false,"messages":[]}"#;
-        let rewritten = json(&proxy.rewrite_request(body).unwrap());
+        let rewritten = json(&proxy.rewrite_request(Api::Completions, body).unwrap());
         assert_eq!(rewritten["reasoning_effort"], "medium");
         assert!(rewritten.get("stream_options").is_none());
         let explicit = br#"{"model":"m","reasoning_effort":"low","stream":true,"stream_options":{"include_usage":true}}"#;
-        assert!(proxy.rewrite_request(explicit).is_none());
+        assert!(proxy.rewrite_request(Api::Completions, explicit).is_none());
     }
 
     #[test]
@@ -668,12 +779,12 @@ mod tests {
         assert_eq!(proxy.lowered_effort(), Some("low"));
         let sent = br#"{"model":"m","reasoning_effort":"medium","stream":false}"#;
         assert_eq!(
-            json(&proxy.rewrite_request(sent).unwrap())["reasoning_effort"],
+            json(&proxy.rewrite_request(Api::Completions, sent).unwrap())["reasoning_effort"],
             "low"
         );
         let absent = br#"{"model":"m","stream":false}"#;
         assert_eq!(
-            json(&proxy.rewrite_request(absent).unwrap())["reasoning_effort"],
+            json(&proxy.rewrite_request(Api::Completions, absent).unwrap())["reasoning_effort"],
             "low",
             "the override wins over the default"
         );
@@ -682,9 +793,17 @@ mod tests {
     #[test]
     fn completion_paths() {
         let post = axum::http::Method::POST;
-        assert!(is_completion(&post, "/v1/chat/completions"));
-        assert!(is_completion(&post, "/v1/completions"));
-        assert!(!is_completion(&axum::http::Method::GET, "/v1/models"));
-        assert!(!is_completion(&post, "/v1/load-model"));
+        let get = axum::http::Method::GET;
+        assert_eq!(
+            completion_api(&post, "/v1/chat/completions"),
+            Some(Api::Completions)
+        );
+        assert_eq!(
+            completion_api(&post, "/v1/completions"),
+            Some(Api::Completions)
+        );
+        assert_eq!(completion_api(&post, "/v1/responses"), Some(Api::Responses));
+        assert_eq!(completion_api(&get, "/v1/models"), None);
+        assert_eq!(completion_api(&post, "/v1/load-model"), None);
     }
 }

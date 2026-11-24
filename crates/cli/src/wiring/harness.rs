@@ -2,6 +2,7 @@
 //! configuration into the project (ADR 0019) and is launched through the
 //! sandbox when the run has one.
 
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,12 +16,13 @@ use tenaz_acp::opencode::{OpenCodeAgent, OpenCodeConfig, OpenCodeLaunch};
 use tenaz_acp::qwen::{QwenAgent, QwenLaunch, QwenSettings};
 use tenaz_acp::{AcpHarness, EngineObservation, McpEndpoint, ProfileMcpServer};
 use tenaz_core::ledger::{HarnessKind, ModelConfig, SkillPin};
+use tenaz_core::params::RunParams;
 use tenaz_core::ports::Harness;
 use tenaz_core::project::Project;
 use tenaz_core::testing::ScriptedHarness;
 use tenaz_pi::PiLaunch;
 
-use super::{HARNESS_MAX_OUTPUT_TOKENS, HarnessOptions, reasoning_effort};
+use super::{HarnessOptions, reasoning_effort};
 
 /// What the harnesses are built from; each takes the part it needs.
 pub(super) struct HarnessInputs<'a> {
@@ -32,8 +34,9 @@ pub(super) struct HarnessInputs<'a> {
     pub(super) base_url: String,
     pub(super) mcp_endpoints: &'a [McpEndpoint],
     pub(super) skills: &'a [SkillPin],
-    pub(super) agent_skills: bool,
-    pub(super) verify_path: &'a str,
+    /// The run's parameters: whether the agent finds skills itself, where
+    /// `verify` is, and the output limit of a reply (ADR 0041).
+    pub(super) params: &'a RunParams,
     pub(super) feed: &'a tokio::sync::broadcast::Sender<EngineObservation>,
     /// The sandbox launcher, when the run is sandboxed.
     pub(super) wrapper: &'a [String],
@@ -113,7 +116,7 @@ pub(super) fn build_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dy
     match inputs.config.harness {
         // The scripted harness writes from inside Tenaz: there is no process to sandbox.
         HarnessKind::Fake => Ok(Arc::new(ScriptedHarness {
-            verify_path: Some(inputs.verify_path.to_owned()),
+            verify_path: Some(inputs.params.verify_path().to_owned()),
             ..ScriptedHarness::every_recovery()
         })),
         HarnessKind::Pi => pi_harness(inputs),
@@ -131,8 +134,8 @@ fn pi_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
     let config = inputs.config;
     let agent_dir = inputs.home("pi-agent");
     let user_models = tenaz_pi::models::default_models_path();
-    let (models, files) =
-        write_pi_agent(&agent_dir, config, &inputs.base_url, user_models.as_deref())?;
+    let models = pi_models(config, &inputs.base_url, inputs.params.max_output_tokens);
+    let files = write_pi_agent(&agent_dir, &models, user_models.as_deref())?;
     let launch = PiLaunch::new(&inputs.options.bin, models.run_name())
         .other_models(models.other_names())
         .thinking(
@@ -143,7 +146,7 @@ fn pi_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         )
         .skills(inputs.skill_folders())
         .agent_dir(files)
-        .discover_skills(inputs.agent_skills)
+        .discover_skills(inputs.params.agent_skills)
         .wrapper(inputs.wrapper.to_vec());
     Ok(Arc::new(launch.harness(config.harness_version.clone())))
 }
@@ -154,7 +157,7 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         project,
         config,
         skills,
-        agent_skills,
+        params,
         ..
     } = *inputs;
     let home = inputs.home("fx-home");
@@ -163,13 +166,13 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         base_url: inputs.base_url.clone(),
         model: config.id.clone(),
         context_window: config.context_window,
-        max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
+        max_output_tokens: params.output_limit(),
         supports_vision: config.supports_images(),
         permission_mode: "ask".to_owned(),
         effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
-        skill_catalog: agent_skills || !skills.is_empty(),
+        skill_catalog: params.agent_skills || !skills.is_empty(),
     };
-    if !skills.is_empty() && !agent_skills {
+    if !skills.is_empty() && !params.agent_skills {
         tracing::warn!(
             "fx lists the pinned skills, and with them any skills it finds in the folders \
              above the project; Pi loads only the pinned ones"
@@ -211,9 +214,9 @@ fn opencode_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harnes
         base_url: inputs.base_url.clone(),
         model: config.id.clone(),
         context_window: config.context_window,
-        max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
+        max_output_tokens: inputs.params.output_limit(),
         supports_images: config.supports_images(),
-        skills: allowed_skills(inputs.skills, inputs.agent_skills),
+        skills: allowed_skills(inputs.skills, inputs.params.agent_skills),
     };
     let mut launch = OpenCodeLaunch::new(&inputs.options.bin, &home);
     launch.wrapper = inputs.wrapper.to_vec();
@@ -238,7 +241,7 @@ fn qwen_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> 
     let settings = QwenSettings {
         context_window: inputs.config.context_window,
         mcp: inputs.profile_mcp(),
-        discover_skills: inputs.agent_skills,
+        discover_skills: inputs.params.agent_skills,
     };
     let mut launch = QwenLaunch::new(&inputs.options.bin, &home, inputs.base_url.clone());
     launch.wrapper = inputs.wrapper.to_vec();
@@ -263,7 +266,7 @@ fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         base_url: inputs.base_url.clone(),
         model: config.id.clone(),
         context_window: config.context_window,
-        max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
+        max_output_tokens: inputs.params.output_limit(),
         supports_images: config.supports_images(),
         effort: tenaz_acp::dsh::effort(config.thinking.as_deref()).map(str::to_owned),
     };
@@ -289,7 +292,7 @@ fn generic_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
         session_file: inputs.project.private_dir().join("acp-session.json"),
         facts: SessionFacts {
             base_url: inputs.base_url.clone(),
-            max_output_tokens: HARNESS_MAX_OUTPUT_TOKENS,
+            max_output_tokens: inputs.params.output_limit(),
             reasoning_effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
             mcp_servers: inputs.mcp_endpoints.to_vec(),
         },
@@ -328,23 +331,25 @@ fn allowed_skills(skills: &[SkillPin], agent_skills: bool) -> Option<Vec<String>
 /// Writes Pi's agent directory for the run's models, the run's own first
 /// and each role's model once with its own window and inputs (ADR 0011),
 /// keeping what the user's `models` file (`user_models`) has for them; the
-/// models and the files, which the harness writes again before each session.
+/// files, which the harness writes again before each session.
 pub(super) fn write_pi_agent(
     agent_dir: &Path,
-    config: &ModelConfig,
-    base_url: &str,
+    models: &tenaz_pi::models::AgentModels,
     user_models: Option<&Path>,
-) -> anyhow::Result<(tenaz_pi::models::AgentModels, tenaz_pi::AgentDir)> {
-    let models = pi_models(config, base_url);
-    let template = user_models.and_then(|path| pi_template(path, &models));
-    let files = tenaz_pi::AgentDir::new(agent_dir, &models, template);
+) -> anyhow::Result<tenaz_pi::AgentDir> {
+    let template = user_models.and_then(|path| pi_template(path, models));
+    let files = tenaz_pi::AgentDir::new(agent_dir, models, template);
     files.write().context("cannot write Pi's agent directory")?;
-    Ok((models, files))
+    Ok(files)
 }
 
 /// The run's models as Pi's `models.json` describes them, on the run's
-/// provider at `base_url`.
-fn pi_models(config: &ModelConfig, base_url: &str) -> tenaz_pi::models::AgentModels {
+/// provider at `base_url`, with the run's output limit if it sets one.
+pub(super) fn pi_models(
+    config: &ModelConfig,
+    base_url: &str,
+    max_output_tokens: Option<NonZeroU64>,
+) -> tenaz_pi::models::AgentModels {
     let reasoning = reasoning_effort(config.thinking.as_deref()).is_some();
     let model = |id: &str, context_window, input: &[String]| tenaz_pi::models::AgentModel {
         id: id.to_owned(),
@@ -367,6 +372,7 @@ fn pi_models(config: &ModelConfig, base_url: &str) -> tenaz_pi::models::AgentMod
         base_url: base_url.to_owned(),
         run: model(&config.id, config.context_window, &config.input),
         others,
+        max_output_tokens,
     }
 }
 
@@ -413,6 +419,7 @@ mod tests {
         mcp_endpoints: &'a [McpEndpoint],
         wrapper: &'a [String],
         caches: &'a [(String, String)],
+        max_output_tokens: Option<NonZeroU64>,
     }
 
     /// The same, with `extras`.
@@ -440,6 +447,11 @@ mod tests {
             acp_args: Vec::new(),
         };
         let (feed, _) = tokio::sync::broadcast::channel(1);
+        let params = RunParams {
+            existing_project: Some(true),
+            max_output_tokens: extras.max_output_tokens,
+            ..RunParams::default()
+        };
         build_harness(&HarnessInputs {
             project: &Project::new(dir),
             config: &config,
@@ -448,8 +460,7 @@ mod tests {
             base_url: "http://127.0.0.1:4001/v1".into(),
             mcp_endpoints: extras.mcp_endpoints,
             skills: extras.skills,
-            agent_skills: false,
-            verify_path: ".tenaz/verify",
+            params: &params,
             feed: &feed,
             wrapper: extras.wrapper,
             caches: extras.caches,
@@ -691,6 +702,58 @@ mod tests {
             acp["mcpServers"],
             serde_json::json!([{ "name": "blender", "url": "http://127.0.0.1:9191/" }])
         );
+    }
+
+    /// The output limit each agent's configuration gives the run's model:
+    /// the run's `maxOutputTokens`, else 16,384 (ADR 0041).
+    #[test]
+    fn each_agent_is_given_the_run_s_output_limit() {
+        type Find = fn(&serde_json::Value) -> Option<&serde_json::Value>;
+        let limit = |kind, max_output_tokens, file: &str, find: Find| {
+            let dir = tempfile::tempdir().unwrap();
+            let extras = Extras {
+                max_output_tokens,
+                ..Extras::default()
+            };
+            build_with(dir.path(), kind, &extras).unwrap();
+            let written = json(&Project::new(dir.path()).private_dir().join(file));
+            find(&written).cloned()
+        };
+        let places: [(HarnessKind, &str, Find); 4] = [
+            (HarnessKind::Fx, "fx-home/.fx/settings.json", |j| {
+                j.pointer("/providers/engine/model_metadata/m/max_output_tokens")
+            }),
+            (HarnessKind::OpenCode, "opencode-home/opencode.json", |j| {
+                j.pointer("/provider/engine/models/m/limit/output")
+            }),
+            (HarnessKind::Dsh, "dsh-home/.dsh/tenaz-patch.yml", |j| {
+                j.as_array()?
+                    .iter()
+                    .find(|e| e["id"] == "llm-pi-ai")?
+                    .pointer("/config/providers/tenaz/models/0/maxTokens")
+            }),
+            (HarnessKind::Acp, "acp-session.json", |j| {
+                j.get("maxOutputTokens")
+            }),
+        ];
+        for (kind, file, find) in places {
+            assert_eq!(limit(kind, None, file, find), Some(16_384.into()), "{kind}");
+            assert_eq!(
+                limit(kind, NonZeroU64::new(65_536), file, find),
+                Some(65_536.into()),
+                "{kind}"
+            );
+        }
+        // Pi only with a limit set: unset, its value comes from this
+        // machine's ~/.pi/agent/models.json, which a test does not control;
+        // tenaz_pi::models covers that case.
+        let pi = limit(
+            HarnessKind::Pi,
+            NonZeroU64::new(65_536),
+            "pi-agent/models.json",
+            |j| j.pointer("/providers/engine/models/0/maxTokens"),
+        );
+        assert_eq!(pi, Some(65_536.into()));
     }
 
     /// Each agent's own files are written again when a session opens, as

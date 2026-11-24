@@ -391,6 +391,7 @@ mod tests {
                 reasoning: false,
             },
             others: vec![],
+            max_output_tokens: None,
         }
     }
 
@@ -477,6 +478,7 @@ mod tests {
             base_url: "http://127.0.0.1:4001/v1".into(),
             run,
             others: vec![],
+            max_output_tokens: None,
         };
         AgentDir::new(&agent, &models, None).write().unwrap();
         let read = |name: &str| -> serde_json::Value {

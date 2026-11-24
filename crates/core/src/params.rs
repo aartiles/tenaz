@@ -1,6 +1,8 @@
 //! Run parameters. They are pinned in `run.json` at `init` and can be
 //! overridden with `--set key=value`, using the task loop's camelCase names.
 
+use std::num::NonZeroU64;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -8,6 +10,10 @@ use crate::task::frontmatter::{Value, parse_value};
 
 /// The default of [`RunParams::past_reasoning_tokens`].
 pub const PAST_REASONING_TOKENS: u64 = 8192;
+
+/// The output limit of a reply when the run does not set
+/// [`RunParams::max_output_tokens`] (ADR 0041).
+pub const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 16_384;
 
 /// Tunable parameters of a run. Defaults are the task loop's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -165,6 +171,12 @@ pub struct RunParams {
     /// carry none (fx sends none). Unset, the engine's own default applies,
     /// which differs between engines (0.8 in mlx-serve's app, for example).
     pub temperature: Option<f64>,
+    /// The most tokens one reply may have, reasoning included, for every
+    /// role and harness: the harness is configured with it and the engine
+    /// proxy puts it in requests that carry no limit (ADR 0041). Unset,
+    /// it is 16,384, and Pi keeps a `maxTokens` of the user's own Pi
+    /// `models.json`. 0 is refused, in `--set` and in `run.json` alike.
+    pub max_output_tokens: Option<NonZeroU64>,
 }
 
 impl Default for RunParams {
@@ -225,6 +237,7 @@ impl Default for RunParams {
             sandbox_allow_write: "~/.cargo/registry,~/.cargo/git,~/.npm,~/.cache,~/Library/Caches"
                 .to_owned(),
             sandbox_deny_read: "~/.ssh,~/.aws,~/.gnupg".to_owned(),
+            max_output_tokens: None,
         }
     }
 }
@@ -258,6 +271,13 @@ impl RunParams {
     /// `None` when it keeps all of it (`keepPastReasoning`, ADR 0028).
     pub fn past_reasoning_budget(&self) -> Option<u64> {
         (!self.keep_past_reasoning).then_some(self.past_reasoning_tokens)
+    }
+
+    /// The output limit of one reply: `maxOutputTokens`, or 16,384 when
+    /// the run does not set it.
+    pub fn output_limit(&self) -> u64 {
+        self.max_output_tokens
+            .map_or(DEFAULT_MAX_OUTPUT_TOKENS, NonZeroU64::get)
     }
 
     /// Builders may declare heavy jobs (ADR 0010): `jobMinutes` is not 0.
@@ -392,6 +412,40 @@ mod tests {
         assert_eq!(p.temperature, Some(0.0));
         p.apply_override("temperature=0.6").unwrap();
         assert_eq!(p.temperature, Some(0.6));
+    }
+
+    #[test]
+    fn a_run_can_set_the_output_limit_of_a_reply() {
+        let mut p = RunParams::default();
+        assert_eq!(p.max_output_tokens, None);
+        assert_eq!(p.output_limit(), 16_384);
+        p.apply_override("maxOutputTokens=65536").unwrap();
+        assert_eq!(p.max_output_tokens, NonZeroU64::new(65_536));
+        assert_eq!(p.output_limit(), 65_536);
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["maxOutputTokens"], 65_536);
+    }
+
+    /// A run.json from before `maxOutputTokens` loads without it, so a
+    /// resumed run keeps the limit it had.
+    #[test]
+    fn params_pinned_before_max_output_tokens_load_without_it() {
+        let p: RunParams = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.max_output_tokens, None);
+    }
+
+    /// An output limit of 0 is refused, from `--set` and from run.json.
+    #[test]
+    fn an_output_limit_of_0_is_refused() {
+        let mut p = RunParams::default();
+        let error = p.apply_override("maxOutputTokens=0").unwrap_err();
+        assert!(
+            matches!(&error, ParamError::BadValue { key, .. } if key == "maxOutputTokens"),
+            "{error}"
+        );
+        assert_eq!(p, RunParams::default());
+        let pinned = serde_json::from_str::<RunParams>(r#"{"maxOutputTokens": 0}"#);
+        assert!(pinned.is_err());
     }
 
     #[test]

@@ -116,7 +116,10 @@ Write the brief outside the repository so it does not dirty the checkout.
    drops the pinned ones. `--set turnBudget=50` changes the turn budget
    (40) of builder, bootstrap, replan and split sessions; reviewers keep
    25 turns and the final review 60. `--set turnAbort=2` stops every
-   session at twice its budget (1.5 by default).
+   session at twice its budget (1.5 by default). `--set
+   maxOutputTokens=65536` lets one reply have 65,536 tokens instead of
+   16,384, for a reasoning model whose replies are cut at the output limit
+   before it writes anything.
 2. Before starting `run`, prepare the bootstrap below in the directory
    `init` printed. For a repository with commits, confirm it with
    `git worktree list`; do not guess the directory from the goal name. For a

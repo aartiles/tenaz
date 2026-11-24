@@ -36,7 +36,7 @@ use tenaz_core::session::Usage;
 use tenaz_core::write_scope::WriteScope;
 use tenaz_mcp::workflow::WorkflowTemplate;
 use tenaz_mcp::{MediaTools, serve};
-use tenaz_proxy::{Proxy, ProxyEvent};
+use tenaz_proxy::{OutputLimit, Proxy, ProxyEvent};
 
 use harness::{HarnessInputs, build_harness, user_caches};
 
@@ -395,8 +395,7 @@ pub async fn wire(
         base_url: harness_base_url,
         mcp_endpoints: &mcp_endpoints,
         skills: &ledger.skills,
-        agent_skills: ledger.params.agent_skills,
-        verify_path: ledger.params.verify_path(),
+        params: &ledger.params,
         feed: &feed,
         wrapper: &wrapper,
         caches: &user_caches(),
@@ -564,10 +563,6 @@ fn harness_usage(u: &tenaz_proxy::ProxyUsage) -> Usage {
     }
 }
 
-/// The output limit fx and `OpenCode` are configured with, and what the
-/// proxy takes as the limit of a request that does not say.
-const HARNESS_MAX_OUTPUT_TOKENS: u64 = 16_384;
-
 /// What the runner does with each proxy event: usage, engine errors and
 /// refused compactions go to the sessions' `feed`, whether the usage names
 /// cached tokens to `cache_report`, and repaired tool arguments to
@@ -657,11 +652,16 @@ async fn start_proxy(
     Ok(handle)
 }
 
-/// What the engine proxy does for the run in `ledger`: the output cap,
-/// how much earlier reasoning it keeps, the summary request it refuses
-/// for the agent (ADRs 0022 and 0030), and the request defaults.
+/// What the engine proxy does for the run in `ledger`: the output limit
+/// of a request that carries none (put into it when the run sets
+/// `maxOutputTokens`, ADR 0041), how much earlier reasoning it keeps, the
+/// summary request it refuses for the agent (ADRs 0022 and 0030), and the
+/// request defaults.
 fn set_up_for_run(proxy: &mut Proxy, ledger: &tenaz_core::ledger::Ledger) {
-    proxy.max_output_tokens = Some(HARNESS_MAX_OUTPUT_TOKENS);
+    proxy.output_limit = Some(ledger.params.max_output_tokens.map_or(
+        OutputLimit::Assumed(ledger.params.output_limit()),
+        |limit| OutputLimit::Imposed(limit.get()),
+    ));
     proxy.past_reasoning_budget = ledger.params.past_reasoning_budget();
     proxy.compaction_prompt_opening =
         tenaz_acp::compaction_prompt(ledger.config.harness).map(str::to_owned);
@@ -679,7 +679,7 @@ mod tests {
     use tenaz_core::ports::EngineAdapter;
 
     use super::{
-        BTreeMap, Duration, MediaOptions, harness_usage, mcp_endpoints, media_adapter,
+        BTreeMap, Duration, MediaOptions, OutputLimit, harness_usage, mcp_endpoints, media_adapter,
         mesh_adapter, reasoning_effort, request_defaults, swapping,
     };
 
@@ -716,8 +716,8 @@ mod tests {
         };
         let agent = dir.path().join("pi-agent");
         let base_url = "http://127.0.0.1:4001/v1";
-        let (models, _) =
-            super::harness::write_pi_agent(&agent, &config, base_url, Some(&user_models)).unwrap();
+        let models = super::harness::pi_models(&config, base_url, None);
+        super::harness::write_pi_agent(&agent, &models, Some(&user_models)).unwrap();
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(agent.join("models.json")).unwrap())
                 .unwrap();
@@ -936,6 +936,27 @@ mod tests {
             super::set_up_for_run(&mut proxy, &crate::testing::ledger_for(harness));
             assert_eq!(proxy.compaction_prompt_opening, None, "{harness}");
         }
+    }
+
+    /// A run's proxy takes 16,384 as the limit of a request that names
+    /// none and adds nothing, unless the run sets its own limit, which it
+    /// then also puts into such requests (Qwen Code sends none).
+    #[test]
+    fn the_proxy_takes_the_run_s_output_limit() {
+        use tenaz_core::ledger::HarnessKind;
+        let proxy_for = |ledger: &tenaz_core::ledger::Ledger| {
+            let mut proxy =
+                tenaz_proxy::Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
+            super::set_up_for_run(&mut proxy, ledger);
+            proxy.output_limit
+        };
+        let mut ledger = crate::testing::ledger_for(HarnessKind::Qwen);
+        assert_eq!(proxy_for(&ledger), Some(OutputLimit::Assumed(16_384)));
+        ledger
+            .params
+            .apply_override("maxOutputTokens=65536")
+            .unwrap();
+        assert_eq!(proxy_for(&ledger), Some(OutputLimit::Imposed(65_536)));
     }
 
     #[test]

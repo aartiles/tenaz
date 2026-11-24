@@ -449,6 +449,11 @@ engine's prefix cache breaks once per step, not every turn
 ([ADR 0028](docs/adr/0028-remove-past-reasoning-in-steps.md)).
 `--set pastReasoningTokens=0` removes it every turn, and
 `--set keepPastReasoning=true` sends it all.
+One reply, reasoning included, may have 16,384 tokens; a reply cut there
+loses its work, and the next session of its role reasons at a lower
+effort. `--set maxOutputTokens=65536` raises the limit for every role and
+harness, for a model whose reasoning needs it
+([ADR 0041](docs/adr/0041-a-run-parameter-for-the-output-limit.md)).
 A video file the agent read reaches the engine as a note that says to
 read it as frames, since the local engines do not decode video files
 ([ADR 0024](docs/adr/0024-a-note-in-place-of-a-video-file.md)).

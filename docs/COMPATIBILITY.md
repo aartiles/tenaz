@@ -809,6 +809,14 @@ above), so a 32k context is the practical floor (`contextFloor`).
   OpenCode and Qwen Code come from their READMEs and were not run; the
   context settings it gives for LM Studio, Ollama, llama.cpp and vLLM were
   not tried against those engines.
+- **An output limit other than 16,384** (`maxOutputTokens`, ADR 0041).
+  What each harness is configured with, and the `max_tokens` the proxy
+  puts into a request that names none, are tested with fakes only. No
+  run has used a limit above 16,384 yet: it is not checked that fx,
+  OpenCode, dsh, Pi or the generic agent send the configured limit, that
+  Qwen Code sends no limit of its own (so that the proxy's applies), or
+  that mlx-serve and the other engines honour 65,536 rather than cut the
+  reply at a lower limit of their own.
 
 ## Model and engine behaviour seen in testing
 

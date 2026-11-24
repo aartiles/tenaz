@@ -11,7 +11,8 @@ crates/
                            Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
                            engine error messages, tool-argument repair, the lowered
-                           reasoning effort, replies at the output limit reported as cut, and
+                           reasoning effort, the run's output limit on requests without one
+                           (ADR 0041), replies at the output limit reported as cut, and
                            a harness's own compaction request refused when set (Qwen Code and
                            dsh, ADRs 0022, 0030),
                            earlier reasoning removed in steps over a budget (ADRs 0023, 0028), and

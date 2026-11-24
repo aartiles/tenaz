@@ -31,6 +31,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `--set maxOutputTokens=N` sets the most tokens one reply may have,
+  reasoning included, for every role and harness: fx, OpenCode, dsh, Pi
+  (every model of the run) and the generic agent are configured with it,
+  and the engine proxy puts it into requests that name no limit, which is
+  how Qwen Code gets it. Unset, a run is configured as before: 16,384, and
+  Pi keeps a `maxTokens` of your own `models.json`. A reasoning model
+  whose design reasoning ran past 16,384 tokens, cut and thrown away, can
+  now finish it. See ADR 0041.
+
 - When an agent session ends (any role, any harness, settled, aborted or
   failed), Tenaz stops what it left running detached (`setsid`) from
   inside the project, with the rules it already used after `verify`. A

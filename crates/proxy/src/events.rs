@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tenaz_core::session::engine_error_text;
+use tenaz_core::session::{OUTPUT_LIMIT_FIELDS, engine_error_text};
 
 use crate::sse::data_json;
 
@@ -115,10 +115,15 @@ pub fn finish_reason_from_json(value: &serde_json::Value) -> Option<String> {
     })
 }
 
-/// The output limit a completion request asks for, under any of the names
-/// the chat, completions and responses APIs use.
+/// The output limit a completion request asks for, under any of
+/// [`OUTPUT_LIMIT_FIELDS`].
 pub fn output_limit(request: &serde_json::Value) -> Option<u64> {
-    ["max_completion_tokens", "max_tokens", "max_output_tokens"]
+    request.as_object().and_then(output_limit_in)
+}
+
+/// The same, of a request's JSON object.
+pub(crate) fn output_limit_in(request: &serde_json::Map<String, serde_json::Value>) -> Option<u64> {
+    OUTPUT_LIMIT_FIELDS
         .iter()
         .find_map(|key| request.get(*key).and_then(serde_json::Value::as_u64))
 }
