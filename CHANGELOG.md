@@ -46,9 +46,8 @@ uses [Semantic Versioning](https://semver.org/).
   `contextBudget` or the limit that keeps the room (only the
   `contextBudget` when it fills the window by itself). Before each session
   the prompt must also fit what the limit leaves of the window, or the
-  run blocks with `prompt too large:` and says to lower the limit. See
-  ADR 0041.
-
+  run blocks with `prompt too large:` and says to lower the limit when
+  that is enough. See ADR 0041.
 - When an agent session ends (any role, any harness, settled, aborted or
   failed), Tenaz stops what it left running detached (`setsid`) from
   inside the project, with the rules it already used after `verify`. A
