@@ -29,7 +29,15 @@ pub fn check(params: &RunParams, config: &ModelConfig) -> Result<Vec<String>, St
                  harness's reserve of {reserve} (params.harnessReserveTokens); set it below {}",
                 window.saturating_sub(reserve)
             ));
-        } else if budget + limit > window {
+        } else if budget >= window {
+            warnings.push(format!(
+                "params.contextBudget {} lets a session fill {of} ({budget} tokens), \
+                 leaving no room for a reply of params.maxOutputTokens {limit}. \
+                 params.contextBudget at most {} keeps the room",
+                params.context_budget,
+                room_share(window, limit)
+            ));
+        } else if limit > window - budget {
             warnings.push(format!(
                 "params.maxOutputTokens {limit} does not fit in {of} next to a session at its \
                  context budget of {budget} tokens: such a reply is likely cut at the end of the \
@@ -197,6 +205,33 @@ mod tests {
               0.50, or params.maxOutputTokens at most 45876, keeps the room"
             ]
         );
+    }
+
+    /// A context budget that fills the window, or more, leaves no room
+    /// for any limit: the warning names the budget, and its one remedy
+    /// clears it.
+    #[test]
+    fn a_context_budget_that_fills_the_window_is_the_one_thing_to_lower() {
+        for (share, budget) in [("1", 131_072), ("1.2", 157_286)] {
+            let set = [
+                "maxOutputTokens=1000".to_owned(),
+                format!("contextBudget={share}"),
+            ];
+            let set: Vec<&str> = set.iter().map(String::as_str).collect();
+            let warnings = check(&params(&set), &one_model()).unwrap();
+            assert_eq!(
+                warnings,
+                [format!(
+                    "params.contextBudget {share} lets a session fill engine/m's window of \
+                     131072 tokens (bootstrap, builder, reviewer, split, replan, \
+                     final-reviewer) ({budget} tokens), leaving no room for a reply of \
+                     params.maxOutputTokens 1000. params.contextBudget at most 0.99 keeps \
+                     the room"
+                )]
+            );
+        }
+        let lowered = params(&["maxOutputTokens=1000", "contextBudget=0.99"]);
+        assert_eq!(check(&lowered, &one_model()), Ok(Vec::new()));
     }
 
     /// Either remedy the warning gives clears it, whatever the limit.

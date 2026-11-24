@@ -78,7 +78,8 @@ B, an optional run parameter `maxOutputTokens`, for every role.
   would leave less than the limit for a reply: the engine is then likely
   to cut the reply at the end of the window (reported as cut) or refuse
   the request; the warning gives the `contextBudget`, and the limit, that
-  keep the room.
+  keep the room (only the `contextBudget` when it fills the window by
+  itself).
   Before each session the prompt must fit both the role's budget and what
   the limit leaves of the window, or the run blocks with
   `prompt too large:` and says to lower the limit when that is enough. A

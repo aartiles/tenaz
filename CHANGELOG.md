@@ -43,7 +43,8 @@ uses [Semantic Versioning](https://semver.org/).
   window. `init` and `run` refuse one that, with `harnessReserveTokens`,
   fills a role's window, and warn when a session at its context budget
   would leave less than the limit for a reply, giving the
-  `contextBudget` or the limit that keeps the room. Before each session
+  `contextBudget` or the limit that keeps the room (only the
+  `contextBudget` when it fills the window by itself). Before each session
   the prompt must also fit what the limit leaves of the window, or the
   run blocks with `prompt too large:` and says to lower the limit. See
   ADR 0041.
