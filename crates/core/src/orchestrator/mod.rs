@@ -402,6 +402,34 @@ impl Runner {
         Ok(())
     }
 
+    /// Checks what `init` pinned before a run starts: the brief and the
+    /// skills are unchanged, and the output limit fits the run's models.
+    fn check_pins(&self) -> Result<(), RunError> {
+        let brief = self
+            .project
+            .brief()
+            .map_err(|_| RunError::Precondition(format!("{BRIEF} is missing")))?;
+        if sha256_hex(&brief) != self.ledger.brief_sha256 {
+            return Err(RunError::Precondition(format!(
+                "{BRIEF} changed since init"
+            )));
+        }
+        self.check_skills()?;
+        self.check_output_limit()
+    }
+
+    /// Stops a run whose pinned output limit leaves a role's model no room
+    /// for a prompt, and logs why a limit that fits only small sessions is
+    /// risky (ADR 0041): `run.json` may have been edited since `init`.
+    fn check_output_limit(&self) -> Result<(), RunError> {
+        let warnings = crate::output_limit::check(&self.params, &self.ledger.config)
+            .map_err(RunError::Precondition)?;
+        for warning in warnings {
+            self.log(&format!("warning: {warning}"));
+        }
+        Ok(())
+    }
+
     /// Logs what the preflight found, and what it could not check.
     fn log_preflight(&self, preflight: &Preflight) {
         self.log(&preflight::line(Some(preflight)));
@@ -476,15 +504,7 @@ impl Runner {
         let project = self.project.clone();
         project.create_layout()?;
         self.lock = Some(take_run_lock(&project)?);
-        let brief = project
-            .brief()
-            .map_err(|_| RunError::Precondition(format!("{BRIEF} is missing")))?;
-        if sha256_hex(&brief) != self.ledger.brief_sha256 {
-            return Err(RunError::Precondition(format!(
-                "{BRIEF} changed since init"
-            )));
-        }
-        self.check_skills()?;
+        self.check_pins()?;
         let info = self.deps.harness.info();
         if info.version != self.ledger.config.harness_version {
             return Err(RunError::Precondition(format!(

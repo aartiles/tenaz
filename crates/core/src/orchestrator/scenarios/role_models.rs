@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use super::{deps, fake_project, run};
+use super::{deps, fake_project, no_session, run};
 use crate::briefing;
 use crate::lease::{Gate, LeaseManager};
 use crate::ledger::{JournalRecord, SessionRecord};
@@ -386,13 +386,6 @@ fn refusal(result: Result<(), RunError>) -> String {
         Err(RunError::Precondition(message)) => message,
         other => panic!("not refused: {other:?}"),
     }
-}
-
-fn no_session(project: &Project) -> bool {
-    project
-        .journal()
-        .iter()
-        .all(|e| !matches!(e.record, JournalRecord::Session(_)))
 }
 
 /// A role's model the engine has not loaded, and cannot load, stops the

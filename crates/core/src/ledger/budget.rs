@@ -139,14 +139,7 @@ impl Ledger {
 
     /// The configured share of `context_window`, before any cap.
     fn configured_budget_tokens(&self, context_window: u64) -> u64 {
-        #[expect(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a context window times a fraction is far below 2^53 and floors to a positive u64"
-        )]
-        let budget = (context_window as f64 * self.params.context_budget).floor() as u64;
-        budget
+        self.params.budget_tokens(context_window)
     }
 }
 

@@ -49,6 +49,7 @@ Pure modules, each unit-tested without I/O:
 | `role_models` | The `--model-for ROLE=ID` map: its checks at `init` and the models pinned in `run.json` (ADR 0011). |
 | `cache_report` | Whether the engine's usage names its cached tokens, noted by the engine proxy for the preflight. |
 | `effort` | The dial that lowers the reasoning effort for one session after a reply cut at the output limit. |
+| `output_limit` | Whether a pinned `maxOutputTokens` fits each role's window: refused at `init` and `run` when it leaves no room for a prompt, warned about past the context budget (ADR 0041). |
 | `ownership` | Which paths each role may write; the rest is reverted. A split task's builder may also correct its ancestors' notes (ADR 0013). |
 | `ledger` | `run.json` and the `journal.jsonl` record types, and which roles' next session runs at a lower effort. |
 | `metrics` | Engine Prometheus counters, per-request deltas, engine summary. |

@@ -86,6 +86,11 @@ pub fn init(
             ".tenaz/run.json already exists; this project is already initialized".to_owned(),
         ));
     }
+    for warning in crate::output_limit::check(&options.params, &options.config)
+        .map_err(RunError::Precondition)?
+    {
+        tracing::warn!("{warning}");
+    }
     let mut params = options.params;
     params
         .existing_project

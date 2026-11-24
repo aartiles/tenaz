@@ -70,6 +70,22 @@ B, an optional run parameter `maxOutputTokens`, for every role.
   for a request that names none, as cut, so the effort dial and the
   "reply reached the output limit" stop work at any limit.
 - 0 is refused, by `--set` and when `run.json` is loaded.
+- A pinned limit must leave room for a prompt in each role's window: a
+  reply is written into the same window as the prompt and the session so
+  far. `init` and `run` refuse a limit that, with `harnessReserveTokens`,
+  fills the window of a role's model, and name the model, its roles and
+  the value to stay below. They warn when a session at its context budget
+  would leave less than the limit for a reply: the engine is then likely
+  to cut the reply at the end of the window (reported as cut) or refuse
+  the request; the warning gives the `contextBudget`, and the limit, that
+  keep the room.
+  Before each session the prompt must fit both the role's budget and what
+  the limit leaves of the window, or the run blocks with
+  `prompt too large:` and says to lower the limit when that is enough. A
+  prompt the harness refuses in such a run is told the same, among the
+  other things to change. With the parameter
+  unset none of this applies, so existing runs block exactly where they
+  did.
 
 Not changed: `bigOutputTokens` is the size of one tool result, not of a
 reply; `harnessReserveTokens` is what the harness adds to the first
@@ -80,8 +96,7 @@ request's input. Neither depends on the output limit.
 - A run can let a reasoning model finish a long reply, at the cost of
   wall-clock time per reply and of context room: a reply of 65,536 tokens
   in a 131,072-token window leaves half of it for the session, less than
-  the default `contextBudget` of 0.65. Nothing yet checks that a limit
-  fits the windows of the run's models.
+  the default `contextBudget` of 0.65, which the run then warns about.
 - A run that sets the limit is not comparable, reply for reply, with one
   that did not; `run.json` records which.
 - Only Pi was configured with the value of the user's own file before. A

@@ -7,6 +7,7 @@ mod failed_session;
 mod harness_exit;
 mod harness_start;
 mod job;
+mod output_limit;
 mod paused_continuation;
 mod preflight;
 mod private_removed;
@@ -38,6 +39,14 @@ use crate::write_scope::WriteScope;
 /// A project set up with `overrides`, and the repository it was set up in:
 /// the snapshots live in memory, so the run must use the same one.
 fn fake_project(work: &Path, overrides: &[&str]) -> (Project, Arc<SnapshotVcs>) {
+    try_fake_project(work, overrides).unwrap()
+}
+
+/// [`fake_project`], or why `init` refused it.
+fn try_fake_project(
+    work: &Path,
+    overrides: &[&str],
+) -> Result<(Project, Arc<SnapshotVcs>), super::RunError> {
     let brief = work.join("brief.md");
     std::fs::write(&brief, "# Fake brief\n\nBuild four trivial files.\n").unwrap();
     // The private folder is out of the project, as a run keeps it in the
@@ -73,8 +82,8 @@ fn fake_project(work: &Path, overrides: &[&str]) -> (Project, Arc<SnapshotVcs>) 
         runner_version: "test".into(),
     };
     let vcs = Arc::new(SnapshotVcs::new(project.root()));
-    init(&project, &*vcs, &VirtualClock::new(), &templates, options).unwrap();
-    (project, vcs)
+    init(&project, &*vcs, &VirtualClock::new(), &templates, options)?;
+    Ok((project, vcs))
 }
 
 /// The fakes for a run of `project`, with `harness` and `clock`.
@@ -99,6 +108,14 @@ fn deps(
         cache_report: None,
         write_scope: Some(WriteScope::new(project.root(), None, Vec::new())),
     }
+}
+
+/// No session of the run of `project` was journaled.
+fn no_session(project: &Project) -> bool {
+    project
+        .journal()
+        .iter()
+        .all(|e| !matches!(e.record, JournalRecord::Session(_)))
 }
 
 /// Opens the run of `project` and runs it until it ends or pauses.

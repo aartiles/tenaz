@@ -39,6 +39,14 @@ uses [Semantic Versioning](https://semver.org/).
   Pi keeps a `maxTokens` of your own `models.json`. A reasoning model
   whose design reasoning ran past 16,384 tokens, cut and thrown away, can
   now finish it. See ADR 0041.
+- A pinned `maxOutputTokens` must leave room for a prompt in each role's
+  window. `init` and `run` refuse one that, with `harnessReserveTokens`,
+  fills a role's window, and warn when a session at its context budget
+  would leave less than the limit for a reply, giving the
+  `contextBudget` or the limit that keeps the room. Before each session
+  the prompt must also fit what the limit leaves of the window, or the
+  run blocks with `prompt too large:` and says to lower the limit. See
+  ADR 0041.
 
 - When an agent session ends (any role, any harness, settled, aborted or
   failed), Tenaz stops what it left running detached (`setsid`) from

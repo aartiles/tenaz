@@ -454,6 +454,11 @@ loses its work, and the next session of its role reasons at a lower
 effort. `--set maxOutputTokens=65536` raises the limit for every role and
 harness, for a model whose reasoning needs it
 ([ADR 0041](docs/adr/0041-a-run-parameter-for-the-output-limit.md)).
+The reply shares the window with the session: `init` and `run` refuse a
+limit that leaves a role's model no room for a prompt, warn when a
+session at its context budget would leave less than the limit (with the
+`contextBudget` or the limit that keeps the room: 0.50, or 45,876 tokens,
+for 65,536 of 131,072), and a prompt must fit what the limit leaves.
 A video file the agent read reaches the engine as a note that says to
 read it as frames, since the local engines do not decode video files
 ([ADR 0024](docs/adr/0024-a-note-in-place-of-a-video-file.md)).

@@ -119,7 +119,10 @@ Write the brief outside the repository so it does not dirty the checkout.
    session at twice its budget (1.5 by default). `--set
    maxOutputTokens=65536` lets one reply have 65,536 tokens instead of
    16,384, for a reasoning model whose replies are cut at the output limit
-   before it writes anything.
+   before it writes anything. The reply shares the model's window: `init`
+   and `run` refuse a limit that leaves no room for a prompt, and warn
+   when a session at its budget would leave less than the limit, giving
+   the `contextBudget` or the limit that keeps the room.
 2. Before starting `run`, prepare the bootstrap below in the directory
    `init` printed. For a repository with commits, confirm it with
    `git worktree list`; do not guess the directory from the goal name. For a
@@ -203,10 +206,11 @@ block. To let the local model prepare the whole bootstrap instead, skip
 
 When it is blocked, read `blocked_reason` and the newest notes in
 `.tenaz/notes/`. A reason that starts `prompt too large:` names the
-role, its model and that model's window, and says what to change: for a
-review, `params.diffShare` or `params.diffLimitBytes` in
-`.tenaz/run.json`; otherwise tell the user the role needs a model with
-a larger window, which takes a new run. A reason that starts
+role, its model and that model's window, and says what to change: when
+it names `params.maxOutputTokens`, lower it in `.tenaz/run.json`; for a
+review, `params.diffShare` or `params.diffLimitBytes` there; then
+`tenaz run --resume`. Otherwise tell the user the role needs a model
+with a larger window, which takes a new run. A reason that starts
 `harness failed:` quotes the agent harness's stderr: fix what it says
 (its installation, its configuration), then `tenaz run --resume`. A task
 whose builder found it

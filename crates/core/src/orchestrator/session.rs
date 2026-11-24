@@ -275,13 +275,14 @@ impl Runner {
     }
 
     /// What a `role` prompt must fit: its model's budget, with the
-    /// harness's reserve.
+    /// harness's reserve, and room for a reply of the run's pinned limit.
     fn prompt_limit(&self, role: Role) -> PromptLimit {
         PromptLimit {
             role,
             model: self.ledger.config.model_for(role),
             budget: self.ledger.model_budget_tokens(role),
             reserve: self.params.harness_reserve_tokens,
+            output: self.params.max_output_tokens.map(std::num::NonZeroU64::get),
         }
     }
 

@@ -63,12 +63,15 @@ fn first_request_tokens(prompt: &str, reserve: u64) -> u64 {
 }
 
 /// What a prompt of a `role` session must fit: `budget` tokens of
-/// `model`, with the harness's `reserve` on top of the prompt.
+/// `model`, with the harness's `reserve` on top of the prompt, and room
+/// in its window for a reply of the run's pinned `output` limit
+/// (ADR 0041).
 pub(super) struct PromptLimit {
     pub role: Role,
     pub model: SessionModel,
     pub budget: u64,
     pub reserve: u64,
+    pub output: Option<u64>,
 }
 
 impl PromptLimit {
@@ -76,56 +79,84 @@ impl PromptLimit {
     /// when it does.
     pub(super) fn over(&self, prompt: &str, task: Option<&TaskId>) -> Option<String> {
         let estimate = first_request_tokens(prompt, self.reserve);
-        if estimate <= self.budget {
-            return None;
-        }
+        let window = self.model.context_window;
+        // The pinned limit, when the prompt is within its budget and over
+        // only what that limit leaves of the window: lowering the limit is
+        // then enough.
+        let past_room = if estimate > self.budget {
+            None
+        } else {
+            Some(
+                self.output
+                    .filter(|output| estimate > window.saturating_sub(*output))?,
+            )
+        };
         let role = self.role;
         let what = task.map_or_else(
             || format!("{role} prompt"),
             |task| format!("{role} prompt for {task}"),
         );
+        let over = match past_room {
+            Some(output) => format!(
+                "the {} tokens a reply of params.maxOutputTokens {output} leaves of the {role}'s window",
+                window.saturating_sub(output)
+            ),
+            None => format!("the {role}'s budget of {}", self.budget),
+        };
         Some(format!(
-            "the {what}, {} bytes, is about {estimate} tokens with the harness's reserve, over the {role}'s budget of {}; {}",
+            "the {what}, {} bytes, is about {estimate} tokens with the harness's reserve, over {over}; {}",
             prompt.len(),
-            self.budget,
-            self.what_to_change()
+            self.what_to_change(past_room.is_some())
         ))
     }
 
     /// Why the run stops at `label`, whose prompt of `prompt_bytes` the
-    /// harness refused: what was refused, and what to change.
+    /// harness refused: what was refused, and what to change, the run's
+    /// pinned output limit among it, since the engine may refuse a prompt
+    /// and a limit that together pass the window.
     pub(super) fn refused(&self, label: &str, prompt_bytes: usize) -> String {
         format!(
             "the harness refused the {} prompt of {label}, {prompt_bytes} bytes; {}",
             self.role,
-            self.what_to_change()
+            self.what_to_change(self.output.is_some())
         )
     }
 
     /// The end both reasons share: the model's name and window, and what
-    /// to change.
-    fn what_to_change(&self) -> String {
+    /// to change, the run's output limit among it when `lower_output`.
+    fn what_to_change(&self, lower_output: bool) -> String {
         format!(
             "{}'s window is {} tokens. To go on, {}",
             self.model.name,
             self.model.context_window,
-            change_advice(self.role)
+            change_advice(self.role, lower_output)
         )
     }
 }
 
-/// What to change when a `role` prompt does not fit: a review can be made
-/// smaller; a model is changed in a new run only.
-fn change_advice(role: Role) -> String {
+/// What to change when a `role` prompt does not fit: the run's output
+/// limit when `lower_output`, a review's diff, both in a resumed run; a
+/// model in a new run only.
+fn change_advice(role: Role, lower_output: bool) -> String {
     let larger = format!(
         "give the {role} a model with a larger window in a new run (tenaz init --model-for, --context-window-for)"
     );
+    let mut params = Vec::new();
+    if lower_output {
+        params.push("params.maxOutputTokens");
+    }
     if role == Role::Reviewer {
-        format!(
-            "lower params.diffShare or params.diffLimitBytes in .tenaz/run.json and run with --resume, or {larger}"
-        )
-    } else {
-        larger
+        params.extend(["params.diffShare", "params.diffLimitBytes"]);
+    }
+    match params.split_last() {
+        None => larger,
+        Some((last, [])) => {
+            format!("lower {last} in .tenaz/run.json and run with --resume, or {larger}")
+        }
+        Some((last, rest)) => format!(
+            "lower {} or {last} in .tenaz/run.json and run with --resume, or {larger}",
+            rest.join(", ")
+        ),
     }
 }
 
@@ -174,7 +205,89 @@ mod tests {
             model: qwen(),
             budget: 8202,
             reserve: 8192,
+            output: None,
         }
+    }
+
+    /// A pinned output limit leaves a prompt less than its budget: the
+    /// prompt must fit that, and the reason says to lower the limit.
+    #[test]
+    fn a_prompt_must_leave_room_for_a_reply_of_the_pinned_limit() {
+        let pinned = PromptLimit {
+            budget: 42_598,
+            output: Some(60_000),
+            ..limit(Role::Builder)
+        };
+        let prompt = "x".repeat(3000);
+        assert_eq!(
+            pinned.over(&prompt, None),
+            Some(
+                "the builder prompt, 3000 bytes, is about 9192 tokens with the harness's reserve, \
+                 over the 5536 tokens a reply of params.maxOutputTokens 60000 leaves of the \
+                 builder's window; mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, \
+                 lower params.maxOutputTokens in .tenaz/run.json and run with --resume, or give \
+                 the builder a model with a larger window in a new run (tenaz init --model-for, \
+                 --context-window-for)"
+                    .to_owned()
+            )
+        );
+    }
+
+    /// A prompt fits up to what the pinned limit leaves, to the token.
+    #[test]
+    fn a_prompt_fits_up_to_what_the_pinned_limit_leaves() {
+        let prompt = "x".repeat(3000);
+        let estimate = first_request_tokens(&prompt, 8192);
+        let leaving = |room: u64| PromptLimit {
+            budget: 42_598,
+            output: Some(65_536 - room),
+            ..limit(Role::Builder)
+        };
+        assert_eq!(leaving(estimate).over(&prompt, None), None);
+        assert!(leaving(estimate - 1).over(&prompt, None).is_some());
+    }
+
+    #[test]
+    fn a_prompt_within_its_budget_fits_when_the_run_pins_no_limit() {
+        let unpinned = PromptLimit {
+            budget: 42_598,
+            ..limit(Role::Builder)
+        };
+        assert_eq!(unpinned.over(&"x".repeat(3000), None), None);
+    }
+
+    /// A prompt over its budget names the budget, not the pinned limit:
+    /// lowering the limit would not make it fit.
+    #[test]
+    fn a_prompt_over_its_budget_too_is_not_told_to_lower_the_limit() {
+        let pinned = PromptLimit {
+            output: Some(60_000),
+            ..limit(Role::Builder)
+        };
+        let reason = pinned.over(&"x".repeat(3000), None).unwrap();
+        assert!(
+            reason.contains("over the builder's budget of 8202; "),
+            "{reason}"
+        );
+        assert!(!reason.contains("maxOutputTokens"), "{reason}");
+    }
+
+    /// With a pinned limit, a reviewer is told each setting it may lower
+    /// once, and a refusal of the harness names the limit too.
+    #[test]
+    fn a_refused_review_with_a_pinned_limit_names_every_setting_once() {
+        let pinned = PromptLimit {
+            output: Some(60_000),
+            ..limit(Role::Reviewer)
+        };
+        assert_eq!(
+            pinned.refused("007-reviewer-T001", 281_465),
+            "the harness refused the reviewer prompt of 007-reviewer-T001, 281465 bytes; \
+             mlx-serve/Qwen3.8-27B's window is 65536 tokens. To go on, lower \
+             params.maxOutputTokens, params.diffShare or params.diffLimitBytes in \
+             .tenaz/run.json and run with --resume, or give the reviewer a model with a \
+             larger window in a new run (tenaz init --model-for, --context-window-for)"
+        );
     }
 
     /// The reviewer of T001 in the Digger 3D run of 2026-10-29.

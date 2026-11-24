@@ -280,6 +280,19 @@ impl RunParams {
             .map_or(DEFAULT_MAX_OUTPUT_TOKENS, NonZeroU64::get)
     }
 
+    /// The context budget of a session on a model with `context_window`
+    /// tokens: `contextBudget` of it, in whole tokens, before any cap.
+    pub fn budget_tokens(&self, context_window: u64) -> u64 {
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a context window times a fraction is far below 2^53 and floors to a positive u64"
+        )]
+        let budget = (context_window as f64 * self.context_budget).floor() as u64;
+        budget
+    }
+
     /// Builders may declare heavy jobs (ADR 0010): `jobMinutes` is not 0.
     pub fn jobs_on(&self) -> bool {
         self.job_minutes > 0

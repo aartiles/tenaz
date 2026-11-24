@@ -816,7 +816,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   OpenCode, dsh, Pi or the generic agent send the configured limit, that
   Qwen Code sends no limit of its own (so that the proxy's applies), or
   that mlx-serve and the other engines honour 65,536 rather than cut the
-  reply at a lower limit of their own.
+  reply at a lower limit of their own. Nor what an engine does with a
+  request whose prompt and limit together pass the window, which the run
+  warns about: it is assumed to cut the reply or refuse the request.
 
 ## Model and engine behaviour seen in testing
 
