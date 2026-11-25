@@ -81,6 +81,13 @@ uses [Semantic Versioning](https://semver.org/).
   written again before every session. A shell command that removed `.tenaz/private` left every later
   Pi session exiting at once with `Model "<provider>/<id>" not found`.
 
+### Security
+
+- url goes from 2.5.8 to 2.5.9 for RUSTSEC-2026-0592: `Url::origin()`
+  overflows the stack on nested `blob:` URLs. Tenaz, reqwest and
+  tower-http do not call it; rmcp's HTTP client does on redirects, but
+  only Tenaz's tests use that client.
+
 ## [0.8.0] - 2026-11-19
 
 ### Added
