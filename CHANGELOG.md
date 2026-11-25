@@ -80,6 +80,8 @@ uses [Semantic Versioning](https://semver.org/).
   Qwen Code, besides the settings already written per session) are
   written again before every session. A shell command that removed `.tenaz/private` left every later
   Pi session exiting at once with `Model "<provider>/<id>" not found`.
+- With dsh, the thinking level `max` asks for dsh's `xhigh`, as `high`
+  and `xhigh` do. It asked for `medium`, below `high`.
 
 ### Security
 
