@@ -93,4 +93,7 @@ A. `init --thinking-for ROLE=LEVEL`, repeatable.
   effort at all, as before: the per-role level reaches only Pi, dsh and
   the generic agent there.
 - Tested with the scripted harness, the fake agents and the proxy's unit
-  tests; not yet in a run against a real model.
+  tests, and in one real run with Pi 1.6.0 and Splash 1.7.3 (see
+  docs/COMPATIBILITY.md, Known gaps); with fx, OpenCode, Qwen Code, dsh
+  and a generic agent it has not yet been run
+  against a real model.
