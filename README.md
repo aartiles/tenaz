@@ -428,6 +428,18 @@ come from your `~/.pi/agent/models.json` when it lists the model. See
 [ADR 0011](docs/adr/0011-a-model-per-role.md) and
 [ADR 0015](docs/adr/0015-swapping-role-models.md).
 
+`--thinking LEVEL` sets how hard every role reasons (default `medium`;
+`off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), and
+`--thinking-for ROLE=LEVEL` gives one role its own, for example
+`--thinking-for reviewer=high --thinking-for builder=low` to judge at
+`high` and build at `low`. Repeat it for more roles; the others keep
+`--thinking`. Each session's agent is configured with its role's level,
+and the engine proxy asks for that level's reasoning effort when the
+agent sends none. With fx, OpenCode and Qwen Code, `off` only means no
+effort is asked for: an engine that thinks by default still thinks.
+`tenaz status` names the roles with a level of their own. See
+[ADR 0042](docs/adr/0042-a-thinking-level-per-role.md).
+
 `--vision` says the model reads images. `--set key=value` overrides a
 parameter; `tenaz params` lists them. Whatever its model, the diff a
 reviewer is shown takes at most `diffShare` (0.25) of the reviewer's
@@ -516,7 +528,8 @@ compaction, so Tenaz's context budget ends a session; a summary request
 dsh still sends is refused and ends the session (ADR 0030).
 dsh does not ask before its tool calls, and the media tools and pinned
 skills are not offered to it yet.
-The thinking level maps to its reasoning effort (`high` is its `xhigh`).
+The thinking level (each role's, with `--thinking-for`) maps to its
+reasoning effort (`high` and above are its `xhigh`).
 It has finished two runs with Qwen3.8-Flash-Next on Sushi, the longer
 one a 19-hour game brief; pass `--vision` for it to read images. See
 [Compatibility](docs/COMPATIBILITY.md).
@@ -529,7 +542,7 @@ mode, and `<command> --version` must answer. Before each session Tenaz
 writes `acp-session.json` in the run's private folder and passes its path in
 `TENAZ_AGENT_SESSION`: the engine's base URL (the proxy), the session's
 model, its context window, output limit and inputs, the reasoning effort
-and the media MCP servers. A small script reads it, configures the agent
+of the session's role and the media MCP servers. A small script reads it, configures the agent
 and starts it. Tenaz isolates nothing here: the agent keeps your `HOME`,
 your settings and its memory, so a run on it is only as reproducible as
 your script makes it ([ADR 0027](docs/adr/0027-acp-agents-behind-one-trait.md)).

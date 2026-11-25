@@ -294,6 +294,7 @@ mod tests {
             id: "critic".into(),
             context_window: 32_768,
             supports_images: true,
+            thinking: None,
         };
         let json = config().for_model(&model).to_json();
         let models = json["provider"]["engine"]["models"].as_object().unwrap();
@@ -375,6 +376,7 @@ mod tests {
                 id: "m".into(),
                 context_window: 65536,
                 supports_images: false,
+                thinking: None,
             },
         }
     }

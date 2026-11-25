@@ -32,6 +32,9 @@ pub struct SessionModel {
     pub id: String,
     pub context_window: u64,
     pub supports_images: bool,
+    /// The thinking level of the session's role (`--thinking-for`), else
+    /// the run's (`--thinking`); `None` when the run names none.
+    pub thinking: Option<String>,
 }
 
 /// How to open one session.

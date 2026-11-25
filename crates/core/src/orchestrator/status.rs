@@ -130,8 +130,8 @@ fn context_budget_line(ledger: &Ledger) -> String {
     format!("Context budget: {budget} tokens{whose}{cap}")
 }
 
-/// The `Model:` line and, when some roles have a model of their own, the
-/// `Role models:` line after it.
+/// The `Model:` line and, when some roles have a model or a thinking
+/// level of their own, the `Role models:` and `Role thinking:` lines after it.
 fn model_lines(ledger: &Ledger) -> Vec<String> {
     let config = &ledger.config;
     let mut lines = vec![format!(
@@ -153,6 +153,14 @@ fn model_lines(ledger: &Ledger) -> Vec<String> {
             ""
         };
         lines.push(format!("Role models: {}{swapped}", models.join(", ")));
+    }
+    if !config.role_thinking.is_empty() {
+        let levels: Vec<String> = config
+            .role_thinking
+            .iter()
+            .map(|(role, level)| format!("{role} {level}"))
+            .collect();
+        lines.push(format!("Role thinking: {}", levels.join(", ")));
     }
     lines
 }
@@ -272,6 +280,13 @@ pub fn status_json(project: &Project) -> Value {
                 "context_window": m.context_window,
             })))
             .collect::<BTreeMap<_, _>>(),
+        "thinking": ledger.config.thinking,
+        "role_thinking": ledger
+            .config
+            .role_thinking
+            .iter()
+            .map(|(role, level)| (role.as_str(), level))
+            .collect::<BTreeMap<_, _>>(),
         "swap_models": ledger.launch.swap_models,
         "harness": ledger.config.harness,
         "origin": ledger.origin,
@@ -308,6 +323,7 @@ mod tests {
             input: vec!["text".into()],
             thinking: None,
             role_models,
+            role_thinking: BTreeMap::new(),
         };
         let mut ledger = Ledger::new(
             "t".into(),
@@ -321,6 +337,28 @@ mod tests {
         ledger.context_cap = context_cap;
         project.save_ledger(&ledger).unwrap();
         (work, project)
+    }
+
+    #[test]
+    fn status_names_the_roles_that_think_at_their_own_level() {
+        let (_work, project) = project_with(BTreeMap::new());
+        let mut ledger = project.load_ledger().unwrap();
+        ledger.config.role_thinking = BTreeMap::from([
+            (Role::Builder, "low".to_owned()),
+            (Role::Reviewer, "high".to_owned()),
+        ]);
+        project.save_ledger(&ledger).unwrap();
+        let text = status_text(&project);
+        assert!(
+            text.contains("\nRole thinking: builder low, reviewer high\n"),
+            "{text}"
+        );
+        let json = status_json(&project);
+        assert_eq!(
+            json["role_thinking"],
+            json!({"builder": "low", "reviewer": "high"})
+        );
+        assert_eq!(json["thinking"], json!(null));
     }
 
     #[test]
@@ -422,7 +460,9 @@ mod tests {
         let (_work, project) = project_with(BTreeMap::new());
         let text = status_text(&project);
         assert!(!text.contains("Role models"), "{text}");
+        assert!(!text.contains("Role thinking"), "{text}");
         assert!(text.contains("Context budget: 85196 tokens\n"), "{text}");
         assert_eq!(status_json(&project)["role_models"], json!({}));
+        assert_eq!(status_json(&project)["role_thinking"], json!({}));
     }
 }

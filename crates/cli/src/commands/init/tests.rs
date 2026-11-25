@@ -242,12 +242,43 @@ fn the_command_line_gives_the_role_models_back_after_the_context_window() {
         "reviewer=32768",
         "--thinking",
         "high",
+        "--thinking-for",
+        "builder=low",
+        "--thinking-for",
+        "split=off",
     ]));
     assert_eq!(
         args.command_line(),
         "tenaz init --project p --model m --context-window 65536 \
          --model-for reviewer=r --model-for split=s --context-window-for reviewer=32768 \
-         --thinking high"
+         --thinking high --thinking-for builder=low --thinking-for split=off"
+    );
+}
+
+/// The `--thinking-for` levels are kept per role, and a wrong one stops
+/// `init` before it creates anything.
+#[test]
+fn a_plan_keeps_the_role_thinking_and_refuses_a_wrong_one() {
+    let line = with(&[
+        "--thinking-for",
+        "reviewer=high",
+        "--thinking-for",
+        "builder=low",
+    ]);
+    assert_eq!(
+        plan(&line, None).role_thinking,
+        BTreeMap::from([
+            (Role::Builder, "low".to_owned()),
+            (Role::Reviewer, "high".to_owned()),
+        ])
+    );
+    assert_eq!(
+        plan_error(&["--thinking-for", "reviewer=hard"]),
+        "--thinking-for reviewer: unknown level hard; levels: off, minimal, low, medium, high, xhigh, max"
+    );
+    assert!(
+        plan_error(&["--thinking-for", "critic=high"])
+            .starts_with("--thinking-for: unknown role critic"),
     );
 }
 

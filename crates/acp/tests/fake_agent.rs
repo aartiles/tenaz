@@ -187,6 +187,7 @@ fn spec(dir: &Path) -> SessionSpec {
             id: "m".into(),
             context_window: 65536,
             supports_images: false,
+            thinking: None,
         },
     }
 }
@@ -581,6 +582,7 @@ fn run_model() -> SessionModel {
         id: "run".into(),
         context_window: 131_072,
         supports_images: false,
+        thinking: None,
     }
 }
 
@@ -622,6 +624,7 @@ async fn configs_at_launch(
                 id: id.into(),
                 context_window,
                 supports_images,
+                thinking: None,
             },
             ..spec(dir.path())
         };

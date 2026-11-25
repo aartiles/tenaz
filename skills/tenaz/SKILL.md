@@ -83,6 +83,11 @@ mlx-serve), and Tenaz loads one at a time, swapping before each session.
 With `--harness pi`, a role's window and inputs are read from the user's
 `~/.pi/agent/models.json` when it lists the model.
 
+`--thinking LEVEL` (default `medium`) sets how hard every role reasons;
+`--thinking-for ROLE=LEVEL` (repeatable, one role each) gives one role
+its own, for example `--thinking-for reviewer=high --thinking-for
+builder=low`. Levels: off, minimal, low, medium, high, xhigh, max.
+
 Doctor finds Pi, fx, OpenCode and Qwen Code on PATH. For DeepSeek
 Harness pass `--harness dsh --dsh-bin <path>`. Any other ACP agent runs
 with `--harness acp --acp-bin <command>` and `tenaz run --acp-args

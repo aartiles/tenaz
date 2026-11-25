@@ -216,6 +216,7 @@ mod tests {
                 id: "m".to_owned(),
                 context_window: 32_768,
                 supports_images: false,
+                thinking: None,
             },
         }
     }

@@ -38,6 +38,7 @@ fn spec(dir: &Path, persist: bool) -> SessionSpec {
             id: "fake".into(),
             context_window: 65536,
             supports_images: false,
+            thinking: None,
         },
     }
 }

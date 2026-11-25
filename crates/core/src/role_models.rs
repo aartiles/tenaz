@@ -1,7 +1,8 @@
-//! Which model plays each role: the `--model-for ROLE=ID` and
-//! `--context-window-for ROLE=N` pairs `init` checks and pins in
-//! `run.json`. A role without an entry is played by
-//! the run's model (ADR 0011).
+//! Which model plays each role, and how hard it thinks: the
+//! `--model-for ROLE=ID`, `--context-window-for ROLE=N` and
+//! `--thinking-for ROLE=LEVEL` pairs `init` checks and pins in `run.json`.
+//! A role without an entry is played by the run's model (ADR 0011), at
+//! the run's thinking level (ADR 0042).
 
 use std::collections::BTreeMap;
 
@@ -32,12 +33,14 @@ impl RoleModel {
         self.input.iter().any(|i| i == IMAGE_INPUT)
     }
 
-    pub fn session_model(&self) -> SessionModel {
+    /// This model for a session at the thinking level `thinking`.
+    pub fn session_model(&self, thinking: Option<&str>) -> SessionModel {
         SessionModel {
             name: self.model.clone(),
             id: self.id.clone(),
             context_window: self.context_window,
             supports_images: self.supports_images(),
+            thinking: thinking.map(str::to_owned),
         }
     }
 }
@@ -62,6 +65,8 @@ pub enum RoleModelError {
     SameAsDefault { role: Role, id: String },
     #[error("{window} {0} needs a {model} {0}", window = WINDOW.name, model = MODEL.name)]
     WindowWithoutModel(Role),
+    #[error("{} {role}: unknown level {got}; levels: {}", THINKING.name, THINKING_LEVELS.join(", "))]
+    UnknownLevel { role: Role, got: String },
     #[error("{} {role} is not a positive number of tokens: {got}", WINDOW.name)]
     BadWindow { role: Role, got: String },
     #[error(
@@ -90,6 +95,34 @@ const WINDOW: Flag = Flag {
     name: "--context-window-for",
     value: "N",
 };
+
+const THINKING: Flag = Flag {
+    name: "--thinking-for",
+    value: "LEVEL",
+};
+
+/// The thinking levels `--thinking-for` takes: those Pi takes, which the
+/// other harnesses and the engine proxy map to a reasoning effort.
+pub const THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// The `--thinking-for` pairs as a level per role. A pair that is not
+/// `ROLE=LEVEL`, an unknown role or level, and a role given twice are
+/// errors.
+pub fn role_thinking(raw: &[String]) -> Result<BTreeMap<Role, String>, RoleModelError> {
+    let mut levels = BTreeMap::new();
+    for (role, level) in pairs(&THINKING, raw)? {
+        if !THINKING_LEVELS.contains(&level.as_str()) {
+            return Err(RoleModelError::UnknownLevel { role, got: level });
+        }
+        if levels.insert(role, level).is_some() {
+            return Err(RoleModelError::Twice {
+                flag: &THINKING,
+                role,
+            });
+        }
+    }
+    Ok(levels)
+}
 
 fn role_names() -> String {
     Role::ALL.map(Role::as_str).join(", ")
@@ -363,6 +396,44 @@ mod tests {
             })
             .collect();
         assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    #[test]
+    fn thinking_levels_are_given_per_role() {
+        let raw = ["reviewer=high", "builder=low"].map(String::from);
+        assert_eq!(
+            role_thinking(&raw).unwrap(),
+            BTreeMap::from([
+                (Role::Builder, "low".to_owned()),
+                (Role::Reviewer, "high".to_owned()),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_wrong_thinking_pair_is_refused_with_what_is_wrong() {
+        for (raw, expected) in [
+            (
+                "reviewer",
+                "--thinking-for expects ROLE=LEVEL, got reviewer",
+            ),
+            (
+                "critic=high",
+                "--thinking-for: unknown role critic; roles: bootstrap, builder, reviewer, split, replan, final-reviewer",
+            ),
+            (
+                "reviewer=hard",
+                "--thinking-for reviewer: unknown level hard; levels: off, minimal, low, medium, high, xhigh, max",
+            ),
+        ] {
+            let got = role_thinking(&[raw.to_owned()]).unwrap_err().to_string();
+            assert_eq!(got, expected, "{raw}");
+        }
+        let twice = ["reviewer=high", "reviewer=low"].map(String::from);
+        assert_eq!(
+            role_thinking(&twice).unwrap_err().to_string(),
+            "--thinking-for reviewer is given twice"
+        );
     }
 
     #[test]

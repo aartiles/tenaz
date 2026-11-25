@@ -10,8 +10,9 @@ crates/
                            (generic commands, a load API as Sushi's), media adapters (ComfyUI, OpenAI Images, a 3D API),
                            Prometheus metrics.
   proxy/     tenaz-proxy     OpenAI-compatible reverse proxy: per-request usage, hold while swapping,
-                           engine error messages, tool-argument repair, the lowered
-                           reasoning effort, the run's output limit on requests without one
+                           engine error messages, tool-argument repair, the session's
+                           role's reasoning effort (ADR 0042), lowered after a cut reply,
+                           the run's output limit on requests without one
                            (ADR 0041), replies at the output limit reported as cut, and
                            a harness's own compaction request refused when set (Qwen Code and
                            dsh, ADRs 0022, 0030),
@@ -46,9 +47,9 @@ Pure modules, each unit-tested without I/O:
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal, refused request). |
 | `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |
 | `role` | The session roles, their prompt paths and what a steered session is asked to write before it stops. |
-| `role_models` | The `--model-for ROLE=ID` map: its checks at `init` and the models pinned in `run.json` (ADR 0011). |
+| `role_models` | The `--model-for ROLE=ID` and `--thinking-for ROLE=LEVEL` maps: their checks at `init` and the models and levels pinned in `run.json` (ADRs 0011, 0042). |
 | `cache_report` | Whether the engine's usage names its cached tokens, noted by the engine proxy for the preflight. |
-| `effort` | The dial that lowers the reasoning effort for one session after a reply cut at the output limit. |
+| `effort` | A thinking level's reasoning effort, one step lower after a reply cut at the output limit, and the dial that carries each session's to the engine proxy (ADR 0042). |
 | `output_limit` | Whether a pinned `maxOutputTokens` fits each role's window: refused at `init` and `run` when it leaves no room for a prompt, warned about past the context budget (ADR 0041). |
 | `ownership` | Which paths each role may write; the rest is reverted. A split task's builder may also correct its ancestors' notes (ADR 0013). |
 | `ledger` | `run.json` and the `journal.jsonl` record types, and which roles' next session runs at a lower effort. |
@@ -122,7 +123,7 @@ module with unit tests turns the harness's own records into those events.
 | | `tenaz-acp` (fx, OpenCode, Qwen Code, dsh, any ACP agent) | `tenaz-pi` (Pi) |
 |---|---|---|
 | Transport | ACP over the agent's stdio, via `agent-client-protocol` | Pi's RPC: one JSON object per LF-terminated line on stdin and stdout |
-| Per session | the agent's configuration written for the session's model in its own `HOME` (ADR 0019; Qwen Code also gets the model on its command line), then `initialize`, `session/new`. Each agent is one `AgentProfile` (`crates/acp/src/agent.rs`, ADR 0027): its configuration, command line and environment; the launch, the wrapper and the configuration step are shared | `pi --mode rpc --session-dir DIR|--no-session --model P/ID (the session role's model) --thinking L --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
+| Per session | the agent's configuration written for the session's model in its own `HOME` (ADR 0019; Qwen Code also gets the model on its command line), then `initialize`, `session/new`. Each agent is one `AgentProfile` (`crates/acp/src/agent.rs`, ADR 0027): its configuration, command line and environment; the launch, the wrapper and the configuration step are shared | `pi --mode rpc --session-dir DIR|--no-session --model P/ID (the session role's model) --thinking L (the session role's level) --tools read,bash,write,edit,grep,find,ls --no-mcp --no-extensions --no-skills [--skill DIR...] --approve --offline` |
 | Prompt | `session/prompt` | `{"id":"prompt-N","type":"prompt","message":...}`; a `response` that is not `success` or whose disposition is `handled` becomes `PromptRejected` |
 | Steer | fx's extension: a `session/prompt` with `_meta.fx.steer: true` while a prompt runs; otherwise dropped | `{"type":"steer"}`: Pi delivers it after the current turn's tool calls |
 | Abort | `session/cancel` | `clear_queue` then `abort`; `agent_settled {aborted:true}` follows |

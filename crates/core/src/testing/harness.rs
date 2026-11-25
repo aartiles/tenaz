@@ -472,6 +472,7 @@ mod tests {
                     id: "m".into(),
                     context_window: 65536,
                     supports_images: false,
+                    thinking: None,
                 },
             })
             .await
@@ -506,6 +507,7 @@ mod tests {
                     id: "m".into(),
                     context_window: 65536,
                     supports_images: false,
+                    thinking: None,
                 },
             })
             .await

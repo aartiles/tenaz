@@ -123,8 +123,14 @@ pub(crate) struct InitArgs {
     /// The model reads images (with --harness pi, read from models.json when listed there).
     #[arg(long)]
     pub(crate) vision: bool,
+    /// The thinking level of every role without one of its own.
     #[arg(long, default_value = "medium")]
     pub(crate) thinking: String,
+    /// The thinking level of one role, `ROLE=LEVEL` (repeatable; levels:
+    /// off, minimal, low, medium, high, xhigh, max); the other roles think
+    /// at --thinking.
+    #[arg(long = "thinking-for", value_name = "ROLE=LEVEL")]
+    pub(crate) thinking_for: Vec<String>,
     /// Parameter overrides, `key=value` (see `tenaz params`).
     #[arg(long = "set")]
     pub(crate) sets: Vec<String>,
@@ -221,6 +227,11 @@ impl InitArgs {
             "thinking",
             (self.thinking != "medium").then(|| self.thinking.clone()),
         ));
+        flags.extend(
+            self.thinking_for
+                .iter()
+                .map(|p| ("thinking-for", Some(p.clone()))),
+        );
         flags.extend(self.sets.iter().map(|pair| ("set", Some(pair.clone()))));
         flags.extend(
             self.skills
@@ -292,6 +303,8 @@ pub(crate) struct InitPlan {
     pub(crate) model: String,
     /// The roles `--model-for` gives another model.
     pub(crate) role_picks: BTreeMap<Role, RolePick>,
+    /// The roles `--thinking-for` gives another thinking level.
+    pub(crate) role_thinking: BTreeMap<Role, String>,
     pub(crate) provider: String,
     pub(crate) api: EngineApi,
     /// The `--mcp` servers by name, checked (ADR 0032).
@@ -329,6 +342,7 @@ impl InitPlan {
             windows: &args.context_windows_for,
         };
         let role_picks = flags.picks(&model)?;
+        let role_thinking = role_models::role_thinking(&args.thinking_for)?;
         let provider = args
             .provider
             .clone()
@@ -344,6 +358,7 @@ impl InitPlan {
             harness_bin: args.bins.get(harness).map(Path::to_path_buf),
             model,
             role_picks,
+            role_thinking,
             provider,
             api,
             mcp_servers,
@@ -553,6 +568,7 @@ fn model_config(plan: &InitPlan) -> anyhow::Result<ModelConfig> {
         input,
         thinking: Some(plan.args.thinking.clone()),
         role_models,
+        role_thinking: plan.role_thinking.clone(),
     })
 }
 

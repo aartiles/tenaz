@@ -184,7 +184,8 @@ fn status_json(project: &std::path::Path) -> serde_json::Value {
 
 /// `init --model-for` pins another model for a role under the run's
 /// provider, with the window `--context-window-for` gives it or else the
-/// run's, and the run's inputs; `status` names it.
+/// run's, and the run's inputs; `--thinking-for` pins a role's thinking
+/// level; `status` names them.
 #[test]
 fn init_pins_a_model_per_role() {
     let work = tempfile::tempdir().unwrap();
@@ -205,6 +206,12 @@ fn init_pins_a_model_per_role() {
             "split=planner",
         ])
         .args(["--context-window-for", "reviewer=32768"])
+        .args([
+            "--thinking-for",
+            "reviewer=high",
+            "--thinking-for",
+            "builder=low",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -215,6 +222,16 @@ fn init_pins_a_model_per_role() {
     let ledger: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(project.join(".tenaz/run.json")).unwrap())
             .unwrap();
+    assert_eq!(ledger["config"]["thinking"], "medium");
+    assert_eq!(
+        ledger["config"]["roleThinking"],
+        serde_json::json!({"builder": "low", "reviewer": "high"})
+    );
+    assert_eq!(status_json(&project)["thinking"], "medium");
+    assert_eq!(
+        status_json(&project)["role_thinking"],
+        serde_json::json!({"builder": "low", "reviewer": "high"})
+    );
     assert_eq!(
         ledger["config"]["roleModels"],
         serde_json::json!({

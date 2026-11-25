@@ -1009,6 +1009,7 @@ mod tests {
             input: vec!["text".into(), "image".into()],
             thinking: Some("medium".into()),
             role_models: BTreeMap::new(),
+            role_thinking: BTreeMap::new(),
         }
     }
 

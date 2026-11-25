@@ -41,15 +41,18 @@ pub struct Proxy {
     /// Add `stream_options.include_usage` to streaming chat requests, so the
     /// final chunk carries the usage. Engines ignore it when unsupported.
     pub include_usage: bool,
-    /// Fields added to a completion request that lacks them, such as
-    /// `reasoning_effort`: fx does not forward a reasoning setting to a custom
-    /// OpenAI-compatible provider, and Sushi's default effort is `off`.
+    /// Fields added to a completion request that lacks them, such as the
+    /// run's pinned `temperature`.
     pub request_defaults: serde_json::Map<String, serde_json::Value>,
     /// Parse back tool-call arguments the engine sent as JSON text where the
     /// tool's schema accepts only an object (see [`repair`]).
     pub repair_tool_args: bool,
-    /// When turned, requests ask for one step less than the default
-    /// `reasoning_effort`, whatever the harness sent.
+    /// The session's `reasoning_effort`, added to a request that lacks one:
+    /// fx does not forward a reasoning setting to a custom OpenAI-compatible
+    /// provider, and Sushi's default effort is `off`. Each role may think
+    /// at its own level (ADR 0042). A lowered session's effort
+    /// ([`tenaz_core::effort::SessionEffort::lowered`]) replaces what the
+    /// harness sent.
     pub effort: Option<EffortDial>,
     /// The output limit of a request that names none: a reply that
     /// reaches it is reported with `finish_reason: length`.
@@ -112,11 +115,17 @@ const HOP_BY_HOP: [&str; 8] = [
 ];
 
 impl Proxy {
-    /// The default `reasoning_effort` one step down, while the dial is turned.
-    fn lowered_effort(&self) -> Option<&str> {
-        let dial = self.effort.as_ref().filter(|d| d.lowered())?;
-        let configured = self.request_defaults.get("reasoning_effort")?.as_str()?;
-        Some(dial.effort(configured))
+    /// Gives `request` the session's `reasoning_effort` from the dial: in
+    /// place of the harness's while lowered, else when it names none; true
+    /// when it changed.
+    fn apply_effort(&self, request: &mut JsonObject) -> bool {
+        let Some(current) = self.effort.as_ref().and_then(EffortDial::current) else {
+            return false;
+        };
+        if !current.lowered && request.contains_key(REASONING_EFFORT) {
+            return false;
+        }
+        set_effort(request, &current.effort)
     }
 
     /// `upstream` is the engine's origin (`http://127.0.0.1:12345`); paths are
@@ -289,8 +298,8 @@ impl Proxy {
     }
 
     /// Rewrites a completion request: the earlier reasoning dropped unless
-    /// kept, the lowered `reasoning_effort` when the dial is turned, the
-    /// defaults for absent fields, the run's output limit on a request
+    /// kept, the session's `reasoning_effort` (see [`Proxy::apply_effort`]),
+    /// the defaults for absent fields, the run's output limit on a request
     /// without one, `stream_options.include_usage` on a
     /// streaming request that lacks it, and a note in place of each video
     /// file (`video`). `None` when nothing changed.
@@ -300,14 +309,12 @@ impl Proxy {
         let dropped = self
             .past_reasoning_budget
             .is_some_and(|budget| reasoning::drop_past_reasoning(object, budget));
-        let lowered = self
-            .lowered_effort()
-            .is_some_and(|effort| set_effort(object, effort));
+        let effort = self.apply_effort(object);
         let filled = fill_defaults(object, &self.request_defaults);
         let limited = add_output_limit(object, self.output_limit, api);
         let usage = self.include_usage && ask_for_usage(object);
         let videos = video::replace_video_files(object);
-        if ![dropped, lowered, filled, limited, usage, videos].contains(&true) {
+        if ![dropped, effort, filled, limited, usage, videos].contains(&true) {
             return None;
         }
         serde_json::to_vec(&json).ok()
@@ -329,15 +336,17 @@ fn add_output_limit(request: &mut JsonObject, limit: Option<OutputLimit>, api: A
     true
 }
 
+const REASONING_EFFORT: &str = "reasoning_effort";
+
 /// Sets `reasoning_effort`; true when it was different.
 fn set_effort(request: &mut JsonObject, effort: &str) -> bool {
     let current = request
-        .get("reasoning_effort")
+        .get(REASONING_EFFORT)
         .and_then(serde_json::Value::as_str);
     if current == Some(effort) {
         return false;
     }
-    request.insert("reasoning_effort".to_owned(), effort.into());
+    request.insert(REASONING_EFFORT.to_owned(), effort.into());
     true
 }
 
@@ -584,6 +593,7 @@ fn elapsed_ms(since: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tenaz_core::effort::SessionEffort;
 
     /// A proxy with its defaults, for the rewrite.
     fn proxy() -> Proxy {
@@ -756,37 +766,82 @@ mod tests {
         let mut proxy = proxy();
         proxy
             .request_defaults
-            .insert("reasoning_effort".to_owned(), "medium".into());
+            .insert("temperature".to_owned(), 0.0.into());
         let body = br#"{"model":"m","stream":false,"messages":[]}"#;
         let rewritten = json(&proxy.rewrite_request(Api::Completions, body).unwrap());
-        assert_eq!(rewritten["reasoning_effort"], "medium");
+        assert_eq!(rewritten["temperature"], 0.0);
         assert!(rewritten.get("stream_options").is_none());
-        let explicit = br#"{"model":"m","reasoning_effort":"low","stream":true,"stream_options":{"include_usage":true}}"#;
+        let explicit = br#"{"model":"m","temperature":1.0,"stream":true,"stream_options":{"include_usage":true}}"#;
         assert!(proxy.rewrite_request(Api::Completions, explicit).is_none());
     }
 
     #[test]
-    fn a_turned_dial_asks_for_less_effort_than_the_default_or_the_harness() {
+    fn a_lowered_effort_replaces_the_harness_s() {
         let mut proxy = proxy();
-        proxy
-            .request_defaults
-            .insert("reasoning_effort".to_owned(), "medium".into());
-        assert_eq!(proxy.lowered_effort(), None, "no dial");
+        let absent = br#"{"model":"m","stream":false}"#;
+        assert!(
+            proxy.rewrite_request(Api::Completions, absent).is_none(),
+            "no dial, no effort"
+        );
         let dial = EffortDial::new();
         proxy.effort = Some(dial.clone());
-        assert_eq!(proxy.lowered_effort(), None, "not turned");
-        dial.set_lowered(true);
-        assert_eq!(proxy.lowered_effort(), Some("low"));
-        let sent = br#"{"model":"m","reasoning_effort":"medium","stream":false}"#;
+        // A session at `high`, stepped down to `medium`: that replaces
+        // what the harness sent, and fills in a request without one.
+        dial.set(SessionEffort::for_session(Some("high"), true));
+        let sent = br#"{"model":"m","reasoning_effort":"low","stream":false}"#;
         assert_eq!(
             json(&proxy.rewrite_request(Api::Completions, sent).unwrap())["reasoning_effort"],
-            "low"
+            "medium"
         );
-        let absent = br#"{"model":"m","stream":false}"#;
         assert_eq!(
             json(&proxy.rewrite_request(Api::Completions, absent).unwrap())["reasoning_effort"],
-            "low",
-            "the override wins over the default"
+            "medium"
+        );
+    }
+
+    #[test]
+    fn a_request_already_at_the_lowered_effort_is_left_alone() {
+        let mut proxy = proxy();
+        let dial = EffortDial::new();
+        proxy.effort = Some(dial.clone());
+        dial.set(SessionEffort::for_session(Some("high"), true));
+        let lowered = br#"{"model":"m","reasoning_effort":"medium","stream":false}"#;
+        assert!(proxy.rewrite_request(Api::Completions, lowered).is_none());
+    }
+
+    /// A proxy whose dial is at a session of `thinking`, not lowered.
+    fn proxy_at(thinking: Option<&str>) -> Proxy {
+        let mut proxy = proxy();
+        let dial = EffortDial::new();
+        dial.set(SessionEffort::for_session(thinking, false));
+        proxy.effort = Some(dial);
+        proxy
+    }
+
+    #[test]
+    fn a_request_without_an_effort_gets_the_session_s() {
+        let absent = br#"{"model":"m","stream":false}"#;
+        let rewritten = proxy_at(Some("high")).rewrite_request(Api::Completions, absent);
+        assert_eq!(json(&rewritten.unwrap())["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn a_session_at_off_adds_no_effort() {
+        // Streaming, so the request is rewritten (`include_usage`) and its
+        // fields can be read back.
+        let streaming = br#"{"model":"m","stream":true}"#;
+        let rewritten = proxy_at(Some("off")).rewrite_request(Api::Completions, streaming);
+        let rewritten = json(&rewritten.unwrap());
+        assert!(rewritten.get("reasoning_effort").is_none(), "{rewritten}");
+    }
+
+    #[test]
+    fn the_effort_the_harness_sent_stays_unless_lowered() {
+        let sent = br#"{"model":"m","reasoning_effort":"low","stream":false}"#;
+        assert!(
+            proxy_at(Some("high"))
+                .rewrite_request(Api::Completions, sent)
+                .is_none()
         );
     }
 

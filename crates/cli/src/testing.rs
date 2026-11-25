@@ -15,6 +15,7 @@ pub(crate) fn ledger_for(harness: tenaz_core::ledger::HarnessKind) -> tenaz_core
         input: vec!["text".into()],
         thinking: None,
         role_models: BTreeMap::new(),
+        role_thinking: BTreeMap::new(),
     };
     tenaz_core::ledger::Ledger::new(
         "t".into(),

@@ -196,6 +196,7 @@ mod tests {
             id: "Qwen3.8-27B".into(),
             context_window: 65_536,
             supports_images: false,
+            thinking: None,
         }
     }
 

@@ -144,6 +144,24 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **A thinking level per role.** `--thinking-for` (ADR 0042) has one
+  real run: Pi 1.6.0, Tenaz 97d9015 and Inkling 2 Mini on Splash 1.7.3,
+  on 2026-11-25, with `--thinking low` and bootstrap, reviewer, replan
+  and final reviewer at `high`; it ended COMPLETE after 4 h 26 min.
+  Splash logged the effort of every request: builders at `low` in all
+  283 of their requests, the other roles at `high`, and the two reviews
+  after a reply cut at the output limit at `medium`. fx, OpenCode, Qwen
+  Code, dsh and a generic agent are tested with the scripted harness,
+  the fake agents and the proxy's unit tests only. With `--no-proxy`,
+  fx, OpenCode and Qwen Code ask for no effort at all, so neither the
+  run's level nor a role's reaches the engine; Pi, dsh and a generic
+  agent still get each role's level. `minimal`, `xhigh` and `max` reach
+  fx and the engine unmapped (only dsh maps them), as with `--thinking`;
+  fx documents `low`, `medium` and `high`. With fx, OpenCode and Qwen
+  Code, `off` asks for no effort, so an engine that thinks by default
+  still thinks. The preflight runs at `--thinking` only, so
+  `--thinking off` with thinking roles fails its reasoning check unless the engine
+  reasons by default.
 - **The private folder removed by the agent.** It was `.tenaz/private/`
   until ADR 0040, and agents removed it in runs of 2026-11-19 and
   2026-11-23 (Pi 1.6.0: Pi's sessions, the request records and memory
@@ -684,13 +702,15 @@ above), so a 32k context is the practical floor (`contextFloor`).
   3D improvements run (fx 0.0.17, Qwen3.8-Flash-Next on Sushi 1.6.0) a
   cut builder's attempt passed `verify`, its review ran at the lower
   effort, and the builder after it ran at `medium` and was cut again.
-  The lowered effort is tested with the fake harness only. TensorFold
-  ended a reply cut inside a tool call's arguments with `finish_reason:
-  tool_calls` at 16384 of 16384 tokens, and fx reported
-  `InvalidToolArguments`; the proxy now reports any reply that
-  reaches the request's output limit (16384 when the request does not say)
-  as `length`. Tested against a fake engine only: no reply reached the
-  limit in the run since.
+  With fx the lowered effort is tested with the fake harness only; with
+  Pi 1.6.0 it was seen in the real run of 2026-11-25 (see "A thinking
+  level per role", above). TensorFold ended a reply cut inside a tool
+  call's arguments with `finish_reason: tool_calls` at 16384 of 16384
+  tokens, and fx reported `InvalidToolArguments`; the proxy now reports
+  any reply that reaches the request's output limit (16384 when the
+  request does not say) as `length`. With fx this is tested against a
+  fake engine only; with Pi, both replies cut in that run were reported
+  as `length`.
   Each fx session's reasoning text is kept in
   `<label>.thinking.md` in the private folder to show what such a reply was
   doing; fx 0.0.14 sends it as ACP thought chunks, seen in the

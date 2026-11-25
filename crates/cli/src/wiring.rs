@@ -203,26 +203,11 @@ fn mesh_adapter(
     )))
 }
 
-/// The `reasoning_effort` the engine is asked for, from the ledger's
-/// thinking level; `None` leaves the engine's default (`off`, `none`, unset).
-fn reasoning_effort(thinking: Option<&str>) -> Option<&str> {
-    match thinking.map(str::trim) {
-        None | Some("" | "off" | "none" | "auto") => None,
-        Some(level) => Some(level),
-    }
-}
-
 /// The fields the proxy adds to completion requests that lack them: the
-/// `reasoning_effort` of the thinking level (fx does not forward its effort
-/// to a custom provider) and the run's pinned `temperature`.
-fn request_defaults(
-    thinking: Option<&str>,
-    temperature: Option<f64>,
-) -> serde_json::Map<String, serde_json::Value> {
+/// run's pinned `temperature`. The effort comes from the dial, which the
+/// orchestrator sets before each session.
+fn request_defaults(temperature: Option<f64>) -> serde_json::Map<String, serde_json::Value> {
     let mut defaults = serde_json::Map::new();
-    if let Some(effort) = reasoning_effort(thinking) {
-        defaults.insert("reasoning_effort".to_owned(), effort.into());
-    }
     if let Some(temperature) = temperature {
         defaults.insert("temperature".to_owned(), temperature.into());
     }
@@ -618,8 +603,8 @@ fn proxy_observer(
 
 /// The engine proxy for `project`'s run (`ledger`): per-request usage and
 /// errors go to `feed`, whether the usage names cached tokens to
-/// `cache_report`, requests are given the `reasoning_effort` the thinking
-/// level asks for and the run's pinned temperature (see
+/// `cache_report`, requests are given the `reasoning_effort` of the
+/// session's role (`effort`) and the run's pinned temperature (see
 /// [`request_defaults`]), and with `repairToolArgs`, tool-call arguments
 /// sent as text are repaired and logged.
 async fn start_proxy(
@@ -642,8 +627,7 @@ async fn start_proxy(
         proxy_observer(feed, cache_report, repairs.clone()),
     );
     proxy.repair_tool_args = repairs.is_some();
-    proxy.effort = effort;
-    set_up_for_run(&mut proxy, ledger);
+    set_up_for_run(&mut proxy, ledger, effort);
     let handle = Arc::new(proxy)
         .start("127.0.0.1:0".parse()?)
         .await
@@ -655,9 +639,14 @@ async fn start_proxy(
 /// What the engine proxy does for the run in `ledger`: the output limit
 /// of a request that carries none (put into it when the run sets
 /// `maxOutputTokens`, ADR 0041), how much earlier reasoning it keeps, the
-/// summary request it refuses for the agent (ADRs 0022 and 0030), and the
-/// request defaults.
-fn set_up_for_run(proxy: &mut Proxy, ledger: &tenaz_core::ledger::Ledger) {
+/// summary request it refuses for the agent (ADRs 0022 and 0030), the
+/// request defaults, and the dial the orchestrator sets each session's
+/// effort on (`effort`, ADR 0042).
+fn set_up_for_run(
+    proxy: &mut Proxy,
+    ledger: &tenaz_core::ledger::Ledger,
+    effort: Option<EffortDial>,
+) {
     proxy.output_limit = Some(ledger.params.max_output_tokens.map_or(
         OutputLimit::Assumed(ledger.params.output_limit()),
         |limit| OutputLimit::Imposed(limit.get()),
@@ -665,8 +654,8 @@ fn set_up_for_run(proxy: &mut Proxy, ledger: &tenaz_core::ledger::Ledger) {
     proxy.past_reasoning_budget = ledger.params.past_reasoning_budget();
     proxy.compaction_prompt_opening =
         tenaz_acp::compaction_prompt(ledger.config.harness).map(str::to_owned);
-    proxy.request_defaults =
-        request_defaults(ledger.config.thinking.as_deref(), ledger.params.temperature);
+    proxy.request_defaults = request_defaults(ledger.params.temperature);
+    proxy.effort = effort;
 }
 
 #[cfg(test)]
@@ -680,7 +669,7 @@ mod tests {
 
     use super::{
         BTreeMap, Duration, MediaOptions, OutputLimit, harness_usage, mcp_endpoints, media_adapter,
-        mesh_adapter, reasoning_effort, request_defaults, swapping,
+        mesh_adapter, request_defaults, swapping,
     };
 
     /// Pi's agent directory lists the run's model first, then each role's
@@ -713,6 +702,7 @@ mod tests {
             input: vec!["text".into(), "image".into()],
             thinking: None,
             role_models: BTreeMap::from([(Role::Reviewer, critic.clone()), (Role::Split, critic)]),
+            role_thinking: BTreeMap::new(),
         };
         let agent = dir.path().join("pi-agent");
         let base_url = "http://127.0.0.1:4001/v1";
@@ -933,7 +923,7 @@ mod tests {
         ] {
             let mut proxy =
                 tenaz_proxy::Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
-            super::set_up_for_run(&mut proxy, &crate::testing::ledger_for(harness));
+            super::set_up_for_run(&mut proxy, &crate::testing::ledger_for(harness), None);
             assert_eq!(proxy.compaction_prompt_opening, None, "{harness}");
         }
     }
@@ -947,7 +937,7 @@ mod tests {
         let proxy_for = |ledger: &tenaz_core::ledger::Ledger| {
             let mut proxy =
                 tenaz_proxy::Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
-            super::set_up_for_run(&mut proxy, ledger);
+            super::set_up_for_run(&mut proxy, ledger, None);
             proxy.output_limit
         };
         let mut ledger = crate::testing::ledger_for(HarnessKind::Qwen);
@@ -959,22 +949,31 @@ mod tests {
         assert_eq!(proxy_for(&ledger), Some(OutputLimit::Imposed(65_536)));
     }
 
+    /// A run's proxy is given the effort dial: what is set on it is what
+    /// the proxy reads. A harness that sends no effort of its own gets its
+    /// role's only that way.
     #[test]
-    fn the_proxy_fills_in_the_effort_and_a_pinned_temperature() {
-        let defaults = request_defaults(Some("medium"), Some(0.0));
-        assert_eq!(
-            serde_json::Value::Object(defaults),
-            serde_json::json!({"reasoning_effort": "medium", "temperature": 0.0})
-        );
-        assert!(request_defaults(Some("off"), None).is_empty());
+    fn set_up_for_run_gives_the_proxy_the_effort_dial() {
+        use tenaz_core::effort::{EffortDial, SessionEffort};
+        use tenaz_core::ledger::HarnessKind;
+        let dial = EffortDial::new();
+        let mut proxy =
+            tenaz_proxy::Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
+        let ledger = crate::testing::ledger_for(HarnessKind::Fx);
+        super::set_up_for_run(&mut proxy, &ledger, Some(dial.clone()));
+        let high = SessionEffort::for_session(Some("high"), false);
+        dial.set(high.clone());
+        let read = proxy.effort.as_ref().and_then(EffortDial::current);
+        assert_eq!(read, high);
     }
 
     #[test]
-    fn thinking_level_becomes_a_reasoning_effort_unless_off() {
-        assert_eq!(reasoning_effort(Some("medium")), Some("medium"));
-        assert_eq!(reasoning_effort(Some(" high ")), Some("high"));
-        assert_eq!(reasoning_effort(Some("off")), None);
-        assert_eq!(reasoning_effort(Some("auto")), None);
-        assert_eq!(reasoning_effort(None), None);
+    fn the_proxy_fills_in_a_pinned_temperature() {
+        let defaults = request_defaults(Some(0.0));
+        assert_eq!(
+            serde_json::Value::Object(defaults),
+            serde_json::json!({"temperature": 0.0})
+        );
+        assert!(request_defaults(None).is_empty());
     }
 }

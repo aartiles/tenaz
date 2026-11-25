@@ -54,6 +54,7 @@ async fn an_agent_that_outlives_its_close_is_killed() {
             id: "m".into(),
             context_window: 65536,
             supports_images: false,
+            thinking: None,
         },
     };
     let mut session = harness.open(spec).await.expect("the handshake succeeds");

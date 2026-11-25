@@ -6,31 +6,32 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Changed
-
-- A run keeps its private folder (the run log, the sessions' prompts and
-  logs, Pi's sessions, the engine requests, the memory samples, the run
-  lock and each harness's `HOME`) in the git directory, `.git/tenaz/` or
-  the worktree's `.git/worktrees/<name>/tenaz/`, out of reach of the
-  commands that clean the project. It was `.tenaz/private/`: in a run of
-  2026-11-23 two sessions removed it, and the records of half the run were
-  lost. `.tenaz/private/` stays as the agent's scratch folder (temporary
-  files, media outputs, job logs). `tenaz status` names the folder and
-  `tenaz status --json` adds `private_dir`; read the run log from there.
-  `tenaz run` moves the folder of a run started by an earlier version out
-  of `.tenaz/private/` before it resumes it, leaving `jobs/` and `media/`
-  there; on another file system it is left where it is. `init` in a
-  checkout that held a run sets the earlier run's folder aside as
-  `tenaz-before-<seconds>-<pid>`. See ADR 0040.
-
-- A harness that exits before it sends the engine anything, in a session
-  and in its rerun, while the engine serves, now blocks the run at once
-  with `harness failed:` and the harness's stderr. Before, it was counted
-  as an engine error: the run waited through `engineRetries` (45 minutes
-  by default) and blocked with `engine unavailable`. See ADR 0037.
+## [0.9.0] - 2026-11-25
 
 ### Added
 
+- `tenaz init --thinking-for ROLE=LEVEL` (repeatable, one role each)
+  gives a role its own thinking level, for example `high` for the
+  reviewers and `low` for the builders; `--thinking` stays the level of
+  every other role. An unknown role or level is refused. The levels are
+  pinned in `run.json` as `config.roleThinking`; each session's agent
+  (Pi, fx, dsh, a generic ACP agent) is configured with its role's
+  level, and the engine proxy asks for that level's effort when the
+  agent sends none. After a reply cut at the output limit, the next
+  session of that role steps down from the role's own level (`low` and
+  below have no lower step). `tenaz status` adds a `Role thinking:`
+  line, and `status --json` adds `thinking` and `role_thinking`. See
+  ADR 0042. In a run of 2026-11-25 (Inkling 2 Mini on Splash 1.7.3,
+  Pi 1.6.0) with builders at `low` and bootstrap, reviewer, replan and
+  final reviewer at `high`, the reviewers sent tasks back five times for
+  real faults (an enemy whose position became NaN, a HUD check that
+  passed with no HUD drawn), and the run ended COMPLETE after
+  4 h 26 min, 46 sessions and 13 of 13 tasks, its final review accepted
+  at the first pass. Two runs of the same setup on an earlier build,
+  with every role at `low`, sent tasks back 0 and 2 times and ended
+  COMPLETE_WITH_GAPS after 46 and 53 minutes. The build changed too,
+  and the two runs at `low` varied widely, so one run does not show that
+  the levels made the difference.
 - `--set maxOutputTokens=N` sets the most tokens one reply may have,
   reasoning included, for every role and harness: fx, OpenCode, dsh, Pi
   (every model of the run) and the generic agent are configured with it,
@@ -56,20 +57,52 @@ uses [Semantic Versioning](https://semver.org/).
   started is kept. A daemon you start from inside the project while a
   run goes (`code .`, a new tmux server, `nohup setsid ...`) is stopped
   too: start it from elsewhere. See ADR 0039.
-- A session that removes `.tenaz/private/` is named in the journal
-  (`private-removed`, with its label) and in `orchestrator.log`, and
-  Tenaz writes its prompt file there again. A run whose lock file was
-  removed takes the lock again when the session ends, or stops when
+- A session that removes the run's private folder is named in the
+  journal (`private-removed`, with its label) and in `orchestrator.log`,
+  and Tenaz writes its prompt file there again. A run whose lock file
+  was removed takes the lock again when the session ends, or stops when
   another `tenaz run` took it before then. Before, nothing said so, and
   a second run could start at any time after. See ADR 0038.
 
+### Changed
+
+- A run keeps its private folder (the run log, the sessions' prompts and
+  logs, Pi's sessions, the engine requests, the memory samples, the run
+  lock and each harness's `HOME`) in the git directory, `.git/tenaz/` or
+  the worktree's `.git/worktrees/<name>/tenaz/`, out of reach of the
+  commands that clean the project. It was `.tenaz/private/`: in a run of
+  2026-11-23 two sessions removed it, and the records of half the run were
+  lost. `.tenaz/private/` stays as the agent's scratch folder (temporary
+  files, media outputs, job logs). `tenaz status` names the folder and
+  `tenaz status --json` adds `private_dir`; read the run log from there.
+  `tenaz run` moves the folder of a run started by an earlier version out
+  of `.tenaz/private/` before it resumes it, leaving `jobs/` and `media/`
+  there; on another file system it is left where it is. `init` in a
+  checkout that held a run sets the earlier run's folder aside as
+  `tenaz-before-<seconds>-<pid>`. See ADR 0040.
+- A harness that exits before it sends the engine anything, in a session
+  and in its rerun, while the engine serves, now blocks the run at once
+  with `harness failed:` and the harness's stderr. Before, it was counted
+  as an engine error: the run waited through `engineRetries` (45 minutes
+  by default) and blocked with `engine unavailable`. See ADR 0037.
+
 ### Fixed
 
-- Each harness's own files under `.tenaz/private/` (Pi's agent directory,
-  fx's `mcp.json`, and the links to the pinned skills of fx, OpenCode and
-  Qwen Code, besides the settings already written per session) are
-  written again before every session. A shell command that removed `.tenaz/private` left every later
-  Pi session exiting at once with `Model "<provider>/<id>" not found`.
+- Each harness's own files in the run's private folder (Pi's agent
+  directory, fx's `mcp.json`, and the links to the pinned skills of fx,
+  OpenCode and Qwen Code, besides the settings already written per
+  session) are written again before every session. A shell command that
+  removed `.tenaz/private` left every later Pi session exiting at once
+  with `Model "<provider>/<id>" not found`.
+- With dsh, the thinking level `max` asks for dsh's `xhigh`, as `high`
+  and `xhigh` do. It asked for `medium`, below `high`.
+
+### Security
+
+- url goes from 2.5.8 to 2.5.9 for RUSTSEC-2026-0592: `Url::origin()`
+  overflows the stack on nested `blob:` URLs. Tenaz, reqwest and
+  tower-http do not call it; rmcp's HTTP client does on redirects, but
+  only Tenaz's tests use that client.
 
 ## [0.8.0] - 2026-11-19
 

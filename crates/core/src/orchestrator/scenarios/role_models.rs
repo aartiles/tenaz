@@ -1,6 +1,6 @@
-//! Runs where some roles play another model than the run's: each session
-//! is opened with its role's model and budgeted by that model's window
-//! (ADR 0011).
+//! Runs where some roles play another model than the run's, or think at
+//! another level: each session is opened with its role's model and level
+//! and budgeted by that model's window (ADRs 0011, 0042).
 
 use std::sync::{Arc, Mutex};
 
@@ -9,9 +9,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::{deps, fake_project, no_session, run};
 use crate::briefing;
+use crate::effort::EffortDial;
 use crate::lease::{Gate, LeaseManager};
 use crate::ledger::{JournalRecord, SessionRecord};
-use crate::orchestrator::{RunError, RunOptions, Runner};
+use crate::orchestrator::session::lowered_effort_note;
+use crate::orchestrator::{Deps, RunError, RunOptions, Runner};
 use crate::params::RunParams;
 use crate::ports::{
     EngineAdapter, EngineError, Harness, HarnessError, HarnessInfo, ModelState, Session,
@@ -22,10 +24,13 @@ use crate::role::Role;
 use crate::role_models::RoleModel;
 use crate::testing::{ScriptedHarness, VirtualClock};
 
-/// The scripted harness, keeping the model each session was opened with.
+/// The scripted harness, keeping the model each session was opened with
+/// and the effort the engine proxy's dial asked for then.
 struct Recording {
     scripted: ScriptedHarness,
     opened: Mutex<Vec<(String, SessionModel)>>,
+    dial: EffortDial,
+    efforts: Mutex<Vec<(String, Option<String>)>>,
 }
 
 #[async_trait]
@@ -39,6 +44,10 @@ impl Harness for Recording {
             .lock()
             .unwrap()
             .push((spec.label.clone(), spec.model.clone()));
+        self.efforts
+            .lock()
+            .unwrap()
+            .push((spec.label.clone(), self.dial.current().map(|e| e.effort)));
         self.scripted.open(spec).await
     }
 }
@@ -49,34 +58,70 @@ struct Played {
     project: Project,
     records: Vec<JournalRecord>,
     opened: Vec<(String, SessionModel)>,
+    efforts: Vec<(String, Option<String>)>,
 }
 
 impl Played {
     async fn with(scripted: ScriptedHarness, roles: &[(Role, RoleModel)]) -> Self {
+        Box::pin(Self::with_levels(scripted, roles, &[])).await
+    }
+
+    /// [`Self::with`], some roles also at a thinking level of their own.
+    async fn with_levels(
+        scripted: ScriptedHarness,
+        roles: &[(Role, RoleModel)],
+        levels: &[(Role, &str)],
+    ) -> Self {
+        Box::pin(Self::at(scripted, roles, levels, None)).await
+    }
+
+    /// [`Self::with_levels`], the run itself at `run_level` when given.
+    async fn at(
+        scripted: ScriptedHarness,
+        roles: &[(Role, RoleModel)],
+        levels: &[(Role, &str)],
+        run_level: Option<&str>,
+    ) -> Self {
         let work = tempfile::tempdir().unwrap();
         // A replan every two tasks, so every role plays.
         let (project, vcs) = fake_project(work.path(), &["maxAttempts=2", "replanEvery=2"]);
         let mut ledger = project.load_ledger().unwrap();
+        if let Some(level) = run_level {
+            ledger.config.thinking = Some(level.to_owned());
+        }
         ledger.config.role_models.extend(roles.iter().cloned());
+        ledger.config.role_thinking.extend(
+            levels
+                .iter()
+                .map(|(role, level)| (*role, (*level).to_owned())),
+        );
         project.save_ledger(&ledger).unwrap();
+        let dial = EffortDial::new();
         let harness = Arc::new(Recording {
             scripted,
             opened: Mutex::default(),
+            dial: dial.clone(),
+            efforts: Mutex::default(),
         });
-        let deps = deps(
-            &project,
-            vcs,
-            harness.clone(),
-            Arc::new(VirtualClock::new()),
-        );
+        let deps = Deps {
+            effort: Some(dial),
+            ..deps(
+                &project,
+                vcs,
+                harness.clone(),
+                Arc::new(VirtualClock::new()),
+            )
+        };
         run(&project, deps, CancellationToken::new()).await;
         let records = project.journal().into_iter().map(|e| e.record).collect();
         let opened = harness.opened.lock().unwrap().clone();
+        let efforts = harness.efforts.lock().unwrap().clone();
         Self {
             _work: work,
             project,
             records,
             opened,
+            efforts,
         }
     }
 
@@ -136,7 +181,7 @@ async fn each_session_runs_its_role_s_model_within_that_model_s_budget() {
     for session in run.sessions() {
         // The default share of each window: 0.65 of 65536 and of 131072.
         let (expected, budget) = match session.role {
-            Role::Reviewer => (critic.session_model(), 42598),
+            Role::Reviewer => (critic.session_model(run_model.thinking.as_deref()), 42598),
             _ => (run_model.clone(), 85196),
         };
         let label = &session.label;
@@ -145,6 +190,118 @@ async fn each_session_runs_its_role_s_model_within_that_model_s_budget() {
         let opened = run.opened.iter().find(|(l, _)| l == label);
         assert_eq!(opened, Some(&(label.clone(), expected)));
     }
+}
+
+/// The run's level is `medium`: the preflight and most roles think at it,
+/// the reviewer at its own `high`, the builder not at all. Each session's agent
+/// is given its role's level, and the proxy's dial asks for its effort.
+#[tokio::test(start_paused = true)]
+async fn each_session_asks_for_its_role_s_effort() {
+    let levels = [(Role::Reviewer, "high"), (Role::Builder, "off")];
+    let run = Box::pin(Played::with_levels(
+        ScriptedHarness::default(),
+        &[],
+        &levels,
+    ))
+    .await;
+    assert_eq!(run.run_model().thinking.as_deref(), Some("medium"));
+    // The preflight runs the run's model at the run's level.
+    assert_eq!(run.efforts[0], ("preflight".into(), Some("medium".into())));
+    let roles: Vec<Role> = run.sessions().map(|s| s.role).collect();
+    for role in [Role::Reviewer, Role::Builder, Role::Bootstrap] {
+        assert!(roles.contains(&role), "no {role} session: {roles:?}");
+    }
+    for session in run.sessions() {
+        let (level, effort) = match session.role {
+            Role::Reviewer => ("high", Some("high")),
+            Role::Builder => ("off", None),
+            _ => ("medium", Some("medium")),
+        };
+        let label = &session.label;
+        let opened = run.opened.iter().find(|(l, _)| l == label).unwrap();
+        assert_eq!(opened.1.thinking.as_deref(), Some(level), "{label}");
+        let asked = run.efforts.iter().find(|(l, _)| l == label).unwrap();
+        assert_eq!(asked.1.as_deref(), effort, "{label}");
+    }
+}
+
+/// The preflight asks for the run's level, not a role's: a run at `off`
+/// with the reviewer and builder at `high` runs its preflight with no
+/// effort, and the reviewer still asks for its own.
+#[tokio::test(start_paused = true)]
+async fn the_preflight_asks_for_no_effort_when_the_run_is_off() {
+    let levels = [(Role::Reviewer, "high"), (Role::Builder, "high")];
+    let run = Box::pin(Played::at(
+        ScriptedHarness::default(),
+        &[],
+        &levels,
+        Some("off"),
+    ))
+    .await;
+    assert_eq!(run.efforts[0], ("preflight".into(), None));
+    let reviewer = run
+        .sessions()
+        .find(|s| s.role == Role::Reviewer)
+        .expect("a reviewer session");
+    let asked = run.efforts.iter().find(|(l, _)| *l == reviewer.label);
+    assert_eq!(asked.unwrap().1.as_deref(), Some("high"));
+}
+
+/// After a builder's reply is cut at the output limit, the next builder
+/// asks for the effort below its own level (`medium` for `xhigh`), not
+/// below the run's; the review between asks for the reviewer's own, not
+/// lowered.
+#[tokio::test(start_paused = true)]
+async fn a_lowered_builder_steps_down_from_its_own_level() {
+    let scripted = ScriptedHarness {
+        truncate_after_work_task: Some("T001".into()),
+        ..Default::default()
+    };
+    let levels = [(Role::Builder, "xhigh"), (Role::Reviewer, "high")];
+    let run = Box::pin(Played::with_levels(scripted, &[], &levels)).await;
+    let efforts: Vec<(&str, Option<&str>)> = run
+        .efforts
+        .iter()
+        .filter(|(label, _)| label.contains("-builder-") || label.contains("-reviewer-"))
+        .take(3)
+        .map(|(label, effort)| (label.split_once('-').unwrap().1, effort.as_deref()))
+        .collect();
+    assert_eq!(
+        efforts,
+        [
+            ("builder-T001", Some("xhigh")),
+            ("reviewer-T001", Some("high")),
+            ("builder-T002", Some("medium")),
+        ]
+    );
+}
+
+/// A role at `low` has no lower step: its next session is not said to
+/// reason at a lower effort.
+#[tokio::test(start_paused = true)]
+async fn a_role_with_no_lower_step_is_not_said_to_be_lowered() {
+    let scripted = ScriptedHarness {
+        truncate_after_work_task: Some("T001".into()),
+        ..Default::default()
+    };
+    let run = Box::pin(Played::with_levels(
+        scripted,
+        &[],
+        &[(Role::Builder, "low")],
+    ))
+    .await;
+    let builders: Vec<&SessionRecord> =
+        run.sessions().filter(|s| s.role == Role::Builder).collect();
+    let cut = builders[0].abort_reason.as_deref().unwrap_or_default();
+    assert!(
+        cut.contains("output limit"),
+        "the first builder was cut: {cut}"
+    );
+    let next = &builders[1].label;
+    let log = run.project.read_private("orchestrator.log").unwrap();
+    assert!(!log.contains(&lowered_effort_note(next)), "{log}");
+    let asked = run.efforts.iter().find(|(l, _)| l == next).unwrap();
+    assert_eq!(asked.1.as_deref(), Some("low"));
 }
 
 /// Cards are sized to the builder's budget, from the builder's model.

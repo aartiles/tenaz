@@ -18,11 +18,10 @@ pub fn check(params: &RunParams, config: &ModelConfig) -> Result<Vec<String>, St
     };
     let mut refusals = Vec::new();
     let mut warnings = Vec::new();
-    for (model, roles) in models_and_roles(config) {
-        let window = model.context_window;
+    for (name, window, roles) in models_and_roles(config) {
         let reserve = params.harness_reserve_tokens;
         let budget = params.budget_tokens(window);
-        let of = format!("{}'s window of {window} tokens ({roles})", model.name);
+        let of = format!("{name}'s window of {window} tokens ({roles})");
         if limit.saturating_add(reserve) >= window {
             refusals.push(format!(
                 "params.maxOutputTokens {limit} leaves no room in {of} for a prompt and the \
@@ -55,20 +54,29 @@ pub fn check(params: &RunParams, config: &ModelConfig) -> Result<Vec<String>, St
     }
 }
 
-/// Each model the run's sessions play, once, with the roles that play it
-/// (`builder, reviewer`), the run's own model first.
-fn models_and_roles(config: &ModelConfig) -> Vec<(SessionModel, String)> {
-    let mut models: Vec<(SessionModel, Vec<&str>)> = Vec::new();
+/// Each model the run's sessions play, once, as its name and window, with
+/// the roles that play it (`builder, reviewer`), the run's own model
+/// first. Only the name and window matter here, so roles that differ in
+/// anything else (their thinking level, ADR 0042) share an entry.
+fn models_and_roles(config: &ModelConfig) -> Vec<(String, u64, String)> {
+    let mut models: Vec<(String, u64, Vec<&str>)> = Vec::new();
     for role in Role::ALL {
-        let model = config.model_for(role);
-        match models.iter_mut().find(|(m, _)| *m == model) {
-            Some((_, roles)) => roles.push(role.as_str()),
-            None => models.push((model, vec![role.as_str()])),
+        let SessionModel {
+            name,
+            context_window,
+            ..
+        } = config.model_for(role);
+        match models
+            .iter_mut()
+            .find(|(n, w, _)| *n == name && *w == context_window)
+        {
+            Some((_, _, roles)) => roles.push(role.as_str()),
+            None => models.push((name, context_window, vec![role.as_str()])),
         }
     }
     models
         .into_iter()
-        .map(|(model, roles)| (model, roles.join(", ")))
+        .map(|(name, window, roles)| (name, window, roles.join(", ")))
         .collect()
 }
 
@@ -106,6 +114,7 @@ mod tests {
             input: vec!["text".into()],
             thinking: None,
             role_models: BTreeMap::from([(Role::Reviewer, reviewer)]),
+            role_thinking: BTreeMap::new(),
         }
     }
 
@@ -159,6 +168,20 @@ mod tests {
         );
         assert!(
             refused.contains("; params.maxOutputTokens 125000 leaves no room in engine/small's"),
+            "{refused}"
+        );
+    }
+
+    /// A role at its own thinking level plays the same model: the model
+    /// is named once, with every role that plays it.
+    #[test]
+    fn a_role_at_its_own_level_shares_its_model_s_refusal() {
+        let mut config = config();
+        config.role_thinking.insert(Role::Builder, "low".into());
+        let refused = check(&params(&["maxOutputTokens=125000"]), &config).unwrap_err();
+        assert_eq!(refused.matches("engine/m's window").count(), 1, "{refused}");
+        assert!(
+            refused.contains("(bootstrap, builder, split, replan, final-reviewer)"),
             "{refused}"
         );
     }

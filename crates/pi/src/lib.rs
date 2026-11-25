@@ -12,7 +12,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionSpec};
+use tenaz_core::ports::{Harness, HarnessError, HarnessInfo, Session, SessionModel, SessionSpec};
 
 pub use translate::Translator;
 
@@ -127,6 +127,16 @@ impl PiLaunch {
         Some(Self {
             model: name,
             ..self.clone()
+        })
+    }
+
+    /// This launch for a session of `model`: [`Self::for_model`], at the
+    /// model's thinking level when it names one.
+    pub fn for_session(&self, model: &SessionModel) -> Option<Self> {
+        let launch = self.for_model(&model.id)?;
+        Some(match &model.thinking {
+            Some(level) => launch.thinking(level.clone()),
+            None => launch,
         })
     }
 
@@ -263,9 +273,10 @@ impl Harness for PiHarness {
 
     async fn open(&self, spec: SessionSpec) -> Result<Box<dyn Session>, HarnessError> {
         // Pi takes its model at launch, one process per session: each is
-        // launched with its role's model (ADR 0011). One the run's
-        // `models.json` does not list is refused rather than run on another.
-        let Some(launch) = self.launch.for_model(&spec.model.id) else {
+        // launched with its role's model (ADR 0011) at its role's thinking
+        // level (ADR 0042). One the run's `models.json` does not list is
+        // refused rather than run on another.
+        let Some(launch) = self.launch.for_session(&spec.model) else {
             return Err(HarnessError::Spawn(format!(
                 "the run's models.json for Pi does not list {}; it lists {}",
                 spec.model.name,
@@ -360,6 +371,32 @@ mod tests {
         assert_eq!(as_run, launch);
     }
 
+    /// A session is launched at its model's thinking level, else at the
+    /// run's (ADR 0042).
+    #[test]
+    fn a_session_runs_at_its_role_s_thinking_level() {
+        let launch = PiLaunch::new("pi", "sushi/Qwen")
+            .other_models(vec!["sushi/Critic".into()])
+            .thinking("medium");
+        let thinking_of = |id: &str, thinking: Option<&str>| {
+            let model = SessionModel {
+                name: format!("sushi/{id}"),
+                id: id.into(),
+                context_window: 65_536,
+                supports_images: false,
+                thinking: thinking.map(str::to_owned),
+            };
+            let args = launch.for_session(&model)?.args(None);
+            let at = args.iter().position(|a| a == "--thinking")?;
+            Some(args[at + 1].clone())
+        };
+        assert_eq!(thinking_of("Critic", Some("high")).as_deref(), Some("high"));
+        assert_eq!(thinking_of("Qwen", Some("low")).as_deref(), Some("low"));
+        assert_eq!(thinking_of("Qwen", Some("off")).as_deref(), Some("off"));
+        assert_eq!(thinking_of("Qwen", None).as_deref(), Some("medium"));
+        assert_eq!(thinking_of("Other", Some("high")), None);
+    }
+
     /// Pi runs in the project directory; a relative `--project` must not
     /// make it write its sessions under `<project>/<project>/`.
     #[test]
@@ -418,6 +455,7 @@ mod tests {
                 id: "m".into(),
                 context_window: 32768,
                 supports_images: false,
+                thinking: None,
             },
         };
         (harness, spec)

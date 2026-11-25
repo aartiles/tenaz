@@ -118,6 +118,7 @@ fn fake_model(harness: &ScriptedHarness) -> ModelConfig {
         input: vec!["text".into()],
         thinking: None,
         role_models: BTreeMap::new(),
+        role_thinking: BTreeMap::new(),
     }
 }
 

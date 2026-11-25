@@ -51,6 +51,7 @@ async fn qwen_starts_each_session_on_its_model() {
                     id: id.into(),
                     context_window: 65536,
                     supports_images: false,
+                    thinking: None,
                 },
             };
             let agent: Arc<dyn AgentProfile> = Arc::new(QwenAgent {
