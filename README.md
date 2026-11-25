@@ -529,7 +529,7 @@ dsh still sends is refused and ends the session (ADR 0030).
 dsh does not ask before its tool calls, and the media tools and pinned
 skills are not offered to it yet.
 The thinking level (each role's, with `--thinking-for`) maps to its
-reasoning effort (`high` is its `xhigh`).
+reasoning effort (`high` and above are its `xhigh`).
 It has finished two runs with Qwen3.8-Flash-Next on Sushi, the longer
 one a 19-hour game brief; pass `--vision` for it to read images. See
 [Compatibility](docs/COMPATIBILITY.md).
