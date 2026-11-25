@@ -72,10 +72,23 @@ impl Played {
         roles: &[(Role, RoleModel)],
         levels: &[(Role, &str)],
     ) -> Self {
+        Box::pin(Self::at(scripted, roles, levels, None)).await
+    }
+
+    /// [`Self::with_levels`], the run itself at `run_level` when given.
+    async fn at(
+        scripted: ScriptedHarness,
+        roles: &[(Role, RoleModel)],
+        levels: &[(Role, &str)],
+        run_level: Option<&str>,
+    ) -> Self {
         let work = tempfile::tempdir().unwrap();
         // A replan every two tasks, so every role plays.
         let (project, vcs) = fake_project(work.path(), &["maxAttempts=2", "replanEvery=2"]);
         let mut ledger = project.load_ledger().unwrap();
+        if let Some(level) = run_level {
+            ledger.config.thinking = Some(level.to_owned());
+        }
         ledger.config.role_models.extend(roles.iter().cloned());
         ledger.config.role_thinking.extend(
             levels
@@ -212,9 +225,32 @@ async fn each_session_asks_for_its_role_s_effort() {
     }
 }
 
+/// The preflight asks for the run's level, not a role's: a run at `off`
+/// with the reviewer and builder at `high` runs its preflight with no
+/// effort, and the reviewer still asks for its own.
+#[tokio::test(start_paused = true)]
+async fn the_preflight_asks_for_no_effort_when_the_run_is_off() {
+    let levels = [(Role::Reviewer, "high"), (Role::Builder, "high")];
+    let run = Box::pin(Played::at(
+        ScriptedHarness::default(),
+        &[],
+        &levels,
+        Some("off"),
+    ))
+    .await;
+    assert_eq!(run.efforts[0], ("preflight".into(), None));
+    let reviewer = run
+        .sessions()
+        .find(|s| s.role == Role::Reviewer)
+        .expect("a reviewer session");
+    let asked = run.efforts.iter().find(|(l, _)| *l == reviewer.label);
+    assert_eq!(asked.unwrap().1.as_deref(), Some("high"));
+}
+
 /// After a builder's reply is cut at the output limit, the next builder
-/// asks for one step below its own level, not the run's; the review
-/// between asks for the reviewer's own, not lowered.
+/// asks for the effort below its own level (`medium` for `xhigh`), not
+/// below the run's; the review between asks for the reviewer's own, not
+/// lowered.
 #[tokio::test(start_paused = true)]
 async fn a_lowered_builder_steps_down_from_its_own_level() {
     let scripted = ScriptedHarness {

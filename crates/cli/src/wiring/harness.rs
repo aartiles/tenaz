@@ -15,6 +15,7 @@ use tenaz_acp::generic::{GenericAgent, SessionFacts};
 use tenaz_acp::opencode::{OpenCodeAgent, OpenCodeConfig, OpenCodeLaunch};
 use tenaz_acp::qwen::{QwenAgent, QwenLaunch, QwenSettings};
 use tenaz_acp::{AcpHarness, EngineObservation, McpEndpoint, ProfileMcpServer};
+use tenaz_core::effort::reasoning_effort;
 use tenaz_core::ledger::{HarnessKind, ModelConfig, SkillPin};
 use tenaz_core::params::RunParams;
 use tenaz_core::ports::Harness;
@@ -23,7 +24,7 @@ use tenaz_core::role::Role;
 use tenaz_core::testing::ScriptedHarness;
 use tenaz_pi::PiLaunch;
 
-use super::{HarnessOptions, reasoning_effort};
+use super::HarnessOptions;
 
 /// What the harnesses are built from; each takes the part it needs.
 pub(super) struct HarnessInputs<'a> {
@@ -481,37 +482,52 @@ mod tests {
     /// or that of a role that plays it asks for an effort (ADR 0042).
     #[test]
     fn pi_s_models_reason_when_a_role_that_plays_them_thinks() {
+        // (the run's level, the roles' levels, what is expected)
+        type Case<'a> = (&'a str, &'a [(Role, &'a str)], (bool, bool));
         let critic = tenaz_core::role_models::RoleModel {
             model: "engine/critic".into(),
             id: "critic".into(),
             context_window: 32_768,
             input: vec!["text".into()],
         };
-        let mut config = ModelConfig {
-            harness: HarnessKind::Pi,
-            harness_version: "1".into(),
-            model: "engine/m".into(),
-            provider: Some("engine".into()),
-            id: "m".into(),
-            base_url: None,
-            context_window: 65_536,
-            input: vec!["text".into()],
-            thinking: Some("off".into()),
-            role_models: std::collections::BTreeMap::from([(Role::Reviewer, critic)]),
-            role_thinking: std::collections::BTreeMap::from([(Role::Reviewer, "high".into())]),
-        };
-        let reasoning = |config: &ModelConfig| {
-            let models = pi_models(config, "http://127.0.0.1:4001/v1", None);
+        let reasoning = |run: &str, roles: &[(Role, &str)]| {
+            let config = ModelConfig {
+                harness: HarnessKind::Pi,
+                harness_version: "1".into(),
+                model: "engine/m".into(),
+                provider: Some("engine".into()),
+                id: "m".into(),
+                base_url: None,
+                context_window: 65_536,
+                input: vec!["text".into()],
+                thinking: Some(run.into()),
+                role_models: std::collections::BTreeMap::from([(Role::Reviewer, critic.clone())]),
+                role_thinking: roles
+                    .iter()
+                    .map(|(role, level)| (*role, (*level).to_owned()))
+                    .collect(),
+            };
+            let models = pi_models(&config, "http://127.0.0.1:4001/v1", None);
             (models.run.reasoning, models.others[0].reasoning)
         };
-        assert_eq!(reasoning(&config), (false, true));
-        config.role_thinking.insert(Role::Builder, "low".into());
-        assert_eq!(reasoning(&config), (true, true));
-        // A run that thinks leaves a model whose only role is at off
-        // without reasoning.
-        config.thinking = Some("high".into());
-        config.role_thinking = std::collections::BTreeMap::from([(Role::Reviewer, "off".into())]);
-        assert_eq!(reasoning(&config), (true, false));
+        // (the run's level, the roles' levels) -> (the run's model reasons,
+        // the critic, which only the reviewer plays, reasons)
+        let cases: [Case; 3] = [
+            ("off", &[(Role::Reviewer, "high")], (false, true)),
+            (
+                "off",
+                &[(Role::Reviewer, "high"), (Role::Builder, "low")],
+                (true, true),
+            ),
+            ("high", &[(Role::Reviewer, "off")], (true, false)),
+        ];
+        for (run, roles, expected) in cases {
+            assert_eq!(
+                reasoning(run, roles),
+                expected,
+                "run {run}, roles {roles:?}"
+            );
+        }
     }
 
     /// A builder session's spec for a project in `dir`.

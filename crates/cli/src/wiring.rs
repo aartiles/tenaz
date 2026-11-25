@@ -24,7 +24,7 @@ use tenaz_adapters::sandbox::{Guard, GuardedHarness, GuardedJobs, GuardedVerify,
 use tenaz_adapters::swept::SweptHarness;
 use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::cache_report::CacheReport;
-use tenaz_core::effort::{EffortDial, reasoning_effort};
+use tenaz_core::effort::EffortDial;
 use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
 use tenaz_core::ledger::{HarnessKind, JournalRecord, ModelConfig};
 use tenaz_core::mcp_servers::MEDIA_SERVER;
@@ -627,8 +627,7 @@ async fn start_proxy(
         proxy_observer(feed, cache_report, repairs.clone()),
     );
     proxy.repair_tool_args = repairs.is_some();
-    proxy.effort = effort;
-    set_up_for_run(&mut proxy, ledger);
+    set_up_for_run(&mut proxy, ledger, effort);
     let handle = Arc::new(proxy)
         .start("127.0.0.1:0".parse()?)
         .await
@@ -640,9 +639,14 @@ async fn start_proxy(
 /// What the engine proxy does for the run in `ledger`: the output limit
 /// of a request that carries none (put into it when the run sets
 /// `maxOutputTokens`, ADR 0041), how much earlier reasoning it keeps, the
-/// summary request it refuses for the agent (ADRs 0022 and 0030), and the
-/// request defaults.
-fn set_up_for_run(proxy: &mut Proxy, ledger: &tenaz_core::ledger::Ledger) {
+/// summary request it refuses for the agent (ADRs 0022 and 0030), the
+/// request defaults, and the dial the orchestrator sets each session's
+/// effort on (`effort`, ADR 0042).
+fn set_up_for_run(
+    proxy: &mut Proxy,
+    ledger: &tenaz_core::ledger::Ledger,
+    effort: Option<EffortDial>,
+) {
     proxy.output_limit = Some(ledger.params.max_output_tokens.map_or(
         OutputLimit::Assumed(ledger.params.output_limit()),
         |limit| OutputLimit::Imposed(limit.get()),
@@ -651,6 +655,7 @@ fn set_up_for_run(proxy: &mut Proxy, ledger: &tenaz_core::ledger::Ledger) {
     proxy.compaction_prompt_opening =
         tenaz_acp::compaction_prompt(ledger.config.harness).map(str::to_owned);
     proxy.request_defaults = request_defaults(ledger.params.temperature);
+    proxy.effort = effort;
 }
 
 #[cfg(test)]
@@ -918,7 +923,7 @@ mod tests {
         ] {
             let mut proxy =
                 tenaz_proxy::Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
-            super::set_up_for_run(&mut proxy, &crate::testing::ledger_for(harness));
+            super::set_up_for_run(&mut proxy, &crate::testing::ledger_for(harness), None);
             assert_eq!(proxy.compaction_prompt_opening, None, "{harness}");
         }
     }
@@ -932,7 +937,7 @@ mod tests {
         let proxy_for = |ledger: &tenaz_core::ledger::Ledger| {
             let mut proxy =
                 tenaz_proxy::Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
-            super::set_up_for_run(&mut proxy, ledger);
+            super::set_up_for_run(&mut proxy, ledger, None);
             proxy.output_limit
         };
         let mut ledger = crate::testing::ledger_for(HarnessKind::Qwen);
@@ -942,6 +947,24 @@ mod tests {
             .apply_override("maxOutputTokens=65536")
             .unwrap();
         assert_eq!(proxy_for(&ledger), Some(OutputLimit::Imposed(65_536)));
+    }
+
+    /// A run's proxy is given the effort dial: what is set on it is what
+    /// the proxy reads. A harness that sends no effort of its own gets its
+    /// role's only that way.
+    #[test]
+    fn set_up_for_run_gives_the_proxy_the_effort_dial() {
+        use tenaz_core::effort::{EffortDial, SessionEffort};
+        use tenaz_core::ledger::HarnessKind;
+        let dial = EffortDial::new();
+        let mut proxy =
+            tenaz_proxy::Proxy::new("http://127.0.0.1:1", Gate::new(), Arc::new(|_| {}));
+        let ledger = crate::testing::ledger_for(HarnessKind::Fx);
+        super::set_up_for_run(&mut proxy, &ledger, Some(dial.clone()));
+        let high = SessionEffort::for_session(Some("high"), false);
+        dial.set(high.clone());
+        let read = proxy.effort.as_ref().and_then(EffortDial::current);
+        assert_eq!(read, high);
     }
 
     #[test]

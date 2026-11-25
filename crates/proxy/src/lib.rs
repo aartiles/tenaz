@@ -799,6 +799,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_request_already_at_the_lowered_effort_is_left_alone() {
+        let mut proxy = proxy();
+        let dial = EffortDial::new();
+        proxy.effort = Some(dial.clone());
+        dial.set(SessionEffort::for_session(Some("high"), true));
+        let lowered = br#"{"model":"m","reasoning_effort":"medium","stream":false}"#;
+        assert!(proxy.rewrite_request(Api::Completions, lowered).is_none());
+    }
+
     /// A proxy whose dial is at a session of `thinking`, not lowered.
     fn proxy_at(thinking: Option<&str>) -> Proxy {
         let mut proxy = proxy();

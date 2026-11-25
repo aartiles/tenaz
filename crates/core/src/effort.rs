@@ -29,12 +29,9 @@ impl SessionEffort {
     /// the level asks for no effort.
     pub fn for_session(thinking: Option<&str>, step_down: bool) -> Option<Self> {
         let configured = reasoning_effort(thinking)?;
-        let lowered = step_down && lower(configured) != configured;
-        let effort = if lowered {
-            lower(configured)
-        } else {
-            configured
-        };
+        let below = lower(configured);
+        let lowered = step_down && below != configured;
+        let effort = if lowered { below } else { configured };
         Some(Self {
             effort: effort.to_owned(),
             lowered,
@@ -83,8 +80,10 @@ mod tests {
         SessionEffort::for_session(Some(thinking), step_down).map(|e| (e.effort, e.lowered))
     }
 
+    /// `xhigh` and `max` step down to `medium`, as `high` does (see
+    /// [`lower`]).
     #[test]
-    fn a_stepped_down_session_asks_for_one_step_less() {
+    fn a_stepped_down_session_asks_for_the_effort_below_its_own() {
         for (level, expected) in [
             ("medium", "low"),
             ("high", "medium"),
