@@ -34,19 +34,22 @@ pub struct DshPatch {
     pub context_window: u64,
     pub max_output_tokens: u64,
     pub supports_images: bool,
-    /// The reasoning effort dsh asks for (`low`, `medium` or `xhigh`);
-    /// `None` sends none, and the engine's own default applies.
+    /// The reasoning effort dsh asks for (`low`, `medium` or `xhigh`), from
+    /// the session's thinking level (see [`Self::for_model`]); `None` sends
+    /// none, and the engine's own default applies.
     pub effort: Option<String>,
 }
 
 impl DshPatch {
-    /// This patch with `model` in place of the model it names.
+    /// This patch with `model` in place of the model it names, at the
+    /// effort of its thinking level.
     #[must_use]
     pub fn for_model(&self, model: &SessionModel) -> Self {
         Self {
             model: model.id.clone(),
             context_window: model.context_window,
             supports_images: model.supports_images,
+            effort: effort(model.thinking.as_deref()).map(str::to_owned),
             ..self.clone()
         }
     }
@@ -111,14 +114,15 @@ impl DshPatch {
     }
 }
 
-/// dsh's reasoning effort for the run's thinking level: none when the
+/// dsh's reasoning effort for a thinking level: none when the
 /// level is unset, `off`, `none` or `auto` (as for the other agents),
-/// `low`, `xhigh` for `high`, and `medium` otherwise.
+/// `low` for `low` and `minimal`, `xhigh` for `high` and above, and
+/// `medium` otherwise.
 pub fn effort(thinking: Option<&str>) -> Option<&'static str> {
     match thinking.map(str::trim) {
         None | Some("" | "off" | "none" | "auto") => None,
         Some("low" | "minimal") => Some("low"),
-        Some("high" | "xhigh") => Some("xhigh"),
+        Some("high" | "xhigh" | "max") => Some("xhigh"),
         Some(_) => Some("medium"),
     }
 }
@@ -242,6 +246,7 @@ mod tests {
             id: "critic".into(),
             context_window: 32_768,
             supports_images,
+            thinking: None,
         }
     }
 
@@ -321,6 +326,22 @@ mod tests {
         assert_eq!(model["input"], serde_json::json!(["text", "image"]));
     }
 
+    /// Each session asks dsh for its model's thinking level's effort, and
+    /// for none at `off` or no level.
+    #[test]
+    fn a_session_s_thinking_level_sets_dsh_s_effort() {
+        let at = |thinking: Option<&str>| {
+            let model = SessionModel {
+                thinking: thinking.map(str::to_owned),
+                ..critic(false)
+            };
+            patch().for_model(&model).effort
+        };
+        assert_eq!(at(Some("high")).as_deref(), Some("xhigh"));
+        assert_eq!(at(Some("off")), None);
+        assert_eq!(at(None), None);
+    }
+
     #[test]
     fn the_thinking_level_maps_to_an_effort_dsh_knows() {
         for (thinking, expected) in [
@@ -333,6 +354,7 @@ mod tests {
             (Some("medium"), Some("medium")),
             (Some("high"), Some("xhigh")),
             (Some("xhigh"), Some("xhigh")),
+            (Some("max"), Some("xhigh")),
             (Some(" high "), Some("xhigh")),
         ] {
             assert_eq!(effort(thinking), expected, "{thinking:?}");
@@ -375,7 +397,10 @@ mod tests {
             launch: DshLaunch::new("/opt/dsh", home.path()),
             patch: patch(),
         };
-        let critic = critic(false);
+        let critic = SessionModel {
+            thinking: Some("high".into()),
+            ..critic(false)
+        };
         agent.write_config(&critic).unwrap();
         let spec = SessionSpec {
             label: "001-builder-T001".into(),
@@ -395,5 +420,7 @@ mod tests {
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(named).unwrap()).unwrap();
         assert_eq!(written, patch().for_model(&critic).to_json());
+        let tenaz = &entry(&written, "llm-pi-ai")["config"]["providers"]["tenaz"];
+        assert_eq!(tenaz["reasoning"], "xhigh", "the session's level: {tenaz}");
     }
 }

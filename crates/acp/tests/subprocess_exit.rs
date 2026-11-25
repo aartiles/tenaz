@@ -57,6 +57,7 @@ async fn an_agent_that_exits_mid_turn_leaves_its_stderr_and_exit_code() {
             id: "m".into(),
             context_window: 65536,
             supports_images: false,
+            thinking: None,
         },
     };
     let mut session = harness.open(spec).await.expect("the handshake succeeds");

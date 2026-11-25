@@ -70,6 +70,7 @@ fn try_fake_project(
         input: vec!["text".into()],
         thinking: Some("medium".into()),
         role_models: BTreeMap::new(),
+        role_thinking: BTreeMap::new(),
     };
     let templates =
         Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();

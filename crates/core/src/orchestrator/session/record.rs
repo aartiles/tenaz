@@ -1,6 +1,7 @@
 //! One session, start to journal record: bookkeeping, the harness run,
 //! the reverts of out-of-role changes, and the record.
 
+use crate::effort::SessionEffort;
 use crate::ledger::{Inflight, JournalRecord, SessionRecord};
 use crate::memory::MemoryWindow;
 use crate::metrics::{RequestRecord, engine_summary};
@@ -101,12 +102,8 @@ impl Runner {
             idle: role.edits_code(),
             wrap_up: role.wrap_up(),
         };
-        if let Some(dial) = &self.deps.effort {
-            let lowered = self.ledger.lowers_effort_for(role);
-            dial.set_lowered(lowered);
-            if lowered {
-                self.log(&format!("  {}", lowered_effort_note(&label)));
-            }
+        if self.set_effort(&model, self.ledger.lowers_effort_for(role)) {
+            self.log(&format!("  {}", lowered_effort_note(&label)));
         }
         if let Some(sampler) = &self.sampler {
             sampler.begin(&label).await;
@@ -119,6 +116,19 @@ impl Runner {
             model,
             watch,
         })
+    }
+
+    /// Sets the engine proxy's effort for a session of `model`, one step
+    /// lower when `step_down` asks for it; true when it is lowered (`off`,
+    /// `minimal` and `low` have no lower step).
+    pub(crate) fn set_effort(&self, model: &SessionModel, step_down: bool) -> bool {
+        let Some(dial) = &self.deps.effort else {
+            return false;
+        };
+        let effort = SessionEffort::for_session(model.thinking.as_deref(), step_down);
+        let lowered = effort.as_ref().is_some_and(|e| e.lowered);
+        dial.set(effort);
+        lowered
     }
 
     /// What the session left once its harness ended: the memory window,
@@ -413,6 +423,7 @@ mod tests {
                 id: "m".to_owned(),
                 context_window: 65536,
                 supports_images: false,
+                thinking: None,
             },
             watch: WatchConfig {
                 turns: 40,

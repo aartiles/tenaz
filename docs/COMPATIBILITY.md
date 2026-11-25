@@ -144,6 +144,18 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **A thinking level per role.** `--thinking-for` (ADR 0042) is tested
+  with the scripted harness, the fake agents and the proxy's unit tests,
+  not yet in a run against a real model or a real harness. With
+  `--no-proxy`, fx, OpenCode and Qwen Code ask for no effort at all, so
+  neither the run's level nor a role's reaches the engine; Pi, dsh and a
+  generic agent still get each role's level. `minimal`, `xhigh` and
+  `max` reach fx and the engine unmapped (only dsh maps them), as with
+  `--thinking`; fx documents `low`, `medium` and `high`. With fx, OpenCode
+  and Qwen Code, `off` asks for no effort, so an engine that thinks by
+  default still thinks. The preflight runs at `--thinking` only, so
+  `--thinking off` with thinking roles fails its reasoning check unless
+  the engine reasons by default.
 - **The private folder removed by the agent.** It was `.tenaz/private/`
   until ADR 0040, and agents removed it in runs of 2026-11-19 and
   2026-11-23 (Pi 1.6.0: Pi's sessions, the request records and memory

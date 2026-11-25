@@ -236,6 +236,7 @@ mod tests {
             id: "critic".into(),
             context_window: 32_768,
             supports_images: false,
+            thinking: None,
         };
         let json = settings().for_model(&model).to_json();
         assert_eq!(
@@ -284,6 +285,7 @@ mod tests {
             id: "critic".into(),
             context_window: 32_768,
             supports_images: false,
+            thinking: None,
         };
         assert_eq!(launch.command_args(&critic.id), args);
     }

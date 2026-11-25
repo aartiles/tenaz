@@ -31,6 +31,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `tenaz init --thinking-for ROLE=LEVEL` (repeatable, one role each)
+  gives a role its own thinking level, for example `high` for the
+  reviewers and `low` for the builders; `--thinking` stays the level of
+  every other role. An unknown role or level is refused. The levels are
+  pinned in `run.json` as `config.roleThinking`; each session's agent (Pi,
+  fx, dsh, a generic ACP agent) is configured with its role's level, and
+  the engine proxy asks for that level's effort when the agent sends
+  none. `tenaz status` adds a `Role thinking:` line, and `status --json`
+  adds `thinking` and `role_thinking`. See ADR 0042.
+
 - `--set maxOutputTokens=N` sets the most tokens one reply may have,
   reasoning included, for every role and harness: fx, OpenCode, dsh, Pi
   (every model of the run) and the generic agent are configured with it,

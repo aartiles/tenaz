@@ -5,6 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use tenaz_core::effort::reasoning_effort;
 use tenaz_core::ledger::HarnessKind;
 use tenaz_core::ports::{SessionModel, SessionSpec};
 
@@ -25,7 +26,8 @@ pub struct FxSettings {
     pub supports_vision: bool,
     /// `ask`: fx asks the client before every tool call.
     pub permission_mode: String,
-    /// fx's reasoning effort (`low`, `medium`, `high`). fx 0.0.14 records it
+    /// fx's reasoning effort (`low`, `medium`, `high`), from the session's
+    /// thinking level (see [`Self::for_model`]). fx 0.0.14 records it
     /// but does not forward it to a custom OpenAI-compatible provider; the
     /// engine proxy fills `reasoning_effort` into the requests instead.
     pub effort: Option<String>,
@@ -39,13 +41,15 @@ pub struct FxSettings {
 }
 
 impl FxSettings {
-    /// These settings with `model` in place of the model they name.
+    /// These settings with `model` in place of the model they name, at
+    /// the effort of its thinking level.
     #[must_use]
     pub fn for_model(&self, model: &SessionModel) -> Self {
         Self {
             model: model.id.clone(),
             context_window: model.context_window,
             supports_vision: model.supports_images,
+            effort: reasoning_effort(model.thinking.as_deref()).map(str::to_owned),
             ..self.clone()
         }
     }
@@ -308,6 +312,34 @@ mod tests {
         assert_eq!(servers["mcp"]["lease"]["type"], "http");
     }
 
+    /// Each session writes its model's thinking level as fx's effort, and
+    /// none for `off` or no level.
+    #[test]
+    fn a_session_s_thinking_level_sets_fx_s_effort() {
+        let settings = FxSettings {
+            provider: "sushi".into(),
+            base_url: "http://127.0.0.1:4001/v1".into(),
+            model: "Qwen3.8".into(),
+            context_window: 131072,
+            max_output_tokens: 16384,
+            supports_vision: false,
+            permission_mode: "ask".into(),
+            effort: Some("medium".into()),
+            skill_catalog: false,
+        };
+        let model = |thinking: Option<&str>| SessionModel {
+            name: "sushi/Qwen3.8".into(),
+            id: "Qwen3.8".into(),
+            context_window: 131072,
+            supports_images: false,
+            thinking: thinking.map(str::to_owned),
+        };
+        let effort = |thinking| settings.for_model(&model(thinking)).effort;
+        assert_eq!(effort(Some("high")).as_deref(), Some("high"));
+        assert_eq!(effort(Some("off")), None);
+        assert_eq!(effort(None), None);
+    }
+
     #[test]
     fn a_refused_turn_becomes_a_refusal_and_nothing_else_changes() {
         let refused = r#"{"jsonrpc":"2.0","id":7,"result":{"stopReason":"refused","usage":{"inputTokens":1}}}"#;
@@ -369,6 +401,7 @@ mod tests {
                 id: "m".into(),
                 context_window: 65536,
                 supports_images: false,
+                thinking: None,
             },
         }
     }

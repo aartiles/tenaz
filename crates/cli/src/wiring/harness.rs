@@ -19,6 +19,7 @@ use tenaz_core::ledger::{HarnessKind, ModelConfig, SkillPin};
 use tenaz_core::params::RunParams;
 use tenaz_core::ports::Harness;
 use tenaz_core::project::Project;
+use tenaz_core::role::Role;
 use tenaz_core::testing::ScriptedHarness;
 use tenaz_pi::PiLaunch;
 
@@ -169,7 +170,8 @@ fn fx_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         max_output_tokens: params.output_limit(),
         supports_vision: config.supports_images(),
         permission_mode: "ask".to_owned(),
-        effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
+        // Each session's, from its model's thinking level.
+        effort: None,
         skill_catalog: params.agent_skills || !skills.is_empty(),
     };
     if !skills.is_empty() && !params.agent_skills {
@@ -268,7 +270,8 @@ fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
         context_window: config.context_window,
         max_output_tokens: inputs.params.output_limit(),
         supports_images: config.supports_images(),
-        effort: tenaz_acp::dsh::effort(config.thinking.as_deref()).map(str::to_owned),
+        // Each session's, from its model's thinking level.
+        effort: None,
     };
     // The user's own servers never get here: init and run refuse them for
     // dsh (tenaz_core::mcp_servers::check_servers).
@@ -285,7 +288,6 @@ fn dsh_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
 /// The user's ACP command, told about each session in
 /// `acp-session.json` in the private folder; it keeps the user's `HOME`.
 fn generic_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness>> {
-    let config = inputs.config;
     let agent = GenericAgent {
         binary: inputs.options.bin.clone(),
         args: inputs.options.acp_args.clone(),
@@ -293,7 +295,6 @@ fn generic_harness(inputs: &HarnessInputs<'_>) -> anyhow::Result<Arc<dyn Harness
         facts: SessionFacts {
             base_url: inputs.base_url.clone(),
             max_output_tokens: inputs.params.output_limit(),
-            reasoning_effort: reasoning_effort(config.thinking.as_deref()).map(str::to_owned),
             mcp_servers: inputs.mcp_endpoints.to_vec(),
         },
         wrapper: inputs.wrapper.to_vec(),
@@ -350,12 +351,11 @@ pub(super) fn pi_models(
     base_url: &str,
     max_output_tokens: Option<NonZeroU64>,
 ) -> tenaz_pi::models::AgentModels {
-    let reasoning = reasoning_effort(config.thinking.as_deref()).is_some();
     let model = |id: &str, context_window, input: &[String]| tenaz_pi::models::AgentModel {
         id: id.to_owned(),
         context_window,
         input: input.to_vec(),
-        reasoning,
+        reasoning: reasons(config, id),
     };
     let mut others: Vec<tenaz_pi::models::AgentModel> = Vec::new();
     for role in config.role_models.values() {
@@ -374,6 +374,15 @@ pub(super) fn pi_models(
         others,
         max_output_tokens,
     }
+}
+
+/// Whether the model `id` is asked to reason: when a session on it asks
+/// for an effort, the preflight (on the run's model, at the run's level)
+/// or a role's.
+fn reasons(config: &ModelConfig, id: &str) -> bool {
+    std::iter::once(config.run_model())
+        .chain(Role::ALL.map(|role| config.model_for(role)))
+        .any(|model| model.id == id && reasoning_effort(model.thinking.as_deref()).is_some())
 }
 
 /// The user's own settings for `models`, when their Pi `models` file at
@@ -439,6 +448,7 @@ mod tests {
             input: vec!["text".into()],
             thinking: None,
             role_models: std::collections::BTreeMap::new(),
+            role_thinking: std::collections::BTreeMap::new(),
         };
         let options = HarnessOptions {
             // A path that cannot exist, so no test starts a real program.
@@ -467,6 +477,43 @@ mod tests {
         })
     }
 
+    /// Pi's `models.json` marks a model as reasoning when the run's level
+    /// or that of a role that plays it asks for an effort (ADR 0042).
+    #[test]
+    fn pi_s_models_reason_when_a_role_that_plays_them_thinks() {
+        let critic = tenaz_core::role_models::RoleModel {
+            model: "engine/critic".into(),
+            id: "critic".into(),
+            context_window: 32_768,
+            input: vec!["text".into()],
+        };
+        let mut config = ModelConfig {
+            harness: HarnessKind::Pi,
+            harness_version: "1".into(),
+            model: "engine/m".into(),
+            provider: Some("engine".into()),
+            id: "m".into(),
+            base_url: None,
+            context_window: 65_536,
+            input: vec!["text".into()],
+            thinking: Some("off".into()),
+            role_models: std::collections::BTreeMap::from([(Role::Reviewer, critic)]),
+            role_thinking: std::collections::BTreeMap::from([(Role::Reviewer, "high".into())]),
+        };
+        let reasoning = |config: &ModelConfig| {
+            let models = pi_models(config, "http://127.0.0.1:4001/v1", None);
+            (models.run.reasoning, models.others[0].reasoning)
+        };
+        assert_eq!(reasoning(&config), (false, true));
+        config.role_thinking.insert(Role::Builder, "low".into());
+        assert_eq!(reasoning(&config), (true, true));
+        // A run that thinks leaves a model whose only role is at off
+        // without reasoning.
+        config.thinking = Some("high".into());
+        config.role_thinking = std::collections::BTreeMap::from([(Role::Reviewer, "off".into())]);
+        assert_eq!(reasoning(&config), (true, false));
+    }
+
     /// A builder session's spec for a project in `dir`.
     fn session_spec(dir: &Path) -> tenaz_core::ports::SessionSpec {
         tenaz_core::ports::SessionSpec {
@@ -481,6 +528,7 @@ mod tests {
                 id: "m".into(),
                 context_window: 65_536,
                 supports_images: false,
+                thinking: None,
             },
         }
     }

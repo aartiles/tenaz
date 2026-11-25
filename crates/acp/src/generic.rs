@@ -20,8 +20,6 @@ pub struct SessionFacts {
     /// The proxy's base URL (`http://127.0.0.1:<port>/v1`).
     pub base_url: String,
     pub max_output_tokens: u64,
-    /// The reasoning effort of the run's thinking level, when it has one.
-    pub reasoning_effort: Option<String>,
     /// The run's MCP servers (the media tools).
     pub mcp_servers: Vec<McpEndpoint>,
 }
@@ -40,7 +38,7 @@ impl SessionFacts {
             "contextWindow": model.context_window,
             "maxOutputTokens": self.max_output_tokens,
             "supportsImages": model.supports_images,
-            "reasoningEffort": self.reasoning_effort,
+            "reasoningEffort": tenaz_core::effort::reasoning_effort(model.thinking.as_deref()),
             "mcpServers": mcp
         })
     }
@@ -104,7 +102,6 @@ mod tests {
             facts: SessionFacts {
                 base_url: "http://127.0.0.1:4001/v1".into(),
                 max_output_tokens: 16_384,
-                reasoning_effort: Some("medium".into()),
                 mcp_servers: vec![McpEndpoint {
                     name: "media".into(),
                     url: "http://127.0.0.1:4002/mcp".into(),
@@ -123,6 +120,7 @@ mod tests {
             id: "critic".into(),
             context_window: 32_768,
             supports_images: true,
+            thinking: Some("medium".into()),
         };
         agent.write_config(&critic).unwrap();
         let written: serde_json::Value =
@@ -141,6 +139,32 @@ mod tests {
         );
     }
 
+    /// A session whose model names a thinking level is told that level's
+    /// effort, and none for `off` or no level.
+    #[test]
+    fn each_session_s_file_names_its_role_s_effort() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = agent(dir.path());
+        let model = |thinking: &str| SessionModel {
+            name: "engine/critic".into(),
+            id: "critic".into(),
+            context_window: 32_768,
+            supports_images: false,
+            thinking: Some(thinking.to_owned()),
+        };
+        let effort = |thinking| agent.facts.to_json(&model(thinking))["reasoningEffort"].clone();
+        assert_eq!(effort("high"), "high");
+        assert_eq!(effort("off"), serde_json::Value::Null);
+        let no_level = SessionModel {
+            thinking: None,
+            ..model("high")
+        };
+        assert_eq!(
+            agent.facts.to_json(&no_level)["reasoningEffort"],
+            serde_json::Value::Null
+        );
+    }
+
     #[test]
     fn the_command_starts_with_its_arguments_told_only_where_the_session_file_is() {
         let agent = agent(Path::new("/run/private/acp"));
@@ -156,6 +180,7 @@ mod tests {
                 id: "m".into(),
                 context_window: 65536,
                 supports_images: false,
+                thinking: None,
             },
         };
         assert_eq!(agent.args(&spec), ["--acp"]);

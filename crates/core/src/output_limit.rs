@@ -106,6 +106,7 @@ mod tests {
             input: vec!["text".into()],
             thinking: None,
             role_models: BTreeMap::from([(Role::Reviewer, reviewer)]),
+            role_thinking: BTreeMap::new(),
         }
     }
 

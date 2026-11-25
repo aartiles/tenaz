@@ -26,6 +26,7 @@ const ENGINE_ERROR_CHARS: usize = 500;
 impl Runner {
     pub(crate) async fn preflight(&mut self) -> Result<Preflight, RunError> {
         let model = self.ledger.config.run_model();
+        self.set_effort(&model, false);
         let vision = model.supports_images;
         let dir = tempfile::Builder::new()
             .prefix("tenaz-preflight-")

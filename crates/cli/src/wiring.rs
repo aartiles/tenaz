@@ -24,7 +24,7 @@ use tenaz_adapters::sandbox::{Guard, GuardedHarness, GuardedJobs, GuardedVerify,
 use tenaz_adapters::swept::SweptHarness;
 use tenaz_adapters::verify::VerifyProcess;
 use tenaz_core::cache_report::CacheReport;
-use tenaz_core::effort::EffortDial;
+use tenaz_core::effort::{EffortDial, reasoning_effort};
 use tenaz_core::lease::{Gate, LeaseManager, LeaseTransition};
 use tenaz_core::ledger::{HarnessKind, JournalRecord, ModelConfig};
 use tenaz_core::mcp_servers::MEDIA_SERVER;
@@ -203,26 +203,11 @@ fn mesh_adapter(
     )))
 }
 
-/// The `reasoning_effort` the engine is asked for, from the ledger's
-/// thinking level; `None` leaves the engine's default (`off`, `none`, unset).
-fn reasoning_effort(thinking: Option<&str>) -> Option<&str> {
-    match thinking.map(str::trim) {
-        None | Some("" | "off" | "none" | "auto") => None,
-        Some(level) => Some(level),
-    }
-}
-
 /// The fields the proxy adds to completion requests that lack them: the
-/// `reasoning_effort` of the thinking level (fx does not forward its effort
-/// to a custom provider) and the run's pinned `temperature`.
-fn request_defaults(
-    thinking: Option<&str>,
-    temperature: Option<f64>,
-) -> serde_json::Map<String, serde_json::Value> {
+/// run's pinned `temperature`. The effort comes from the dial, which the
+/// orchestrator sets before each session.
+fn request_defaults(temperature: Option<f64>) -> serde_json::Map<String, serde_json::Value> {
     let mut defaults = serde_json::Map::new();
-    if let Some(effort) = reasoning_effort(thinking) {
-        defaults.insert("reasoning_effort".to_owned(), effort.into());
-    }
     if let Some(temperature) = temperature {
         defaults.insert("temperature".to_owned(), temperature.into());
     }
@@ -618,8 +603,8 @@ fn proxy_observer(
 
 /// The engine proxy for `project`'s run (`ledger`): per-request usage and
 /// errors go to `feed`, whether the usage names cached tokens to
-/// `cache_report`, requests are given the `reasoning_effort` the thinking
-/// level asks for and the run's pinned temperature (see
+/// `cache_report`, requests are given the `reasoning_effort` of the
+/// session's role (`effort`) and the run's pinned temperature (see
 /// [`request_defaults`]), and with `repairToolArgs`, tool-call arguments
 /// sent as text are repaired and logged.
 async fn start_proxy(
@@ -665,8 +650,7 @@ fn set_up_for_run(proxy: &mut Proxy, ledger: &tenaz_core::ledger::Ledger) {
     proxy.past_reasoning_budget = ledger.params.past_reasoning_budget();
     proxy.compaction_prompt_opening =
         tenaz_acp::compaction_prompt(ledger.config.harness).map(str::to_owned);
-    proxy.request_defaults =
-        request_defaults(ledger.config.thinking.as_deref(), ledger.params.temperature);
+    proxy.request_defaults = request_defaults(ledger.params.temperature);
 }
 
 #[cfg(test)]
@@ -680,7 +664,7 @@ mod tests {
 
     use super::{
         BTreeMap, Duration, MediaOptions, OutputLimit, harness_usage, mcp_endpoints, media_adapter,
-        mesh_adapter, reasoning_effort, request_defaults, swapping,
+        mesh_adapter, request_defaults, swapping,
     };
 
     /// Pi's agent directory lists the run's model first, then each role's
@@ -713,6 +697,7 @@ mod tests {
             input: vec!["text".into(), "image".into()],
             thinking: None,
             role_models: BTreeMap::from([(Role::Reviewer, critic.clone()), (Role::Split, critic)]),
+            role_thinking: BTreeMap::new(),
         };
         let agent = dir.path().join("pi-agent");
         let base_url = "http://127.0.0.1:4001/v1";
@@ -960,21 +945,12 @@ mod tests {
     }
 
     #[test]
-    fn the_proxy_fills_in_the_effort_and_a_pinned_temperature() {
-        let defaults = request_defaults(Some("medium"), Some(0.0));
+    fn the_proxy_fills_in_a_pinned_temperature() {
+        let defaults = request_defaults(Some(0.0));
         assert_eq!(
             serde_json::Value::Object(defaults),
-            serde_json::json!({"reasoning_effort": "medium", "temperature": 0.0})
+            serde_json::json!({"temperature": 0.0})
         );
-        assert!(request_defaults(Some("off"), None).is_empty());
-    }
-
-    #[test]
-    fn thinking_level_becomes_a_reasoning_effort_unless_off() {
-        assert_eq!(reasoning_effort(Some("medium")), Some("medium"));
-        assert_eq!(reasoning_effort(Some(" high ")), Some("high"));
-        assert_eq!(reasoning_effort(Some("off")), None);
-        assert_eq!(reasoning_effort(Some("auto")), None);
-        assert_eq!(reasoning_effort(None), None);
+        assert!(request_defaults(None).is_empty());
     }
 }
