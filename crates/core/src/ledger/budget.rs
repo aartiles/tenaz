@@ -38,8 +38,9 @@ impl Ledger {
         self.context_cap.unwrap_or(cap)
     }
 
-    /// A session the engine held well past the cap, with no engine error
-    /// and no critical memory pressure, shows it holds `peak` tokens now.
+    /// A session the engine held well past the cap, with no engine error,
+    /// no critical memory pressure and no output limit the proxy lowered
+    /// (ADR 0047), shows it holds `peak` tokens now.
     /// When the headroom share of that peak is over the cap, the cap rises
     /// at once to the peak itself: the headroom is for what the engine
     /// says, and this is what it did (ADR 0043). Waiting for a raise would
@@ -78,8 +79,9 @@ impl Ledger {
         self.context_cap
     }
 
-    /// A session ran under critical memory pressure: no time to raise the
-    /// cap, so the count of sessions held starts again.
+    /// A session ran under critical memory pressure, or the engine had no
+    /// room for its output limit: no time to raise the cap, so the count of
+    /// sessions held starts again.
     pub fn note_cap_pressed(&mut self) {
         self.cap_clean_sessions = 0;
     }
@@ -447,6 +449,18 @@ mod tests {
         ledger.note_cap_pressed();
         assert!(hold(&mut ledger, 3).is_empty());
         assert_eq!(hold(&mut ledger, 1).len(), 1);
+    }
+
+    #[test]
+    fn a_session_short_of_room_leaves_a_pending_raise_and_the_cap_alone() {
+        let mut ledger = pressed();
+        ledger.cap_raised = true;
+        ledger.cap_failed_raises = 2;
+        let before = (ledger.context_cap, ledger.cap_ceiling);
+        ledger.note_cap_pressed();
+        let after = (ledger.context_cap, ledger.cap_ceiling);
+        assert_eq!(after, before);
+        assert_eq!((ledger.cap_raised, ledger.cap_failed_raises), (true, 2));
     }
 
     #[test]

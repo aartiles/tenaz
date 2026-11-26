@@ -1,6 +1,7 @@
 # ADR 0046: Send a request again with the output limit the engine has room for
 
-Status: accepted, 2026-11-26.
+Status: accepted, 2026-11-26. Amended by ADR 0047: a session with a
+resent request does not lift the context cap nor count toward a raise.
 
 ## Context
 

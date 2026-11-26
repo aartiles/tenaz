@@ -1,6 +1,7 @@
 # ADR 0043: A peak the engine held is the cap, not 0.8 of it
 
-Status: accepted, 2026-11-26. Amends ADR 0026.
+Status: accepted, 2026-11-26. Amends ADR 0026. Amended by ADR 0047: a
+session kept going at a lowered output limit does not lift the cap.
 
 ## Context
 

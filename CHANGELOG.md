@@ -19,7 +19,10 @@ uses [Semantic Versioning](https://semver.org/).
   the 7 such refusals named a limit this large, and replies there are
   seldom long (p99 5,678 tokens, p99.9 9,378). A reply longer than the
   lowered limit is cut there, as at any output limit, and the request's
-  journaled `max_tokens` is the lowered one. See ADR 0046.
+  journaled `max_tokens` is the lowered one. Such a session, with fx or
+  another ACP agent, does not raise the context budget to its peak nor
+  count toward a raise, and starts that count again: the engine said the
+  full limit did not fit there. See ADRs 0046 and 0047.
 - A task accepted on `verify` alone because neither review gave a
   verdict says so: its `task` record in `journal.jsonl` gets an
   `unreviewed` field with how each review ended, `run.json` keeps it
