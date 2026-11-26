@@ -46,6 +46,8 @@ and you do not commit, push, open pull requests or switch branches.
 - Keep tool output small: use `head`, `tail`, `grep`, and read file ranges.
   Context is limited by the engine's memory, so never read a large file (over
   about 300 lines) whole: grep for the section you need, then read that range.
+- To see tabs, line ends or odd characters, use `od -c` or `grep -n`, not
+  `cat -v`, `-e` or `-t`: their output can end the session.
 - Commands must finish on their own. Start no server or watcher that
   outlives the command that started it.
 - Write only inside the project. Put temporary files in `.tenaz/private/`.
@@ -74,8 +76,8 @@ file; the code of its checks goes in `checks/`, never in a folder named
   pages, reports), list their paths in an optional `"artifacts"` array in that
   JSON. Reviewers open them.
 - Checks are deterministic, need no network, clean up after themselves, and
-  finish within 120 seconds in total, unless `.tenaz/brief.md` sets another
-  limit.
+  finish within {{verifyTimeoutSec}} seconds in total (Tenaz stops a `verify`
+  run after that), or within a shorter limit `.tenaz/brief.md` sets.
 - `verify` leaves the working tree as it found it: what checks produce goes
   under a folder `.gitignore` lists (for example `artifacts/`), never into
   files git tracks or does not ignore; untrack such files already

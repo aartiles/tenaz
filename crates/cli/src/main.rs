@@ -237,7 +237,9 @@ async fn dispatch(command: Command) -> anyhow::Result<ExitCode> {
     let done = |()| ExitCode::SUCCESS;
     match command {
         Command::Init(args) => commands::init::execute(args).await.map(done),
-        Command::Run(args) => commands::run::execute(*args).await,
+        // Boxed: the run future is larger than `clippy::large_futures` allows
+        // on the stack, as in `demo`.
+        Command::Run(args) => Box::pin(commands::run::execute(*args)).await,
         Command::Status { project, json } => commands::status::execute(project, json).map(done),
         Command::Finish(args) => commands::finish::execute(args).map(done),
         Command::Watch {

@@ -2,10 +2,11 @@
 
 use crate::briefing;
 use crate::ledger::{JournalRecord, SessionRecord, Verdict};
-use crate::orchestrator::session::SessionCtx;
+use crate::orchestrator::session::{OUTPUT_LIMIT, SessionCtx};
 use crate::orchestrator::{RunError, Runner};
 use crate::project::{conflict_path, only_minor_findings, verdict_in};
 use crate::role::Role;
+use crate::session::SessionMetrics;
 use crate::task::{TaskCard, TaskId};
 use crate::util::CODE_BYTES_PER_TOKEN;
 use crate::verify::VerifyOutcome;
@@ -28,7 +29,8 @@ pub(super) struct ReviewInput<'a> {
 pub(super) enum Review {
     Accept,
     Changes(String),
-    NoVerdict,
+    /// No review gave a verdict: why each ended.
+    NoVerdict(String),
 }
 
 /// The task's diff for the reviewer, and the images it adds or replaces.
@@ -46,6 +48,61 @@ struct ReviewFile {
 
 /// Review sessions for one attempt: one retry after a review with no verdict.
 const REVIEWS: u32 = 2;
+
+/// What one review session left, and why it did not settle cleanly
+/// (`SessionMetrics::stopped`) or its last reply was cut at the output
+/// limit.
+struct ReviewSession {
+    file: ReviewFile,
+    stopped: Option<String>,
+}
+
+/// Which review of an attempt a session is, and the note about the review
+/// before it that its briefing starts with.
+struct ReviewTry<'a> {
+    number: u32,
+    earlier: Option<&'a str>,
+}
+
+/// Why a review session ended short: `SessionMetrics::stopped`, or the
+/// output limit when its harness settled after a reply cut there (fx exits
+/// instead, and says so in `stopped`). `None` for a clean session.
+fn review_stop(metrics: &SessionMetrics) -> Option<String> {
+    metrics
+        .stopped()
+        .or_else(|| metrics.output_truncated().then(|| OUTPUT_LIMIT.to_owned()))
+}
+
+/// How a review that left no verdict ended, `stopped` as in [`retry_note`].
+fn review_end(stopped: Option<&str>) -> &str {
+    match stopped {
+        None => "it stopped without writing one",
+        Some("") => "it ended without saying why",
+        Some(why) => why,
+    }
+}
+
+/// Why a task is accepted unreviewed after reviews that ended as each of
+/// `ended` says (`stopped` as in [`retry_note`]), in order.
+fn unreviewed_reason(ended: &[Option<String>]) -> String {
+    let each: Vec<String> = ended
+        .iter()
+        .zip(1..)
+        .map(|(stopped, n)| format!("review {n}: {}", review_end(stopped.as_deref())))
+        .collect();
+    format!("no reviewer gave a verdict ({})", each.join("; "))
+}
+
+/// What a retried reviewer is told about the review before it, which left
+/// no verdict and was `stopped` (`None` when it settled cleanly, empty when
+/// it ended without saying why).
+fn retry_note(stopped: Option<&str>) -> String {
+    match stopped {
+        None => "The review before this one stopped without writing its verdict. Write it to the review file before you stop.".to_owned(),
+        Some("") => "The review before this one ended, without saying why, before it wrote its verdict. Write your verdict to the review file before anything else could end this session.".to_owned(),
+        Some(why) => format!("The review before this one was stopped: {why}. Write your verdict to the review file before anything else could end this session."),
+    }
+}
 
 /// Where the reviewer of `task` writes its review.
 fn review_path(task: &TaskId) -> String {
@@ -89,18 +146,27 @@ impl Runner {
         let diff = self.review_diff(input.base)?;
         self.project.remove(&review_path(task))?;
         let mut reviewed = ReviewFile::default();
+        // How each review that left no verdict ended (`SessionMetrics::stopped`).
+        let mut ended: Vec<Option<String>> = Vec::new();
         for review in 1..=REVIEWS {
             if review > 1 {
                 self.log(&format!(
                     "  reviewer left no verdict for {task}; retrying the review"
                 ));
             }
-            reviewed = self.review_session(input, &diff, review).await?;
+            let earlier = ended.last().map(|stopped| retry_note(stopped.as_deref()));
+            let this_try = ReviewTry {
+                number: review,
+                earlier: earlier.as_deref(),
+            };
+            let session = self.review_session(input, &diff, &this_try).await?;
+            reviewed = session.file;
             if reviewed.verdict.is_some() {
                 break;
             }
+            ended.push(session.stopped);
         }
-        Ok(self.review_outcome(task, reviewed))
+        Ok(self.review_outcome(task, reviewed, &ended))
     }
 
     /// The diff since `base`, clipped to `diffShare` of the reviewer's
@@ -121,15 +187,16 @@ impl Runner {
         Ok(ReviewDiff { text: diff, images })
     }
 
-    /// One review session, number `review`: its verdict, journaled.
+    /// One review session, told what the review before it left: its
+    /// verdict, journaled, and why it did not settle cleanly.
     async fn review_session(
         &mut self,
         input: &ReviewInput<'_>,
         diff: &ReviewDiff,
-        review: u32,
-    ) -> Result<ReviewFile, RunError> {
+        this_try: &ReviewTry<'_>,
+    ) -> Result<ReviewSession, RunError> {
         let task = &input.card.id;
-        let prompt = self.reviewer_prompt(input, diff)?;
+        let prompt = self.reviewer_prompt(input, diff, this_try.earlier)?;
         let s = self
             .session(
                 Role::Reviewer,
@@ -148,10 +215,13 @@ impl Runner {
         self.journal(JournalRecord::Review {
             task: task.clone(),
             attempt: input.attempt,
-            review,
+            review: this_try.number,
             verdict: reviewed.verdict,
         });
-        Ok(reviewed)
+        Ok(ReviewSession {
+            file: reviewed,
+            stopped: review_stop(&s.metrics),
+        })
     }
 
     /// Says that a reviewer the orchestrator stopped had already given its
@@ -166,15 +236,20 @@ impl Runner {
         }
     }
 
-    /// The reviewer's briefing: why the builder was stopped, its notes, the
-    /// images to look at, the diff and the `verify` results.
+    /// The reviewer's briefing: what the earlier review left, if any,
+    /// why the builder was stopped, its notes, the images to look at, the
+    /// diff and the `verify` results.
     fn reviewer_prompt(
         &self,
         input: &ReviewInput<'_>,
         diff: &ReviewDiff,
+        earlier: Option<&str>,
     ) -> Result<String, RunError> {
         let task = &input.card.id;
         let mut extra = Vec::new();
+        if let Some(note) = earlier {
+            extra.push(("Earlier review".to_owned(), note.to_owned()));
+        }
         if let Some(stopped) = input.stopped {
             let note = format!(
                 "The orchestrator stopped the builder session ({stopped}). The checks pass, but look for unfinished work."
@@ -260,9 +335,14 @@ impl Runner {
         })
     }
 
-    /// The review's outcome. Changes asked for with MINOR findings only are
-    /// accepted.
-    fn review_outcome(&self, task: &TaskId, ReviewFile { verdict, text }: ReviewFile) -> Review {
+    /// The review's outcome, after reviews that `ended` without a verdict.
+    /// Changes asked for with MINOR findings only are accepted.
+    fn review_outcome(
+        &self,
+        task: &TaskId,
+        ReviewFile { verdict, text }: ReviewFile,
+        ended: &[Option<String>],
+    ) -> Review {
         match verdict {
             Some(Verdict::Accept) => Review::Accept,
             Some(Verdict::Changes) if text.as_deref().is_some_and(only_minor_findings) => {
@@ -272,7 +352,7 @@ impl Runner {
                 Review::Accept
             }
             Some(Verdict::Changes) => Review::Changes(text.unwrap_or_default()),
-            None => Review::NoVerdict,
+            None => Review::NoVerdict(unreviewed_reason(ended)),
         }
     }
 }
@@ -280,6 +360,59 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_review_cut_at_the_output_limit_ended_short_though_it_settled() {
+        let clean = SessionMetrics {
+            settled: true,
+            exit_code: Some(0),
+            ..SessionMetrics::default()
+        };
+        assert_eq!(review_stop(&clean), None);
+        let cut = SessionMetrics {
+            last_stop_reason: Some(crate::session::StopReason::MaxTokens),
+            ..clean
+        };
+        assert_eq!(review_stop(&cut).as_deref(), Some(OUTPUT_LIMIT));
+    }
+
+    #[test]
+    fn a_task_accepted_unreviewed_says_how_each_review_ended() {
+        let ended = [
+            Some("turn budget exceeded (25/25)".to_owned()),
+            None,
+            Some(String::new()),
+        ];
+        assert_eq!(
+            unreviewed_reason(&ended),
+            "no reviewer gave a verdict (review 1: turn budget exceeded (25/25); review 2: it stopped without writing one; review 3: it ended without saying why)"
+        );
+    }
+
+    #[test]
+    fn a_retry_after_a_stopped_review_is_told_why() {
+        let note = retry_note(Some("turn budget exceeded (25/25)"));
+        assert_eq!(
+            note,
+            "The review before this one was stopped: turn budget exceeded (25/25). Write your verdict to the review file before anything else could end this session."
+        );
+    }
+
+    #[test]
+    fn a_retry_after_a_review_that_ended_without_a_cause_says_so() {
+        let note = retry_note(Some(""));
+        assert!(note.contains("without saying why"), "{note}");
+    }
+
+    #[test]
+    fn a_retry_after_a_review_that_settled_is_told_to_write_its_verdict() {
+        let note = retry_note(None);
+        assert!(
+            note.contains("stopped without writing its verdict"),
+            "{note}"
+        );
+        assert!(!note.contains("was stopped"), "{note}");
+    }
 
     /// The Digger 3D run's budgets at `contextBudget` 0.65: Qwen3.8 on a
     /// 65536 window, and Bonsai on 131072.

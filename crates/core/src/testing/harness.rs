@@ -38,6 +38,10 @@ pub struct ScriptedHarness {
     pub rejected_review: Option<String>,
     /// The first review of this task ends without a verdict.
     pub no_verdict_review: Option<String>,
+    /// The first reviews of this task, this many, crash during a shell call
+    /// (`crash_in_tool_command`), as fx does on output that is not UTF-8:
+    /// 1 for a crash the retry recovers from, 2 for both reviews.
+    pub crashed_reviews: Option<(String, u32)>,
     /// The first attempt of this task repeats one tool call until it is
     /// aborted.
     pub looping_task: Option<String>,
@@ -70,6 +74,9 @@ pub struct ScriptedHarness {
     /// The first builder session for this task dies while a shell call runs,
     /// as fx does on output that is not UTF-8.
     pub crash_in_tool_task: Option<String>,
+    /// The shell command that crash runs; `None` is
+    /// `head -c 400 checks/result.json`.
+    pub crash_in_tool_command: Option<String>,
     /// Where bootstrap writes `verify`; `None` is `verify` at the root.
     pub verify_path: Option<String>,
     /// Every builder session for this task grows its context past the stop
@@ -125,6 +132,10 @@ pub struct ScriptedHarness {
     /// Every builder session of this task fails in the engine: its prompt
     /// is over the most context the engine can hold now.
     pub over_capacity_task: Option<String>,
+    /// The first builder session of this task does its work, after the
+    /// engine refused its first request for the output limit and the
+    /// engine proxy sent it again with the limit the engine had room for.
+    pub lowered_limit_task: Option<String>,
     /// The first review of this task reads until its context is stopped.
     pub outgrow_review: Option<String>,
     /// The first review of this task asks for changes with a MINOR finding.

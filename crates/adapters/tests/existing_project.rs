@@ -14,7 +14,7 @@ use tenaz_core::ledger::{HarnessKind, JournalRecord, Launch, ModelConfig, Phase,
 use tenaz_core::orchestrator::{Deps, InitOptions, RunOptions, Runner, Templates, init};
 use tenaz_core::params::RunParams;
 use tenaz_core::project::Project;
-use tenaz_core::testing::{ScriptedHarness, SilentNotifier};
+use tenaz_core::testing::{ScriptedHarness, SilentNotifier, shipped_templates};
 use tokio_util::sync::CancellationToken;
 
 const OWN: [(&str, &str); 5] = [
@@ -45,6 +45,11 @@ fn assert_own_files_untouched(project: &Project) {
     for (path, text) in OWN {
         assert_eq!(project.read(path).unwrap(), text, "{path} changed");
     }
+}
+
+/// The protocol in the project is the shipped one, filled in for the run.
+fn assert_protocol_written(project: &Project, templates: &Templates, params: &RunParams) {
+    assert_eq!(project.protocol().unwrap(), templates.protocol_for(params));
 }
 
 /// After the run: `verify` stayed under `.tenaz/`, the project's own files
@@ -140,8 +145,7 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
     // As the CLI sets it: the private folder in the git directory (ADR 0040).
     let git_dir = GitRepo::new(&root).git_dir().unwrap();
     let project = Project::new(&root).with_private_dir(tenaz_core::project::private_in(&git_dir));
-    let templates =
-        Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();
+    let templates = shipped_templates();
     let params = params();
     let harness = ScriptedHarness {
         verify_path: Some(".tenaz/verify".into()),
@@ -168,7 +172,7 @@ async fn a_run_in_an_existing_project_stays_under_tenaz() {
     assert_eq!(ledger.params.verify_path(), ".tenaz/verify");
     assert_own_files_untouched(&project);
     assert_eq!(project.brief().unwrap(), "# Goal\n\nAdd a flag.\n");
-    assert_eq!(project.protocol().unwrap(), templates.protocol);
+    assert_protocol_written(&project, &templates, &ledger.params);
     let added = git(&root, &["show", "--name-only", "--format=", "HEAD"]);
     assert!(
         added.lines().all(|p| p.starts_with(".tenaz/")),

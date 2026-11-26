@@ -194,6 +194,33 @@ async fn a_harness_exit_during_a_tool_call_charges_the_attempt_and_names_the_cal
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_crash_on_cat_e_tells_the_next_attempt_to_use_od_or_grep() {
+    let (_work, project, _log) = run(
+        ScriptedHarness {
+            crash_in_tool_task: Some("T001".into()),
+            crash_in_tool_command: Some("sed -n '1,3p' checks/T001.check | cat -et".into()),
+            ..Default::default()
+        },
+        3,
+    )
+    .await;
+    let next = project
+        .journal()
+        .iter()
+        .filter_map(|e| match &e.record {
+            JournalRecord::Session(s) if s.label.ends_with("-builder-T001") => {
+                Some(s.label.clone())
+            }
+            _ => None,
+        })
+        .nth(1)
+        .expect("T001 runs again");
+    let prompt = project.read_private(&format!("{next}.prompt.md")).unwrap();
+    assert!(prompt.contains("cat -et"), "{prompt}");
+    assert!(prompt.contains("`od -c` or `grep -n`"), "{prompt}");
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_reply_cut_at_the_output_limit_charges_the_attempt_and_lowers_the_effort() {
     let (_work, project, log) = run(
         ScriptedHarness {

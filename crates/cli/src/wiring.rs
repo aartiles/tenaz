@@ -548,10 +548,10 @@ fn harness_usage(u: &tenaz_proxy::ProxyUsage) -> Usage {
     }
 }
 
-/// What the runner does with each proxy event: usage, engine errors and
-/// refused compactions go to the sessions' `feed`, whether the usage names
-/// cached tokens to `cache_report`, and repaired tool arguments to
-/// `repair_log`.
+/// What the runner does with each proxy event: usage, engine errors,
+/// refused compactions and lowered output limits go to the sessions'
+/// `feed`, whether the usage names cached tokens to `cache_report`, and
+/// repaired tool arguments to `repair_log`.
 fn proxy_observer(
     feed: tokio::sync::broadcast::Sender<EngineObservation>,
     cache_report: CacheReport,
@@ -580,6 +580,13 @@ fn proxy_observer(
         ProxyEvent::CompactionRefused { .. } => {
             tracing::info!("the proxy refused the agent's request to compact its context");
             let _ = feed.send(EngineObservation::CompactionRefused);
+        }
+        ProxyEvent::OutputLimitLowered { asked, fits, .. } => {
+            tracing::info!(
+                "the engine had room for {fits} of the {asked} output tokens a request asked; \
+                 the proxy sent it again with {fits}"
+            );
+            let _ = feed.send(EngineObservation::OutputLimitLowered { asked, fits });
         }
         ProxyEvent::ToolArgsRepaired {
             request,

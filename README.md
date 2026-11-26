@@ -55,7 +55,9 @@ bootstrap files (see [Delegate from another agent](#delegate-from-another-agent)
 Each task then gets its own session: the agent builds it, Tenaz runs `verify`,
 and a fresh session of the same model, or of the one `--model-for` gives
 the reviewer, reviews the diff. A review asks for changes only for a
-problem that matters for the requirements. A task that
+problem that matters for the requirements; when neither it nor its one
+retry gives a verdict, `verify` alone decides, and the final reviewer is
+told. A task that
 passes is committed; one that fails is undone and retried, split into
 smaller tasks or marked blocked. Its notes are kept, so a split knows what
 the failed attempts tried. A builder that finds its task cannot pass
@@ -100,7 +102,10 @@ project's own tests.
   in between does not take it). A request the engine refuses for what is
   in it (a 400 for a file it cannot decode) is not retried as it was: a
   fresh session goes on, told what was refused, up to the session's
-  continuations. A harness that exits before it sends the engine anything
+  continuations. A request Sushi refuses because its output limit does
+  not fit is sent again once with the limit that fits
+  ([ADR 0046](docs/adr/0046-resend-a-request-with-the-output-limit-that-fits.md)).
+  A harness that exits before it sends the engine anything
   (a broken harness installation, say) is rerun once; if the
   rerun does the same while the engine serves, the run blocks at once
   with `harness failed:` and the harness's stderr
@@ -477,7 +482,17 @@ read it as frames, since the local engines do not decode video files
 
 A session's turns are watched as well as its context. A builder,
 bootstrap, replan or split session is told to wrap up at `turnBudget`
-turns (40) and stopped at `turnAbort` times that (1.5, so 60). A card can
+turns (40) and stopped at `turnAbort` times that (1.5, so 60). A builder
+or bootstrap session that wrote a project file in its last
+`turnWriteWindow` turns (5) at that stop runs on, told so once, until 5
+turns pass without such a write, and is stopped at `turnCeiling` times
+its budget (2.0, so 80) whatever it does. Only write tool calls that
+succeed count: not the handoff notes under `.tenaz/`, not files a shell
+command changed, and in a sandboxed run not a file named by its
+absolute path
+([ADR 0044](docs/adr/0044-let-a-writing-session-run-past-the-turn-stop.md)).
+`--set turnWriteWindow=0` stops every session at `turnAbort` again. The
+planners are told both budgets and size cards to fit them. A card can
 give its builder another budget with `budget: {turns: 30}`. A reviewer
 gets 25 turns and the final review 60; those do not change with
 `turnBudget`, but `turnAbort` sets their stop too. A builder or
@@ -488,6 +503,13 @@ stops a session first; the turn budget bounds the sessions that reach
 their context budget slowly, such as one that adds little context each
 turn or one with a large window. See
 [ADR 0036](docs/adr/0036-keep-the-turn-budget-and-make-its-stop-a-parameter.md).
+
+Every session that continues stopped work (after a context or turn stop,
+or a refused request or image) is told what the sessions before it on the same
+work did, from their tool calls and replies: the files their write tools
+wrote, the last `verify` or test command with the end of its result, and
+the last words, in at most 2 KB
+([ADR 0045](docs/adr/0045-tell-a-continued-session-what-the-stopped-one-did.md)).
 
 ### Pi instead of fx
 
@@ -642,6 +664,10 @@ the code is written; where they disagree with the protocol about how the
 work is done (commits, branches, scope), the protocol wins. Sessions may not
 edit either file. `bootstrap.md` has a `## Step N` section for each
 bootstrap step; a session gets the common part and its own step.
+
+The protocol names the run's `verify` time limit, `verifyTimeoutSec`
+(`tenaz params` shows the default; `init --set` changes it), so the
+checks a session writes fit the limit the run enforces.
 
 A run keeps the protocol and prompts it was started with. After updating
 Tenaz, `tenaz run --resume --refresh-templates` gives a started run the new

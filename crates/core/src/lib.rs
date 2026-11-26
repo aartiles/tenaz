@@ -30,6 +30,7 @@ pub mod spec;
 pub mod task;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod trail;
 pub mod util;
 pub mod verify;
 pub mod watchdog;

@@ -4,11 +4,13 @@
 //! runner journals, logs and waits; this module only decides.
 
 use crate::briefing::{
-    CONTINUATION, OUT_OF_MEMORY, Refused, TURN_CONTINUATION, refusal_continuation,
+    CONTINUATION, OUT_OF_MEMORY, Refused, TURN_CONTINUATION, continuation_digest,
+    refusal_continuation,
 };
 use crate::params::RunParams;
 use crate::role::Role;
 use crate::session::{SessionMetrics, StopReason};
+use crate::trail::Trail;
 
 /// Why a fresh session continues the same work.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,6 +105,10 @@ pub(crate) struct Recovery {
     out_of_memory: bool,
     /// Sessions in a row whose harness ended before it reached the engine.
     unstarted: u32,
+    /// What the sessions of this work did so far, for the note of the next
+    /// ([`continuation_digest`]). A session resumed after a pause starts
+    /// with none and gets the note alone.
+    trail: Trail,
 }
 
 /// Sessions in a row whose harness never reached the engine before the
@@ -127,11 +133,15 @@ impl Recovery {
 
     /// The note added to the prompt of a session that continues earlier work.
     pub fn note(&self) -> String {
-        match &self.note {
+        let note = match &self.note {
             Note::Image(refusal) => refusal_continuation(Refused::Image, refusal),
             Note::Refused(refusal) => refusal_continuation(Refused::Request, refusal),
             Note::Turns => TURN_CONTINUATION.to_owned(),
             Note::Plain => CONTINUATION.to_owned(),
+        };
+        match continuation_digest(&self.trail) {
+            Some(digest) => format!("{note}\n\n{digest}"),
+            None => note,
         }
     }
 
@@ -152,6 +162,7 @@ impl Recovery {
     /// Decides what follows a session of `role` that ended with `metrics`,
     /// and counts it.
     pub fn next(&mut self, metrics: &SessionMetrics, role: Role, params: &RunParams) -> Step {
+        self.trail.extend(&metrics.trail);
         self.unstarted = if metrics.exit_before_engine().is_some() {
             self.unstarted + 1
         } else {
@@ -275,6 +286,9 @@ fn continuation(metrics: &SessionMetrics, role: Role) -> Option<Continuation> {
 }
 
 #[cfg(test)]
+mod digest_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::StopReason;
@@ -282,7 +296,7 @@ mod tests {
     /// Each budget differs, so a test fails if one is read for another.
     const REFUSAL: &str = "at most 1 images";
 
-    fn params() -> RunParams {
+    pub(super) fn params() -> RunParams {
         RunParams {
             context_continuations: 2,
             capacity_retries: 1,
@@ -307,15 +321,15 @@ mod tests {
         }
     }
 
-    fn context_stop() -> SessionMetrics {
+    pub(super) fn context_stop() -> SessionMetrics {
         aborted("context budget exceeded: 9000 > 8000")
     }
 
-    fn turns_stop() -> SessionMetrics {
+    pub(super) fn turns_stop() -> SessionMetrics {
         aborted("turn budget exceeded: 45 > 30")
     }
 
-    fn engine_error() -> SessionMetrics {
+    pub(super) fn engine_error() -> SessionMetrics {
         SessionMetrics {
             last_stop_reason: Some(StopReason::Error),
             ..SessionMetrics::default()
@@ -372,7 +386,7 @@ mod tests {
     }
 
     /// Runs `sessions` through one recovery and returns the steps.
-    fn steps(role: Role, sessions: &[SessionMetrics]) -> (Recovery, Vec<Step>) {
+    pub(super) fn steps(role: Role, sessions: &[SessionMetrics]) -> (Recovery, Vec<Step>) {
         steps_with(&params(), role, sessions)
     }
 
@@ -834,6 +848,22 @@ mod tests {
     fn a_usable_capacity_limit_lowers_the_cap_then_gives_up() {
         let (_, steps) = steps(Role::Builder, &[overflow(&[4000]), overflow(&[4000])]);
         assert_eq!(steps, [lower_cap(4000), Step::GiveUp(GiveUp::Capacity)]);
+    }
+
+    /// Sushi's refusal of an output limit is also memory run out: the
+    /// room it names comes first, and the rerun is not told to declare
+    /// a job. Pins the order of the two; the watchdog test
+    /// `an_output_limit_refusal_records_the_prompt_s_room` reads both from
+    /// the recorded message.
+    #[test]
+    fn a_capacity_limit_outranks_an_out_of_memory() {
+        let refused = SessionMetrics {
+            engine_out_of_memory: true,
+            ..overflow(&[83_456])
+        };
+        let (recovery, steps) = steps(Role::Builder, &[refused]);
+        assert_eq!(steps, [lower_cap(83_456)]);
+        assert_eq!(recovery.memory_note(), None);
     }
 
     #[test]

@@ -54,11 +54,34 @@ enum Attempt {
 
 /// What a passed attempt comes to after review.
 enum Reviewed {
-    /// The task is done; `reviewed` when a reviewer accepted it, not
-    /// `verify` alone.
-    Done { reviewed: bool },
+    /// The task is done.
+    Done(Acceptance),
     /// The reviewer asked for changes: another attempt follows.
     Changes,
+}
+
+/// Who accepted a task that is done.
+enum Acceptance {
+    /// A reviewer.
+    Reviewed,
+    /// `verify` alone, in a run without reviews.
+    VerifyOnly,
+    /// `verify` alone, as no reviewer gave a verdict: why.
+    Unreviewed(String),
+}
+
+impl Acceptance {
+    fn reviewed(&self) -> bool {
+        matches!(self, Self::Reviewed)
+    }
+
+    /// Why no reviewer accepted the task, when one should have.
+    fn unreviewed(&self) -> Option<&str> {
+        match self {
+            Self::Unreviewed(why) => Some(why),
+            Self::Reviewed | Self::VerifyOnly => None,
+        }
+    }
 }
 
 impl Runner {
@@ -95,8 +118,8 @@ impl Runner {
                     }
                 }
                 Attempt::Passed(built) => {
-                    let reviewed = match self.review_attempt(task, attempt, &built).await? {
-                        Reviewed::Done { reviewed } => reviewed,
+                    let acceptance = match self.review_attempt(task, attempt, &built).await? {
+                        Reviewed::Done(acceptance) => acceptance,
                         Reviewed::Changes => continue,
                     };
                     // The floor only goes up.
@@ -106,7 +129,7 @@ impl Runner {
                             .passed()
                             .max(self.ledger.passed_checks.unwrap_or(0)),
                     );
-                    return self.complete_task(task, attempt, reviewed);
+                    return self.complete_task(task, attempt, acceptance);
                 }
             }
         }
@@ -262,7 +285,7 @@ impl Runner {
             task.id, built.loaded.card.title
         ))?;
         if !self.params.review {
-            return Ok(Reviewed::Done { reviewed: false });
+            return Ok(Reviewed::Done(Acceptance::VerifyOnly));
         }
         let base = self.current_base();
         let review = ReviewInput {
@@ -282,14 +305,14 @@ impl Runner {
                 self.request_changes(task, attempt, &text)?;
                 Reviewed::Changes
             }
-            Review::NoVerdict => {
+            Review::NoVerdict(why) => {
                 self.log(&format!(
-                    "  reviewer left no verdict for {}; accepting on verify alone",
+                    "  {} accepted unreviewed, on verify alone: {why}",
                     task.id
                 ));
-                Reviewed::Done { reviewed: false }
+                Reviewed::Done(Acceptance::Unreviewed(why))
             }
-            Review::Accept => Reviewed::Done { reviewed: true },
+            Review::Accept => Reviewed::Done(Acceptance::Reviewed),
         })
     }
 
@@ -477,12 +500,13 @@ impl Runner {
         }
     }
 
-    /// Marks a task done, commits the checkpoint and journals it.
+    /// Marks a task done, commits the checkpoint and journals it. One
+    /// accepted unreviewed is kept for the final reviewer.
     fn complete_task(
         &mut self,
         task: &TaskCard,
         attempt: u32,
-        reviewed: bool,
+        acceptance: Acceptance,
     ) -> Result<(), RunError> {
         // A task that passed was in nobody's way (ADR 0034).
         let path = conflict_path(task.id.as_str());
@@ -510,9 +534,15 @@ impl Runner {
             children: None,
             history: None,
             attempts: Some(attempt),
-            reviewed: Some(reviewed),
+            reviewed: Some(acceptance.reviewed()),
+            unreviewed: acceptance.unreviewed().map(str::to_owned),
             stopped_sessions: Some(stopped_sessions.clone()),
         });
+        if let Acceptance::Unreviewed(why) = acceptance {
+            // A done task stays done: the final reviewer is told of it
+            // for the rest of the run.
+            self.ledger.unreviewed.insert(task.id.clone(), why);
+        }
         self.ledger.done_since_replan += 1;
         self.ledger.stuck_replanned = false;
         self.save()?;

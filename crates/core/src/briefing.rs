@@ -4,8 +4,13 @@
 
 use std::fmt::Write as _;
 
+use crate::params::RunParams;
 use crate::role::Role;
 use crate::util::clip;
+
+mod digest;
+
+pub use digest::continuation_digest;
 
 /// A titled block of the briefing. Empty bodies are omitted.
 pub fn section(title: &str, text: &str) -> String {
@@ -146,8 +151,9 @@ pub const EXISTING_PROJECT: &str = "This project already has code, conventions a
 - `T000.` checks are the project's existing tests: they must pass now and keep passing.
 - Plan as many tasks as the change needs, even one; the 6 to 40 range does not apply.";
 
-/// The title of the section that sizes cards to the builders' context budget.
-pub const CARD_SIZING_TITLE: &str = "Builder context budget";
+/// The title of the section that sizes cards to the builders' context and
+/// turn budgets.
+pub const CARD_SIZING_TITLE: &str = "Builder budget";
 
 /// The share of a builder's budget a card's reading and writing may take,
 /// as a fraction: the rest is the session's own turns and replies.
@@ -157,19 +163,57 @@ const CARD_SHARE: (u64, u64) = (2, 3);
 const CHARS_PER_TOKEN: u64 = 4;
 
 /// The body of that section, for the planner sessions that write cards. A
-/// builder that reads more than about two thirds of its budget is steered
-/// to wrap up, then stopped, before it has written the work.
-pub fn card_sizing(budget_tokens: u64) -> String {
+/// builder that reads more than about two thirds of its context budget, or
+/// needs more than its `turns`, is steered to wrap up, then stopped (at
+/// [`RunParams::turn_stop`], or up to [`RunParams::turn_extension`] while
+/// it writes), before it has written the work. A stop at or below the budget
+/// comes without a steer, and the card must fit in `stop` turns (at least
+/// one: the watchdog counts a turn before it judges).
+pub fn card_sizing(budget_tokens: u64, turns: u32, params: &RunParams) -> String {
     let fits = budget_tokens * CARD_SHARE.0 / CARD_SHARE.1;
     let chars = fits * CHARS_PER_TOKEN;
+    let stop = params.turn_stop(turns);
+    let ceiling = params.turn_extension(turns);
+    let steered = stop > turns;
+    // A stop at or below the budget comes first: the card fits before it.
+    let fit = count_turns(if steered { turns } else { stop.max(1) });
+    let stopped = if steered {
+        format!(
+            "Past either budget the session is told to wrap up; it is stopped soon after the context budget, and at {}",
+            count_turns(stop)
+        )
+    } else {
+        format!(
+            "Past the context budget it is told to wrap up and is stopped soon after; at {fit} it is stopped without warning"
+        )
+    };
+    let stops = match ceiling {
+        Some(ceiling) => format!(
+            "{stopped}, or at {} if it is still writing files.",
+            count_turns(ceiling)
+        ),
+        None => format!("{stopped}."),
+    };
     format!(
-        "Each builder session has a context budget of {budget_tokens} tokens; past it the session is told to wrap up, and soon after it is stopped. \
-         Size every card so that what its builder must read and write fits in about two thirds of that, \
+        "Each builder session has a context budget of {budget_tokens} tokens and a turn budget of {fit}, \
+         a turn being one reply and its tool calls. {stops} \
+         Size every card so that what its builder must read and write fits in about two thirds of the context budget, \
          {fits} tokens: the files in its `files`, the code those files call, and its check. \
          At roughly {CHARS_PER_TOKEN} characters per token that is about {chars} characters. \
-         Estimate this for each card before you write it, and split a card that is over it into smaller cards \
+         Size it also so that its builder can make the change and pass its checks in {fit}: \
+         every file to read or edit, and every run of a check to fix, takes turns. \
+         Estimate both for each card before you write it, and split a card that is over either budget into smaller cards \
          before writing them."
     )
+}
+
+/// `n` turns, as a person writes it: "1 turn", "5 turns".
+pub fn count_turns(n: u32) -> String {
+    if n == 1 {
+        "1 turn".to_owned()
+    } else {
+        format!("{n} turns")
+    }
 }
 
 /// The note a fresh session gets when it continues work stopped at the context budget.
@@ -233,10 +277,87 @@ mod tests {
     /// The budget of a 65,536-token window at the default 65%.
     #[test]
     fn card_sizing_gives_two_thirds_of_the_budget_in_tokens_and_characters() {
-        let text = card_sizing(42_598);
+        let text = card_sizing(42_598, 40, &RunParams::default());
         assert!(text.contains("budget of 42598 tokens"), "{text}");
         assert!(text.contains("28398 tokens"), "{text}");
         assert!(text.contains("113592 characters"), "{text}");
+    }
+
+    /// The turns the planner is told, at a `turnAbort` past 1 (steered at
+    /// the budget, then stopped), at 1 and below 1 (stopped without a
+    /// steer), and at 0 (stopped after the first turn).
+    #[test]
+    fn card_sizing_tells_the_turns_the_watchdog_allows() {
+        let cases = [
+            (
+                1.5,
+                "turn budget of 55 turns",
+                "wrap up; it is stopped soon after the context budget, and at 83 turns.",
+            ),
+            (
+                1.0,
+                "turn budget of 55 turns",
+                "at 55 turns it is stopped without warning",
+            ),
+            (
+                0.5,
+                "turn budget of 28 turns",
+                "at 28 turns it is stopped without warning",
+            ),
+            (
+                0.0,
+                "turn budget of 1 turn,",
+                "at 1 turn it is stopped without warning",
+            ),
+        ];
+        for (turn_abort, budget, stops) in cases {
+            let params = RunParams {
+                turn_abort,
+                turn_write_window: 0,
+                ..RunParams::default()
+            };
+            let text = card_sizing(42_598, 55, &params);
+            assert!(text.contains(budget), "turnAbort {turn_abort}: {text}");
+            assert!(text.contains(stops), "turnAbort {turn_abort}: {text}");
+            let warned = text.contains("without warning");
+            assert_eq!(warned, turn_abort <= 1.0, "turnAbort {turn_abort}: {text}");
+        }
+    }
+
+    /// A builder still writing at its stop runs on to the ceiling (ADR
+    /// 0044); the planner still sizes cards to the budget.
+    #[test]
+    fn card_sizing_tells_how_far_a_writing_builder_runs_on() {
+        let text = card_sizing(42_598, 40, &RunParams::default());
+        assert!(
+            text.contains("and at 60 turns, or at 80 turns if it is still writing files."),
+            "{text}"
+        );
+        assert!(text.contains("checks in 40 turns"), "{text}");
+        let past_abort = RunParams {
+            turn_abort: 1.0,
+            ..RunParams::default()
+        };
+        let text = card_sizing(42_598, 40, &past_abort);
+        assert!(
+            text.contains("without warning, or at 80 turns if it is still writing files."),
+            "{text}"
+        );
+        let half = RunParams {
+            turn_abort: 0.5,
+            ..RunParams::default()
+        };
+        let text = card_sizing(42_598, 40, &half);
+        assert!(
+            text.contains("at 20 turns it is stopped without warning, or at 80 turns"),
+            "{text}"
+        );
+        let no_run_on = RunParams {
+            turn_ceiling: 1.5,
+            ..RunParams::default()
+        };
+        let text = card_sizing(42_598, 40, &no_run_on);
+        assert!(text.contains("and at 60 turns. "), "{text}");
     }
 
     #[test]

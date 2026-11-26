@@ -752,3 +752,40 @@ async fn a_harness_whose_configuration_cannot_be_written_is_not_built() {
     let built = configured(fx_agent(&home), acp, &run_model());
     assert!(built.is_err());
 }
+
+/// A request the proxy sent again with a lower output limit reaches the
+/// watchdog as its own event, not as the end of the request.
+#[tokio::test]
+async fn a_lowered_output_limit_becomes_a_session_event() {
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let dir = tempfile::tempdir().unwrap();
+    let (feed, _keep) = tokio::sync::broadcast::channel(16);
+    let harness = harness(seen).with_observations(feed.clone());
+    let mut session = harness.open(spec(dir.path())).await.unwrap();
+    session.prompt("render a cat").await.unwrap();
+    feed.send(EngineObservation::OutputLimitLowered {
+        asked: 16_384,
+        fits: 13_186,
+    })
+    .unwrap();
+    let events = drain(&mut session, PermissionDecision::Allow).await;
+    assert!(
+        events.contains(&SessionEvent::OutputLimitLowered {
+            asked: 16_384,
+            fits: 13_186
+        }),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::MessageEnd { .. } | SessionEvent::TurnEnd)),
+        "the request goes on: {events:?}"
+    );
+    let turns = events
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::TurnStart))
+        .count();
+    assert_eq!(turns, 1, "only the prompt's turn: {events:?}");
+    session.close(Duration::from_secs(5)).await;
+}

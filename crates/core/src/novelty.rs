@@ -61,14 +61,24 @@ impl Novelty {
 
 /// The paths `command` names, in order, each once.
 fn named_paths(command: &str) -> Vec<String> {
-    let words = Scan::new(command).run();
     let mut paths: Vec<String> = Vec::new();
-    for path in words.split(is_separator).filter(|w| is_path(w)) {
-        if !paths.iter().any(|p| p == path) {
-            paths.push(path.to_owned());
+    for path in command_words(command).into_iter().filter(|w| is_path(w)) {
+        if !paths.contains(&path) {
+            paths.push(path);
         }
     }
     paths
+}
+
+/// The words of `command` outside quotes, escapes, comments and heredoc
+/// bodies, split at blanks, operators, redirections and `=`.
+pub(crate) fn command_words(command: &str) -> Vec<String> {
+    Scan::new(command)
+        .run()
+        .split(is_separator)
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Characters between the words of a command: blanks, operators,

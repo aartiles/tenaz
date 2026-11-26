@@ -38,28 +38,44 @@ impl Ledger {
         self.context_cap.unwrap_or(cap)
     }
 
-    /// A session the engine held past the cap, with no engine error and no
-    /// critical memory pressure, shows it holds `peak` tokens now. The cap
-    /// rises at once to the headroom share of it, `held`, and a ceiling under
-    /// that is lifted to it: waiting for a raise would cut every session
-    /// that needs more again (ADR 0026). `None` when the cap is already at or
-    /// above `held`; `Some(None)` when it reached the largest budget.
-    pub fn note_cap_overrun(&mut self, held: u64) -> Option<Option<u64>> {
+    /// A session the engine held well past the cap, with no engine error
+    /// and no critical memory pressure, shows it holds `peak` tokens now.
+    /// When the headroom share of that peak is over the cap, the cap rises
+    /// at once to the peak itself: the headroom is for what the engine
+    /// says, and this is what it did (ADR 0043). Waiting for a raise would
+    /// cut every session that needs more again (ADR 0026).
+    ///
+    /// The lift is a raise tried, since the next session may run past what
+    /// the engine held. A ceiling under the peak is dropped, as when a
+    /// raise is tried past it. An overflow after the lift sets the ceiling
+    /// again and counts as a failed raise.
+    ///
+    /// `None` when there is no cap, or the headroom share of `peak` is at
+    /// or under it: the session counts as held. `Some(None)` when the cap
+    /// reached the largest budget.
+    pub fn note_cap_overrun(&mut self, peak: u64) -> Option<Option<u64>> {
         let cap = self.context_cap?;
-        if held <= cap {
+        if self.params.headroom_share(peak) <= cap {
             return None;
         }
-        if self.cap_ceiling.is_some_and(|c| c < held) {
-            self.cap_ceiling = Some(held);
+        if self.cap_ceiling.is_some_and(|c| c < peak) {
+            self.cap_ceiling = None;
         }
-        // The engine held more than any raise pending: that raise held.
+        Some(self.raise_cap_to(peak))
+    }
+
+    /// Sets the cap to `to`, or removes it at the largest budget, as a raise
+    /// tried: a raise still pending counts as held, the count toward the
+    /// next raise starts again, and an overflow before the next raise fails
+    /// this one. Returns the cap now.
+    fn raise_cap_to(&mut self, to: u64) -> Option<u64> {
         if std::mem::take(&mut self.cap_raised) {
             self.cap_failed_raises = 0;
         }
         self.cap_clean_sessions = 0;
-        let full = self.largest_budget_tokens();
-        self.context_cap = (held < full).then_some(held);
-        Some(self.context_cap)
+        self.context_cap = (to < self.largest_budget_tokens()).then_some(to);
+        self.cap_raised = true;
+        self.context_cap
     }
 
     /// A session ran under critical memory pressure: no time to raise the
@@ -91,14 +107,8 @@ impl Ledger {
         let (raised, ceiling) = climb.after(waits)?;
         let past_ceiling = self.cap_ceiling.filter(|_| ceiling.is_none());
         self.cap_ceiling = ceiling;
-        if std::mem::take(&mut self.cap_raised) {
-            self.cap_failed_raises = 0;
-        }
-        self.context_cap = (raised < full).then_some(raised);
-        self.cap_clean_sessions = 0;
-        self.cap_raised = true;
         Some(CapRaise {
-            cap: self.context_cap,
+            cap: self.raise_cap_to(raised),
             clean_sessions: clean,
             past_ceiling,
         })
@@ -297,21 +307,103 @@ mod tests {
         assert_eq!(ledger.context_cap, Some(44_942));
     }
 
+    /// Sessions the watchdog steered often end a little past the cap: they
+    /// count toward a raise instead of lifting the cap a few per cent.
+    #[test]
+    fn a_peak_whose_headroom_share_fits_the_cap_counts_as_held() {
+        let mut ledger = ledger();
+        ledger.lower_cap(40_000);
+        assert!(hold(&mut ledger, 3).is_empty());
+        // 0.8 of 50001 floors to 40000, the cap.
+        assert_eq!(ledger.note_cap_overrun(50_001), None);
+        assert_eq!(hold(&mut ledger, 1).len(), 1, "the fourth held session");
+    }
+
+    #[test]
+    fn a_peak_lifts_the_cap_once_its_headroom_share_is_over_it() {
+        let mut ledger = pressed();
+        // 0.8 of 56178 is 44942, the cap; 0.8 of 56179 is past it.
+        assert_eq!(ledger.note_cap_overrun(56_178), None);
+        assert_eq!(ledger.note_cap_overrun(56_179), Some(Some(56_179)));
+    }
+
     /// Its sessions then ran to 58-61k with no engine error, each cut at
     /// the cap, until the run blocked.
     #[test]
-    fn a_peak_held_past_the_cap_lifts_the_cap_and_its_ceiling() {
+    fn a_peak_held_past_the_cap_lifts_the_cap_past_its_ceiling() {
         let mut ledger = pressed();
-        assert_eq!(ledger.note_cap_overrun(49_067), Some(Some(49_067)));
+        assert_eq!(ledger.note_cap_overrun(61_334), Some(Some(61_334)));
         let state = (ledger.context_cap, ledger.cap_ceiling);
-        assert_eq!(state, (Some(49_067), Some(49_067)));
+        assert_eq!(state, (Some(61_334), None));
+    }
+
+    /// The Last Delivery r2 run of 2026-11-24: the engine said 35832, the
+    /// cap became 28665, and builders needed up to 79086 tokens, which the
+    /// engine held. The watchdog stops a session at 1.3 times the cap
+    /// (`contextAbort`). When an overrun lifted the cap to 0.8 times its
+    /// peak (ADR 0026), each stop raised it a few per cent: the journal shows
+    /// 16 stops, about two days, to reach 59276. Lifted to the peak, each
+    /// stop raises it 30 %.
+    #[test]
+    fn builders_cut_at_the_cap_climb_past_what_they_need_in_three_stops() {
+        let mut ledger = ledger();
+        ledger.lower_cap(28_665);
+        // Each session is stopped at 1.3 times the cap the one before set.
+        assert_eq!(ledger.note_cap_overrun(37_264), Some(Some(37_264)));
+        assert_eq!(ledger.note_cap_overrun(48_443), Some(Some(48_443)));
+        assert_eq!(ledger.note_cap_overrun(62_975), Some(Some(62_975)));
+        // The next stop, 81867, is past the 79086 the builders need.
+    }
+
+    /// The engine held a peak once and overflows the 1.3 times it the next
+    /// session may reach: the lift failed as a raise does, so the cap
+    /// stops there until it is tried again, and the wait doubles.
+    #[test]
+    fn an_overflow_after_a_lift_sets_a_ceiling() {
+        let mut ledger = ledger();
+        ledger.lower_cap(40_000);
+        ledger.note_cap_overrun(52_000);
+        assert_eq!(ledger.lower_cap(48_000), 48_000);
+        assert!(hold(&mut ledger, 15).is_empty(), "twice the wait of 8");
+        let past = CapRaise {
+            cap: Some(66_598),
+            clean_sessions: 16,
+            past_ceiling: Some(48_000),
+        };
+        assert_eq!(hold(&mut ledger, 1), [past]);
+    }
+
+    /// A ceiling the peak's headroom share does not reach, but the peak
+    /// does, is dropped: the cap goes past it to the peak.
+    #[test]
+    fn a_lift_drops_a_ceiling_under_the_peak() {
+        let mut ledger = ledger();
+        ledger.lower_cap(40_000);
+        ledger.cap_ceiling = Some(55_000);
+        assert_eq!(ledger.note_cap_overrun(60_000), Some(Some(60_000)));
+        assert_eq!(ledger.cap_ceiling, None);
+    }
+
+    /// The ceiling a lift went past is not kept: the overflow after the
+    /// lift sets it again from what the engine says then.
+    #[test]
+    fn an_overflow_after_a_lift_past_a_ceiling_sets_it_from_the_overflow() {
+        let mut ledger = pressed();
+        ledger.note_cap_overrun(61_334);
+        // Under the 44942 the ceiling was before the lift.
+        ledger.lower_cap(42_000);
+        let state = (ledger.cap_ceiling, ledger.cap_failed_raises);
+        assert_eq!(state, (Some(42_000), 2));
     }
 
     #[test]
     fn a_peak_past_the_largest_budget_removes_the_cap() {
         let mut ledger = pressed();
         assert_eq!(ledger.note_cap_overrun(90_000), Some(None));
-        assert_eq!(ledger.context_cap, None);
+        // A raise tried all the same: an overflow there fails it.
+        assert_eq!(ledger.lower_cap(60_000), 60_000);
+        let state = (ledger.cap_ceiling, ledger.cap_failed_raises);
+        assert_eq!(state, (Some(60_000), 2));
     }
 
     #[test]
@@ -324,7 +416,10 @@ mod tests {
         let mut ledger = pressed();
         ledger.cap_raised = true;
         ledger.note_cap_overrun(80_000);
-        assert_eq!((ledger.cap_raised, ledger.cap_failed_raises), (false, 0));
+        assert_eq!(ledger.cap_failed_raises, 0);
+        // The lift is the raise pending now: an overflow fails it.
+        ledger.lower_cap(60_000);
+        assert_eq!(ledger.cap_failed_raises, 1);
     }
 
     #[test]
@@ -340,7 +435,7 @@ mod tests {
         let mut ledger = ledger();
         ledger.lower_cap(40_000);
         ledger.cap_ceiling = Some(70_000);
-        assert_eq!(ledger.note_cap_overrun(50_000), Some(Some(50_000)));
+        assert_eq!(ledger.note_cap_overrun(60_000), Some(Some(60_000)));
         assert_eq!(ledger.cap_ceiling, Some(70_000));
     }
 

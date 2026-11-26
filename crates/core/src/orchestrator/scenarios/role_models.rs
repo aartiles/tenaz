@@ -315,8 +315,10 @@ async fn the_planners_size_cards_for_the_builder_s_model() {
         .filter(|e| e.file_name().to_string_lossy().ends_with(".prompt.md"))
         .map(|e| std::fs::read_to_string(e.path()).unwrap())
         .collect();
+    let params = RunParams::default();
+    let turns = params.turn_budget;
     let sized = |budget| {
-        let text = briefing::card_sizing(budget);
+        let text = briefing::card_sizing(budget, turns, &params);
         prompts.iter().any(|p| p.contains(&text))
     };
     assert!(sized(42598), "no prompt sizes cards for 42598 tokens");
@@ -365,8 +367,8 @@ async fn a_raise_aims_at_the_largest_model_s_budget() {
 }
 
 /// A session the engine holds past the lowered cap, with no error, lifts
-/// the cap to the headroom share of its peak at once: waiting for a raise
-/// cut every session that needed more, until the run blocked.
+/// the cap to its peak at once: waiting for a raise cut every session that
+/// needed more, until the run blocked.
 #[tokio::test(start_paused = true)]
 async fn a_session_held_past_the_cap_raises_it_at_once() {
     let scripted = ScriptedHarness {
@@ -374,7 +376,9 @@ async fn a_session_held_past_the_cap_raises_it_at_once() {
         context_stop_task: Some("T001".into()),
         ..Default::default()
     };
-    let run = Played::with(scripted, &[]).await;
+    // A reviewer on a 262144 window makes the run's largest budget 170393.
+    let reviewer = (Role::Reviewer, role_model("r", 262_144));
+    let run = Played::with(scripted, &[reviewer]).await;
     let held = run
         .records
         .iter()
@@ -388,10 +392,9 @@ async fn a_session_held_past_the_cap_raises_it_at_once() {
         })
         .expect("the overrun lifted the cap");
     // The scripted harness's figures: its bootstrap engine failures lower
-    // the cap to 49190, and the run's largest budget is 85196. T001's
-    // builder outgrew it to 120020 with no engine error. The headroom
-    // share of that, 96016, is past the run's 85196: the cap is gone.
-    assert_eq!(held, (120_020, None));
+    // the cap to 49190. T001's builder outgrew it to 120020 with no engine
+    // error: the cap is that peak, not 0.8 of it (ADR 0043).
+    assert_eq!(held, (120_020, Some(120_020)));
 }
 
 /// A session whose budget is under the lowered cap does not count toward

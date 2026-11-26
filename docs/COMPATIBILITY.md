@@ -144,6 +144,58 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **What a continued session is told the stopped one did** (ADR 0045)
+  has not run live. It was replayed over the recorded events of the 43
+  builder sessions that were continued in a Last Delivery run with fx
+  and Qwen3.8-Flash-Next (2026-11-18), one stopped session at a time,
+  not yet with Pi, OpenCode, Qwen Code or dsh; a chain of continuations
+  is tested with the scripted metrics only. Whether it shortens the
+  turns before the first edit is not measured. fx sends Tenaz the start
+  of a long tool result with `... output truncated ...`, so with fx the
+  "end of the result" of a long `verify` is its start; the other
+  harnesses were not checked. fx's notices at the start of a session
+  (`[context] ...`) are part of its first message, and show in the last
+  words of a session that said nothing after it. Only files that write
+  tools wrote without an error are listed: files changed through the
+  shell (`sed -i`, a heredoc) are not, and do not mark the check as
+  before its last edits; the note says `git status` shows them. Paths
+  are listed as the tools named them: a harness whose tools pass
+  absolute paths (Claude-style `file_path`, Qwen Code) lists them whole,
+  and the same file named two ways is listed twice. A check is a shell
+  command part whose program, after variable assignments and the
+  launchers `npx`, `bunx`, `pnpx`, `env`, `time`, `exec`, `timeout`,
+  `nice`, `uv`, `poetry` and `run` with their options and numbers, is
+  `verify`, `pytest`, `jest` or `vitest`; or `npm`, `cargo`, `go` or
+  another test runner followed by `test`; or `npm`, `pnpm`, `yarn`,
+  `bun` or `deno` followed by `run test`; or `node --test`; or `python
+  -m pytest`. Shell keywords before it (`if`, `do`, `!`) are skipped
+  too. The body of a heredoc and the text of a quoted string (a notes
+  file, a commit message) are left out; the quote scan knows no escapes
+  or comments, so a stray apostrophe (`# Let's run it`) can hide the
+  rest of a command. A check run some other way (a script that calls
+  `verify`, `bash -c './verify'`) is not reported, nor is a test script
+  with another name (`npm run test:unit`), a runner started through a
+  package manager or a shell (`pnpm vitest`, `bash ./verify`), a runner
+  not listed (`npx playwright test`), or a launcher option that takes a
+  word (`timeout -s KILL 600 ./verify`). After a pause, the digest
+  covers only the sessions since the run was resumed.
+
+- **A builder or bootstrap session that still writes runs past its turn
+  stop** (ADR 0044) has not run with a model. The rule was checked
+  against the recorded `rpc.jsonl` of 125 builders stopped at 60 turns
+  in four long fx runs of November (Hardball 3D, Hardball improvements,
+  Pocket Roads, Last Delivery r2), read by a script, not by the
+  watchdog; Pi, OpenCode, Qwen Code and dsh were not checked. Whether it
+  lowers sessions and wall time per done task is not measured. A builder
+  that writes only through its shell (`sed -i`, `cat >`) is stopped at
+  the stop as before. In a sandboxed run, which has no write scope, only
+  relative paths count. Only a write call whose arguments name the file
+  as `path` or `file_path` counts: a tool that names it otherwise, or a
+  patch tool that names no file, does not keep a session running. A
+  session rewriting the same file without getting closer runs to 80
+  turns, 20 more than before. Runs pinned before this change get the
+  run-on when resumed.
+
 - **A thinking level per role.** `--thinking-for` (ADR 0042) has one
   real run: Pi 1.6.0, Tenaz 97d9015 and Inkling 2 Mini on Splash 1.7.3,
   on 2026-11-25, with `--thinking low` and bootstrap, reviewer, replan
@@ -539,6 +591,22 @@ above), so a 32k context is the practical floor (`contextFloor`).
   own prompt and tools were not measured, and a newer fx may add more.
   The check is tested with the scripted harness only, not yet in a run
   against fx or mlx-serve.
+- **An output limit the engine cannot fit.** Sushi refuses a request
+  whose prompt and output limit together do not fit its memory, with a
+  400 that names what fits: "Context 103038 does not fit in GPU memory:
+  … max_tokens 13186 fits (asked 16384); maximum context: 99840
+  tokens." In the Last Delivery run of 2026-11-18 (fx 0.0.17; the
+  Sushi version was not recorded) 7 such refusals ended 6 builder
+  sessions. The engine proxy now sends such a request again, once, with
+  the limit that fits, when it is at least a quarter of the one asked;
+  the session's journal line then has an `output-limit-lowered` watchdog
+  event (with Pi, which does not take the proxy's events, the resend is
+  only logged). A second refusal, or less room, is passed on: Tenaz
+  reads its `maximum context` less the output limit asked (here 83,456
+  tokens) as the most prompt the engine can hold, as for a prompt too
+  large, and lowers the context budget. Tested with the recorded
+  message, a fake engine behind the proxy and the scripted harness, not
+  yet against Sushi itself.
 - **An engine that does not report cached tokens** (ADR 0007). Tested with
   recorded usage shapes, LM Studio's among them, and the fake harness; the
   preflight has not yet been run against LM Studio with this change.
@@ -659,7 +727,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   articulated-cabinet run resumed on 6 November: from 44942 the cap rose
   session by session to 82232 within a night, with no engine error. The
   first two replans after the resume were still cut. Only seen
-  with Qwen Code on Sushi.
+  with Qwen Code on Sushi. Since ADR 0043 the cap rises to the peak
+  itself, not 0.8 of it; that is covered by unit tests and a scripted
+  scenario only, not yet seen in a run.
 - **Release attestations.** The release workflow attests each archive
   (`actions/attest`, generated by cargo-dist 0.32); `gh attestation
   verify` passed for both archives of v0.3.0. Only the archives for each
@@ -688,10 +758,17 @@ above), so a 32k context is the practical floor (`contextFloor`).
   with a real model.
 - **fx and output that is not UTF-8.** fx 0.0.14 exits with "stream did
   not contain valid UTF-8" when a shell command prints such bytes (`head -c`
-  cutting a character in half, for example). Tenaz charges the attempt and
-  tells the next session not to cut output by bytes; the session's work in
-  progress is lost. The fake harness reproduces the crash; it has not been
-  rerun against fx itself.
+  cutting a character in half, for example). In the runs where this
+  crash was seen, every one came from `cat -e` or `cat -et` on macOS,
+  which in a UTF-8 locale prints many non-ASCII characters (dashes, curly
+  quotes, arrows) as invalid UTF-8. Tenaz charges the attempt and tells
+  the next session to use `od -c` or `grep -n` after a `cat -v/-e/-t`,
+  and not to cut output by bytes otherwise; the protocol says the same.
+  A reviewer that crashes this way is retried once, told why; when the
+  retry gives no verdict either, the task is accepted unreviewed and the
+  final reviewer is told. The session's work in progress is lost. The
+  fake harness reproduces the crash; it has not been rerun against fx
+  itself.
 - **Replies cut at the output limit.** fx is given a 16384-token output
   limit; a reply that reasons past it ends the session (fx 0.0.16 exits
   on `OutputTruncated`; 0.0.17 ends the turn as below).

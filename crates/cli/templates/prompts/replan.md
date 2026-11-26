@@ -37,7 +37,8 @@ last replan's changes to the cards were thrown away for the errors it
 lists, so they are not in the task list, even if the planner notes
 describe them. Do not write them again with those errors.
 
-A card you add or rewrite must fit the builder context budget below.
+A card you add or rewrite must fit the builder budget below, in context
+and in turns.
 
 Every requirement except `manual` ones must stay covered by a card that is
 not dropped. Do not edit `done` cards, source code, or `verify`. Write

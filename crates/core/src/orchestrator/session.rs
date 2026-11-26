@@ -23,7 +23,7 @@ mod reasons;
 mod record;
 mod requests;
 
-pub(crate) use harness::HarnessRun;
+pub(crate) use harness::{HarnessRun, OUTPUT_LIMIT};
 #[cfg(any(test, feature = "testing"))]
 pub(crate) use harness::{INVALID_CARDS, PASSING_CONFLICT, REFUSED_REOPENS};
 #[cfg(test)]
@@ -345,14 +345,7 @@ impl Runner {
 
     /// Lowers the run's context budget to a share of what the engine said it can hold.
     fn lower_context_cap(&mut self, label: &str, limit: u64, retry: u32) -> Result<(), RunError> {
-        #[expect(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a context limit times a fraction is far below 2^53 and floors to a positive u64"
-        )]
-        let cap = (limit as f64 * self.params.capacity_headroom).floor() as u64;
-        let current = self.ledger.lower_cap(cap);
+        let current = self.ledger.lower_cap(self.params.headroom_share(limit));
         self.save()?;
         self.journal(JournalRecord::ContextCap {
             label: label.to_owned(),
@@ -411,18 +404,12 @@ impl Runner {
         Ok(())
     }
 
-    /// Lifts the cap to the headroom share of a peak the engine held past
-    /// it (`Ledger::note_cap_overrun`, ADR 0026). True when it did: the
-    /// session did not test the new cap, so it does not count toward a raise.
+    /// Lifts the cap to a peak the engine held well past it, its headroom
+    /// share over the cap (`Ledger::note_cap_overrun`, ADRs 0026 and 0043).
+    /// True when it did: the session did not test the new cap, so it does
+    /// not count toward a raise.
     fn note_cap_overrun(&mut self, session: &SessionRecord) -> Result<bool, RunError> {
-        #[expect(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a context peak times a fraction is far below 2^53 and floors to a positive u64"
-        )]
-        let held = (session.context_peak as f64 * self.params.capacity_headroom).floor() as u64;
-        let Some(cap) = self.ledger.note_cap_overrun(held) else {
+        let Some(cap) = self.ledger.note_cap_overrun(session.context_peak) else {
             return Ok(false);
         };
         self.save()?;

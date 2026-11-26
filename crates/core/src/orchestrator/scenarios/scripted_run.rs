@@ -14,6 +14,7 @@ use crate::cache_report::CacheReport;
 use crate::ledger::{JournalRecord, SessionRecord, TaskOutcome, Verdict};
 use crate::orchestrator::Deps;
 use crate::orchestrator::OWN_CHECKS_NOTE;
+use crate::params::RunParams;
 use crate::project::Project;
 use crate::testing::{ScriptedHarness, VirtualClock};
 use crate::verify::WROTE_THE_TREE;
@@ -30,7 +31,14 @@ impl Played {
     /// Plays the run with `harness`, two attempts per task and a replan
     /// every two tasks.
     async fn with(harness: ScriptedHarness) -> Self {
-        Self::play(&["maxAttempts=2", "replanEvery=2"], harness).await
+        Self::with_overrides(harness, &[]).await
+    }
+
+    /// [`Self::with`], plus the parameter `overrides`.
+    async fn with_overrides(harness: ScriptedHarness, overrides: &[&str]) -> Self {
+        let mut set = vec!["maxAttempts=2", "replanEvery=2"];
+        set.extend_from_slice(overrides);
+        Box::pin(Self::play(&set, harness)).await
     }
 
     /// Plays the run with `harness` and the parameter `overrides`.
@@ -398,6 +406,11 @@ async fn reviews_without_a_verdict_are_retried_and_rejections_recorded() {
     let reviews = run.prompts("reviewer-T004");
     assert_eq!(reviews.len(), 2, "T004 has a review and its retry");
     assert!(
+        reviews[1].contains("## Earlier review"),
+        "the retry is told: {}",
+        reviews[1]
+    );
+    assert!(
         reviews.iter().all(|p| p.contains(note)),
         "T004's reviewer not told its builder was stopped"
     );
@@ -516,22 +529,33 @@ async fn a_blocked_task_keeps_its_notes() {
     );
 }
 
-/// Every session that writes cards is told the builders' context budget:
-/// the bootstrap's task-cards step, the split and the replan.
+/// Every session that writes cards is told the builders' context and turn
+/// budgets: the bootstrap's task-cards step, the split and the replan.
 #[tokio::test(start_paused = true)]
 async fn the_sessions_that_write_cards_are_told_the_builder_budget() {
-    let run = Played::with(ScriptedHarness {
+    let harness = ScriptedHarness {
         stepwise_bootstrap: true,
         failing_task: Some("T003".into()),
         ..Default::default()
-    })
-    .await;
-    // 65% of the fake model's 131,072-token window.
-    let sizing = crate::briefing::card_sizing(85_196);
+    };
+    let run = Played::with_overrides(harness, &["turnBudget=55", "turnCeiling=2.5"]).await;
+    // 65% of the fake model's 131,072-token window; 55 turns, stopped at
+    // 1.5 times that, or at 2.5 times while it writes.
+    let params = RunParams {
+        turn_ceiling: 2.5,
+        ..RunParams::default()
+    };
+    let sizing = crate::briefing::card_sizing(85_196, 55, &params);
+    assert!(sizing.contains("at 83 turns, or at 138 turns"), "{sizing}");
     let bootstraps = run.prompts("bootstrap");
     let (cards, others): (Vec<_>, Vec<_>) = bootstraps.iter().partition(|p| p.contains("Step: 3"));
     assert!(!cards.is_empty() && !others.is_empty(), "{}", run.log);
     let told = |p: &&String| p.contains(&sizing);
+    // Implied by `told` below; here for a failure that names the turns.
+    assert!(
+        cards.iter().all(|p| p.contains("turn budget of 55 turns")),
+        "a task-cards step lacks the turn budget"
+    );
     assert!(cards.iter().all(told), "a task-cards step lacks the budget");
     assert!(!others.iter().any(told), "an earlier step has the budget");
     for planner in ["split-T003", "replan"] {

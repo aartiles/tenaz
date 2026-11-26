@@ -6,6 +6,96 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The engine proxy sends a request again, once, with the output limit
+  the engine says fits, when Sushi refuses it because the prompt and
+  the output limit together do not fit its memory ("max_tokens 13186
+  fits (asked 16384)") and that limit is at least a quarter of the one
+  asked (4,096 tokens at the default 16,384). The session goes on
+  instead of ending on the error. Each time is logged and, with fx or
+  another ACP agent, journaled as an `output-limit-lowered` watchdog
+  event of the session. In the Last Delivery run of 2026-11-18, 6 of
+  the 7 such refusals named a limit this large, and replies there are
+  seldom long (p99 5,678 tokens, p99.9 9,378). A reply longer than the
+  lowered limit is cut there, as at any output limit, and the request's
+  journaled `max_tokens` is the lowered one. See ADR 0046.
+- A task accepted on `verify` alone because neither review gave a
+  verdict says so: its `task` record in `journal.jsonl` gets an
+  `unreviewed` field with how each review ended, `run.json` keeps it
+  under `unreviewed` for the rest of the run, and the final
+  reviewer's briefing lists these tasks in a `Tasks accepted unreviewed`
+  section, to judge them as a task reviewer would. The log line names
+  the task as accepted unreviewed, with why.
+
+### Changed
+
+- A session the engine held well past (over 1.25 times) a lowered
+  context budget, with no engine error, now raises the budget to its
+  peak, not to 0.8 of it. Before, each session stopped at 1.3 times the
+  budget raised it only a few per cent: in the Last Delivery r2 run it
+  took 16 stopped sessions to climb from 28665 to 59276 tokens while the
+  engine held 79086. Now each raises it by 30 %, and that climb takes
+  three. If the engine then overflows, that counts as a failed raise.
+  See ADR 0043.
+- A builder or bootstrap session that still writes files at its turn
+  stop (60 turns by default) runs on: it is told so once, stopped once
+  `turnWriteWindow` (5) turns pass without a write, and stopped at
+  `turnCeiling` times its budget (2.0, so 80 turns) whatever it does.
+  A write is a write tool call that succeeds on a project file outside
+  `.tenaz/`. Reviewers and planners keep the plain stop, and the stop
+  reason is unchanged. In four long fx runs 102 of the 125 builders
+  stopped at 60 turns had written a file in their last 5 turns; the 82
+  next sessions that ended on their own took a median 39.5 turns. `--set
+  turnWriteWindow=0` restores the plain stop. See ADR 0044.
+- The bootstrap, replan and split planners are told the builder's turn
+  budget next to its context budget, and size cards to fit both: the
+  briefing section is now "Builder budget". In four runs 216 builder
+  sessions were stopped at their turn budget, the most common stop, while
+  the planners sized cards by context alone.
+- A session that continues stopped work (after a context or turn stop,
+  or a refused request or image) is told what the sessions before it on
+  the same work did, under "What the earlier sessions on this work did":
+  the files their write tools wrote without an error, the last `verify`
+  or test command with the last lines of its result (marked when files
+  were written after it), and the last words. It is built from the
+  sessions' events, so it is the same for every harness, and clipped to
+  at most 2 KB. A session resumed after a pause gets the note alone, as
+  before. See ADR 0045. Replayed over the 43 builder continuations of a
+  Last Delivery run (fx, 2026-11-18), one stopped session at a time, it
+  came to 0.4 to 1.3 KB, with a last check in 36; one stopped session
+  had done nothing and gave none.
+
+### Fixed
+
+- The working protocol names the run's own `verify` time limit
+  (`verifyTimeoutSec`) instead of a fixed 120 seconds, so a run pinned
+  with `--set verifyTimeoutSec=240` no longer tells the model to keep its
+  checks under 120 seconds. `tenaz run --refresh-templates` writes it too.
+  The protocol now says a brief can only shorten the limit, as Tenaz
+  always stopped `verify` at it.
+- After the harness crashes on output that is not valid UTF-8 from
+  `cat -v`, `cat -e` or `cat -t` (alone or combined, as in `cat -et`),
+  the next briefing says to use `od -c` or `grep -n` instead of those
+  flags, where it used to say only not to cut output by bytes. The
+  protocol says it too. On macOS, in a UTF-8 locale, these flags print
+  dashes, curly quotes and arrows as invalid UTF-8.
+- A review retried after one that left no verdict is told why that one
+  ended (for example the tool call its harness crashed on), in a new
+  `Earlier review` section of its briefing. The retry used to get the
+  same briefing, and could repeat the call that ended the first.
+- Sushi's refusal of a request whose prompt and output limit do not fit
+  its memory ("max_tokens 13186 fits (asked 16384); maximum context:
+  99840 tokens"), when it is passed on to the harness (see Added), now
+  lowers the context budget, as its refusal of a
+  prompt too large does, to the most it can hold less the output limit
+  asked (83,456 tokens here). Before, its lower-case `maximum context`
+  was missed and the refusal taken for memory run out: the same session
+  was rerun after a wait at the same budget, and, with jobs on, a
+  builder rerun was told to declare heavy work as a job. In the Last
+  Delivery run of 2026-11-18 none of 7 such refusals, in 6 builder
+  sessions, was read.
+
 ## [0.9.0] - 2026-11-25
 
 ### Added

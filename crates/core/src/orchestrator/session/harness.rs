@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::metrics::RequestRecord;
+use crate::novelty::command_words;
 use crate::orchestrator::phases::{AttemptFailure, PlannerSession, error_list};
 use crate::orchestrator::{RunError, Runner};
 use crate::ports::{Clock, PermissionDecision, Session, SessionModel, SessionSpec};
@@ -32,7 +33,7 @@ const STDERR_TAIL_BYTES: usize = 2000;
 
 /// Why a session stopped when its last reply was cut at the output limit,
 /// for the next attempt's briefing.
-const OUTPUT_LIMIT: &str = "the reply reached the output limit while the model was still reasoning, before it acted; reason briefly, act in small steps and write files early";
+pub(crate) const OUTPUT_LIMIT: &str = "the reply reached the output limit while the model was still reasoning, before it acted; reason briefly, act in small steps and write files early";
 
 /// One run of the harness.
 pub(crate) struct HarnessRun<'a> {
@@ -533,9 +534,10 @@ impl SessionLoop<'_> {
             self.clock.monotonic_ms().saturating_sub(self.started),
         );
         let requests = self.recorder.finish().await;
+        let command = self.watchdog.command_in_flight().map(str::to_owned);
         let mut metrics = self.watchdog.into_metrics();
         if metrics.ended_early() && !self.runner.stopping() {
-            explain_early_end(&mut metrics, exit.code, stderr_log);
+            explain_early_end(&mut metrics, command.as_deref(), exit.code, stderr_log);
         }
         (metrics, requests)
     }
@@ -546,11 +548,17 @@ impl SessionLoop<'_> {
 /// like an engine failure (rerun, uncounted). During a tool call, the call
 /// ended it and a rerun would make the same call (fx dies on output that is
 /// not UTF-8), so the session stops with that call as the reason and the
-/// attempt counts. The stderr is kept for diagnosis either way.
-fn explain_early_end(metrics: &mut SessionMetrics, code: Option<i32>, stderr_log: Option<&Path>) {
+/// attempt counts. The stderr is kept for diagnosis either way. `command`
+/// is the whole shell command of the call in flight, if it runs one.
+fn explain_early_end(
+    metrics: &mut SessionMetrics,
+    command: Option<&str>,
+    code: Option<i32>,
+    stderr_log: Option<&Path>,
+) {
     let note = harness_exit_note(code, stderr_log);
     if let Some(call) = &metrics.tool_in_flight {
-        metrics.abort_reason = Some(crashed_running(call, &note));
+        metrics.abort_reason = Some(crashed_running(call, command, &note));
     } else if metrics.output_truncated() {
         // fx exits when a reply is cut at the output limit; the model
         // was still reasoning, and would again in an unchanged rerun.
@@ -637,15 +645,56 @@ fn harness_exit_note(code: Option<i32>, stderr_log: Option<&Path>) -> String {
     }
 }
 
-/// Why a session stopped when its harness crashed during `call`, for the
-/// next attempt's briefing.
-fn crashed_running(call: &str, note: &str) -> String {
+/// Why a session stopped when its harness crashed during `call`, which
+/// ran the shell `command` if any, for the next attempt's briefing.
+fn crashed_running(call: &str, command: Option<&str>, note: &str) -> String {
     let mut reason =
         format!("the harness crashed while running this tool call; do not repeat it: {call}");
     if note.contains("valid UTF-8") {
-        reason.push_str(". Its output had bytes that are not valid UTF-8, which the harness cannot read: do not cut output by bytes (`head -c`, `cut -b`, `dd`); cut by lines (`head -n`, `tail -n`) instead");
+        reason.push_str(
+            ". Its output had bytes that are not valid UTF-8, which the harness cannot read: ",
+        );
+        reason.push_str(not_utf8_advice(command));
     }
     reason
+}
+
+/// What to do instead of a `command` whose output was not valid UTF-8. A
+/// `cat` that shows non-printing characters is named first, even when the
+/// command also cuts by bytes: on macOS it is the usual cause.
+fn not_utf8_advice(command: Option<&str>) -> &'static str {
+    if command.is_some_and(shows_nonprinting) {
+        "on macOS, in a UTF-8 locale, `cat -v`, `cat -e` and `cat -t` print many non-ASCII characters (dashes, curly quotes, arrows) as invalid UTF-8; to see tabs, line ends or odd characters use `od -c` or `grep -n` instead"
+    } else {
+        "do not cut output by bytes (`head -c`, `cut -b`, `dd`); cut by lines (`head -n`, `tail -n`) instead"
+    }
+}
+
+/// Whether `command` runs `cat` with `-v`, `-e` or `-t`, alone or combined
+/// (`-et`), before any `--`. Those are the flags of macOS `cat` that write
+/// bytes as they come for characters they do not escape; GNU `cat` writes
+/// only ASCII. A hint, not a parse: a `cat` word anywhere counts
+/// (`grep cat -e x`), and a command in quotes (`sh -c "cat -e a"`) is not
+/// seen.
+fn shows_nonprinting(command: &str) -> bool {
+    let words = command_words(command);
+    words.iter().enumerate().any(|(i, word)| {
+        is_cat(word)
+            && words[i + 1..]
+                .iter()
+                .take_while(|flag| flag.starts_with('-') && *flag != "--")
+                .any(|flag| shows_nonprinting_flag(flag))
+    })
+}
+
+fn is_cat(word: &str) -> bool {
+    word == "cat" || word.ends_with("/cat")
+}
+
+/// A short option, alone or combined, that holds `v`, `e` or `t`.
+fn shows_nonprinting_flag(flag: &str) -> bool {
+    flag.strip_prefix('-')
+        .is_some_and(|letters| !letters.starts_with('-') && letters.contains(['v', 'e', 't']))
 }
 
 fn event_name(event: &SessionEvent) -> &'static str {
@@ -660,6 +709,7 @@ fn event_name(event: &SessionEvent) -> &'static str {
         SessionEvent::LateText { .. } => "late_text",
         SessionEvent::CompactionStart { .. } => "compaction_start",
         SessionEvent::CompactionRefused => "compaction_refused",
+        SessionEvent::OutputLimitLowered { .. } => "output_limit_lowered",
         SessionEvent::PermissionRequest { .. } => "permission_request",
         SessionEvent::Settled { .. } => "settled",
         SessionEvent::Exited { .. } => "exited",
@@ -695,5 +745,79 @@ mod tests {
         let clipped = invalid_cards(&errors, 30);
         assert!(clipped.contains("- card T002 was deleted"), "{clipped}");
         assert!(!clipped.contains("T001.x"), "{clipped}");
+    }
+
+    /// The five tool calls that crashed fx in the Hardball 3D, Pocket Roads
+    /// and Last Delivery runs, as their journals record them.
+    const CAT_CRASHES: [&str; 5] = [
+        r#"shell {"action":"run","command":"grep -c \"$(printf '^\\t')\" .tenaz/notes/T035.md; sed -n '1,6p' .tenaz/notes/T035.md | cat -e; echo \"=== jersey:\"; sed -n '24,27p' checks/_jersey.mjs | cat -e"}"#,
+        r#"shell {"command":"sed -n '44,48p;96,102p' src/main.js | cat -e -t -s","action":"run"}"#,
+        r#"shell {"command":"sed -n '1,3p;22,26p;95,102p' src/input.js | cat -e | head -20","action":"run"}"#,
+        r#"shell {"action":"run","command":"sed -n '1,3p' checks/T041.counter-pickup-route.mjs | cat -et | head -6; echo ---; sed -n '100,106p' checks/T020.keyboard-delivery.mjs | cat -et; echo ---; git log --oneline -5; echo ---; git diff HEAD --stat -- src/ | head"}"#,
+        r#"shell {"action":"run","command":"sed -n '1,3p' checks/T041.counter-pickup-route.mjs | cat -et; echo ---; sed -n '100,102p' checks/T020.keyboard-delivery.mjs | cat -et; echo ---; git show HEAD:checks/T041.counter-pickup-route.mjs >/dev/null 2>&1 && echo \"T041 existed at HEAD\" || echo \"T041 new since HEAD\"; git diff HEAD --stat | tail -8"}"#,
+    ];
+
+    const NOT_UTF8: &str = "stderr tail:\nError: stream did not contain valid UTF-8";
+
+    /// The reason for a crash with `NOT_UTF8` during `call`, a shell call
+    /// as a harness sends it.
+    fn not_utf8_reason(call: &str) -> String {
+        let (_, args) = call.split_once(' ').unwrap();
+        let args: serde_json::Value = serde_json::from_str(args).unwrap();
+        crashed_running(call, crate::session::command_arg(&args), NOT_UTF8)
+    }
+
+    /// A shell call running `command`, as a harness sends it.
+    fn shell(command: &str) -> String {
+        format!("shell {}", serde_json::json!({ "command": command }))
+    }
+
+    #[test]
+    fn a_crash_on_cat_showing_non_printing_characters_suggests_od_or_grep() {
+        for call in CAT_CRASHES.map(str::to_owned).into_iter().chain([
+            shell("cat -v a"),
+            shell("/bin/cat -bt a"),
+            shell("sed -n 1p a\ncat -e b"),
+            shell("(cat -e a)"),
+            shell("cat -e a | head -c 40"),
+        ]) {
+            let reason = not_utf8_reason(&call);
+            assert!(reason.contains("`od -c` or `grep -n`"), "{reason}");
+            assert!(!reason.contains("cut by lines"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_crash_on_other_output_says_to_cut_by_lines() {
+        for command in [
+            "head -c 300 a.md",
+            "cat -n a",
+            "cat --number a",
+            "cat - a",
+            "cat -- -e",
+            "concat -e a",
+            "grep -e cat a",
+            "echo \"cat -e a\"",
+        ] {
+            let reason = not_utf8_reason(&shell(command));
+            assert!(reason.contains("cut by lines"), "{reason}");
+        }
+    }
+
+    /// Words of a command in quotes are not seen; a `cat` word anywhere is.
+    /// A scanner that learns either flips its assert here.
+    #[test]
+    fn known_misses_of_the_cat_hint() {
+        assert!(!not_utf8_reason(&shell("sh -c \"cat -e a\"")).contains("od -c"));
+        assert!(not_utf8_reason(&shell("grep cat -e a")).contains("od -c"));
+    }
+
+    #[test]
+    fn a_crash_not_about_utf8_gives_no_output_hint() {
+        let reason = crashed_running("shell {}", Some("cat -e a"), "exit code 1");
+        assert!(
+            !reason.contains("od -c") && !reason.contains("cut by lines"),
+            "{reason}"
+        );
     }
 }

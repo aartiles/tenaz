@@ -8,6 +8,7 @@ mod reasoning;
 mod repair;
 mod sse;
 mod tap;
+mod upstream;
 mod video;
 
 use std::net::SocketAddr;
@@ -30,6 +31,7 @@ pub use events::{Observer, ProxyEvent, ProxyUsage, usage_from_json};
 pub use repair::{ObjectArgs, Repair};
 use repair::{StreamRepair, repair_body};
 use tap::{Tap, TappedStream};
+use upstream::{Completion, Forward};
 
 /// The proxy's shared state.
 pub struct Proxy {
@@ -332,8 +334,23 @@ fn add_output_limit(request: &mut JsonObject, limit: Option<OutputLimit>, api: A
     if events::output_limit_in(request).is_some() {
         return false;
     }
-    request.insert(api.output_limit_field().to_owned(), limit.into());
+    set_output_limit(request, api, limit);
     true
+}
+
+/// Sets a request's output limit to `limit`, under each name it gives
+/// one, or under the name `api` gives it when it names none.
+fn set_output_limit(request: &mut JsonObject, api: Api, limit: u64) {
+    let mut named = false;
+    for field in tenaz_core::session::OUTPUT_LIMIT_FIELDS {
+        if let Some(value) = request.get_mut(field) {
+            *value = limit.into();
+            named = true;
+        }
+    }
+    if !named {
+        request.insert(api.output_limit_field().to_owned(), limit.into());
+    }
 }
 
 const REASONING_EFFORT: &str = "reasoning_effort";
@@ -412,42 +429,28 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
         .filter(|_| proxy.repair_tool_args)
         .map(ObjectArgs::from_request)
         .filter(|w| !w.is_empty());
-    // Hold while the lease has the LLM away.
-    if !proxy.gate.is_open() {
-        let waited = Instant::now();
-        proxy.gate.wait_open().await;
-        proxy.observe(ProxyEvent::Held {
-            request: id,
-            ms: elapsed_ms(waited),
-        });
-    }
-    let upstream = match proxy
-        .client
-        .request(method.clone(), format!("{}{path}", proxy.upstream))
-        .headers(forwardable(&headers))
-        .body(body)
-        .send()
+    let forward = Forward {
+        request: id,
+        method,
+        url: format!("{}{path}", proxy.upstream),
+        headers: forwardable(&headers),
+    };
+    let (upstream, request_json) = match proxy
+        .answer(
+            &forward,
+            body,
+            completion
+                .zip(request_json)
+                .map(|(api, request)| Completion { api, request }),
+        )
         .await
     {
-        Ok(response) => response,
-        Err(error) => {
-            let message = tenaz_core::session::engine_unreachable_text(&error);
-            proxy.observe(ProxyEvent::EngineError {
-                request: id,
-                message: message.clone(),
-            });
-            return (
-                StatusCode::BAD_GATEWAY,
-                axum::Json(
-                    serde_json::json!({ "error": { "message": message, "type": "proxy_error" } }),
-                ),
-            )
-                .into_response();
-        }
+        Ok(answer) => answer,
+        Err(unreachable) => return unreachable.into_response(),
     };
-    let status = upstream.status();
+    let status = upstream.status;
     let mut response_headers = HeaderMap::new();
-    for (name, value) in upstream.headers() {
+    for (name, value) in &upstream.headers {
         let lower = name.as_str().to_ascii_lowercase();
         if HOP_BY_HOP.contains(&lower.as_str()) || lower == "content-length" {
             continue;
@@ -460,7 +463,7 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
         }
     }
     let event_stream = upstream
-        .headers()
+        .headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|c| c.starts_with("text/event-stream"));
@@ -474,12 +477,7 @@ async fn handle(State(proxy): State<Arc<Proxy>>, request: Request) -> Response {
         started,
     )
     .for_request(request_json.as_ref(), proxy.output_limit_tokens());
-    let tapped = TappedStream::new(
-        upstream
-            .bytes_stream()
-            .map(|chunk| chunk.map_err(std::io::Error::other)),
-        tap,
-    );
+    let tapped = TappedStream::new(upstream.body, tap);
     let body = match watched.filter(|_| status.is_success()) {
         None => Body::from_stream(tapped),
         Some(watched) if stream || event_stream => {

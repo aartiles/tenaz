@@ -184,12 +184,16 @@ impl Runner {
     }
 
     /// The section that sizes the cards a planner writes to the builders'
-    /// configured context budget. A cap after a memory failure is lifted
-    /// again; cards outlive it.
+    /// configured context and turn budgets. A cap after a memory failure is
+    /// lifted again; cards outlive it.
     fn card_sizing(&self) -> (String, String) {
         (
             briefing::CARD_SIZING_TITLE.to_owned(),
-            briefing::card_sizing(self.ledger.builder_budget_tokens()),
+            briefing::card_sizing(
+                self.ledger.builder_budget_tokens(),
+                self.params.turn_budget,
+                &self.params,
+            ),
         )
     }
 

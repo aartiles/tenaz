@@ -1,6 +1,8 @@
 //! The final phase: a review of the whole product against the spec, which
 //! completes the run, adds tasks for the loop, or runs again.
 
+use std::collections::BTreeMap;
+
 use crate::backlog::Backlog;
 use crate::ledger::{JournalRecord, Phase, Verdict};
 use crate::orchestrator::session::SessionCtx;
@@ -10,7 +12,7 @@ use crate::spec::{Coverage, coverage};
 use crate::task::TaskId;
 use crate::verify::VerifyOutcome;
 
-use super::PromptParts;
+use super::{PromptParts, clip_lines};
 
 /// Where the final reviewer writes its review.
 const FINAL_REVIEW: &str = ".tenaz/reviews/FINAL.md";
@@ -72,11 +74,18 @@ impl Runner {
             "Cycle".to_owned(),
             (self.ledger.final_cycles + 1).to_string(),
         )];
-        let extra = vec![
+        let mut extra = vec![
             ("Task list".to_owned(), tasks.table()),
             ("Coverage".to_owned(), coverage_report(cov)),
             ("./verify --all".to_owned(), all.summary.clone()),
         ];
+        if !self.ledger.unreviewed.is_empty() {
+            extra.push((
+                "Tasks accepted unreviewed".to_owned(),
+                // A list of task lines, clipped like a diff's file stat.
+                unreviewed_report(&self.ledger.unreviewed, self.params.stat_clip_bytes),
+            ));
+        }
         let prompt = self.briefing(
             Role::FinalReviewer,
             PromptParts {
@@ -145,6 +154,19 @@ fn final_outcome(
     }
 }
 
+/// The tasks done on `verify` alone although the run reviews, each with
+/// why, the list cut to `limit` bytes.
+fn unreviewed_report(unreviewed: &BTreeMap<TaskId, String>, limit: usize) -> String {
+    let lines: Vec<String> = unreviewed
+        .iter()
+        .map(|(task, why)| format!("- {task}: {why}"))
+        .collect();
+    format!(
+        "No reviewer judged these tasks, so only `verify` accepted them. Each line says how its reviews ended, as the orchestrator told the next reviewer; that advice was for them, not you:\n{}\n\nJudge their work against their cards and the spec as a task reviewer would.",
+        clip_lines(&lines.join("\n"), limit)
+    )
+}
+
 /// The coverage line the final reviewer is given.
 fn coverage_report(cov: &Coverage) -> String {
     let list = |ids: &[String]| {
@@ -165,6 +187,30 @@ fn coverage_report(cov: &Coverage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_unreviewed_tasks_are_listed_with_why() {
+        let unreviewed = BTreeMap::from([
+            (
+                TaskId::parse("T046").unwrap(),
+                "no reviewer gave a verdict (x)".to_owned(),
+            ),
+            (
+                TaskId::parse("T050").unwrap(),
+                "no reviewer gave a verdict (y)".to_owned(),
+            ),
+        ]);
+        let report = unreviewed_report(&unreviewed, 1_000);
+        assert!(
+            report.contains(
+                "\n- T046: no reviewer gave a verdict (x)\n- T050: no reviewer gave a verdict (y)\n"
+            ),
+            "{report}"
+        );
+        let clipped = unreviewed_report(&unreviewed, 40);
+        assert!(clipped.contains("- T046:"), "{clipped}");
+        assert!(!clipped.contains("T050"), "{clipped}");
+    }
 
     #[test]
     fn the_coverage_report_joins_ids_and_says_none_for_an_empty_list() {
