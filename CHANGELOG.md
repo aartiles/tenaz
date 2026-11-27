@@ -70,6 +70,13 @@ uses [Semantic Versioning](https://semver.org/).
   43 builder continuations of a Last Delivery run (fx, 2026-11-18), one
   stopped session at a time, it came to 0.4 to 1.3 KB, with a last check
   in 36; one stopped session had done nothing and gave none.
+- The protocol tells sessions that a check starting Chrome or Chromium
+  passes it `--use-mock-keychain`. Without it, each headless Chrome a
+  check started could open a macOS keychain dialog: in the Hy4 Pocket
+  Roads run of 2026-11-26 (fx 0.0.18, sandbox on), `verify` started
+  Chrome for every browser check and the user saw "No se encuentra un
+  llavero para guardar Chrome" (no keychain found) many times, as in
+  earlier sandboxed fx runs.
 
 ### Fixed
 

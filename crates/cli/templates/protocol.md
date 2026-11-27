@@ -34,6 +34,9 @@ and you do not commit, push, open pull requests or switch branches.
   `subprocess.run`). The orchestrator stops a tool call that runs over its
   limit (10 minutes by default); a second one in the same session ends the
   session.
+- A check that starts Chrome or Chromium passes it `--use-mock-keychain`.
+  Without it, on macOS each start can ask the user about the keychain in a
+  dialog that nobody answers.
 - Check your work with `./verify` (or `./verify --task <ID>`) rather than
   improvised one-off commands. If you need a new kind of check, add it to
   `verify`.

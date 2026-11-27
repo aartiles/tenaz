@@ -144,6 +144,10 @@ above), so a 32k context is the practical floor (`contextFloor`).
 
 ## Known gaps
 
+- **Chrome's keychain dialog.** The protocol tells a check that starts
+  Chrome or Chromium to pass it `--use-mock-keychain`. No run has used
+  that line yet: whether models follow it, and whether fx's sandbox is
+  what brings up the dialog, are not checked.
 - **What a continued session is told the stopped one did** (ADR 0045)
   has not run live. It was replayed over the recorded events of the 43
   builder sessions that were continued in a Last Delivery run with fx
