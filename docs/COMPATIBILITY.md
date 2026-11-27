@@ -169,10 +169,9 @@ above), so a 32k context is the practical floor (`contextFloor`).
   another test runner followed by `test`; or `npm`, `pnpm`, `yarn`,
   `bun` or `deno` followed by `run test`; or `node --test`; or `python
   -m pytest`. Shell keywords before it (`if`, `do`, `!`) are skipped
-  too. The body of a heredoc and the text of a quoted string (a notes
-  file, a commit message) are left out; the quote scan knows no escapes
-  or comments, so a stray apostrophe (`# Let's run it`) can hide the
-  rest of a command. A check run some other way (a script that calls
+  too. The command is read as the idle rule reads it: the body of a
+  heredoc (a notes file), quoted text with its escapes (a commit
+  message) and comments are left out. A check run some other way (a script that calls
   `verify`, `bash -c './verify'`) is not reported, nor is a test script
   with another name (`npm run test:unit`), a runner started through a
   package manager or a shell (`pnpm vitest`, `bash ./verify`), a runner

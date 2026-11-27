@@ -81,6 +81,13 @@ pub(crate) fn command_words(command: &str) -> Vec<String> {
         .collect()
 }
 
+/// `command` with its quoted text, escapes, comments and heredoc bodies
+/// blanked out, and its operators and line breaks kept: the shell's own
+/// words, ready to split into the commands it runs.
+pub(crate) fn shell_text(command: &str) -> String {
+    Scan::new(command).run()
+}
+
 /// Characters between the words of a command: blanks, operators,
 /// redirections, substitutions and `=` (`--file=src/a.js`).
 fn is_separator(c: char) -> bool {
@@ -168,7 +175,10 @@ impl Scan {
         match c {
             '\'' | '"' => self.skip_quoted(c),
             '\\' => self.bump().is_some(),
-            '\n' => self.end_line(),
+            '\n' => {
+                self.end_line();
+                false
+            }
             '#' => self.skip_comment(),
             '(' => self.open_arithmetic(),
             ')' => self.close_arithmetic(),
@@ -249,14 +259,13 @@ impl Scan {
         closes
     }
 
-    /// A newline: arithmetic left open ends with its line, and the bodies
-    /// of the heredocs the line opened follow it.
-    fn end_line(&mut self) -> bool {
+    /// A newline, which is kept: arithmetic left open ends with its line,
+    /// and the bodies of the heredocs the line opened follow it.
+    fn end_line(&mut self) {
         self.arithmetic = 0;
         while let Some(heredoc) = self.heredocs.pop_front() {
             self.skip_body(&heredoc);
         }
-        true
     }
 
     /// Past a heredoc's body, up to its end word, or to the end of the

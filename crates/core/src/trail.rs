@@ -4,6 +4,7 @@
 //! is the same for every harness; `briefing::continuation_digest` puts it
 //! into words (ADR 0045).
 
+use crate::novelty::shell_text;
 use crate::session::{SessionEvent, ToolEffect, command_arg, path_arg, tool_effect};
 use crate::util::tail;
 
@@ -205,13 +206,12 @@ impl ShellCommand<'_> {
     /// Whether one of the command's parts runs a check (see [`is_check`]),
     /// after variable assignments, launchers, and the options and numbers a
     /// launcher takes (`timeout 600`, `nice -n 10`), and shell keywords
-    /// (`if`, `do`, `!`). Only the shell's own words count: the body of a
-    /// heredoc and the text of quoted strings (a notes file written with
-    /// `cat <<EOF`, a commit message) are left out.
+    /// (`if`, `do`, `!`). Only the shell's own words count, as the idle
+    /// rule reads them ([`shell_text`]): the body of a heredoc (a notes file
+    /// written with `cat <<EOF`), quoted text with its escapes (a commit
+    /// message), and comments are left out.
     fn runs_a_check(self) -> bool {
-        let without_heredocs = self.without_heredocs();
-        ShellCommand(&without_heredocs)
-            .unquoted()
+        shell_text(self.0)
             .split(['\n', ';', '&', '|', '(', ')'])
             .any(|part| {
                 let mut launched = false;
@@ -231,59 +231,6 @@ impl ShellCommand<'_> {
                     .collect();
                 is_check(&words)
             })
-    }
-
-    /// The command without the bodies of its heredocs: a line with `<<` (not
-    /// `<<<`, not inside quotes on that line) keeps what comes before and
-    /// after the delimiter, and the lines up to the delimiter's own are dropped.
-    fn without_heredocs(self) -> String {
-        let mut kept = String::with_capacity(self.0.len());
-        let mut lines = self.0.lines();
-        while let Some(line) = lines.next() {
-            let start = line.match_indices("<<").map(|(at, _)| at).find(|&at| {
-                !line[at + 2..].starts_with('<')
-                    && !line[..at].ends_with('<')
-                    && line[..at].matches(['\'', '"']).count() % 2 == 0
-            });
-            let Some(at) = start else {
-                kept.push_str(line);
-                kept.push('\n');
-                continue;
-            };
-            let mut after = line[at + 2..]
-                .trim_start_matches('-')
-                .trim_start()
-                .splitn(2, char::is_whitespace);
-            let delimiter = after.next().unwrap_or_default().trim_matches(['\'', '"']);
-            kept.push_str(&line[..at]);
-            kept.push(' ');
-            kept.push_str(after.next().unwrap_or_default());
-            kept.push('\n');
-            if !delimiter.is_empty() {
-                let _ = lines
-                    .by_ref()
-                    .find(|body| body.trim_start_matches('\t') == delimiter);
-            }
-        }
-        kept
-    }
-
-    /// The command with each quoted string replaced by a space.
-    fn unquoted(self) -> String {
-        let mut words = String::with_capacity(self.0.len());
-        let mut quote = None;
-        for c in self.0.chars() {
-            match quote {
-                Some(open) if c == open => quote = None,
-                Some(_) => {}
-                None if c == '\'' || c == '"' => {
-                    quote = Some(c);
-                    words.push(' ');
-                }
-                None => words.push(c),
-            }
-        }
-        words
     }
 }
 
@@ -529,6 +476,8 @@ mod tests {
             "cat > t.py <<'EOF'\npytest -q\nEOF\npytest t.py",
             "cat <<-END > notes.md\n\tdone\n\tEND\n./verify",
             "git commit -m \"a << b\" && ./verify",
+            "echo \"it\\\"s\"; ./verify",
+            "# Let's run it\n./verify",
             "grep -q x <<< \"$out\" && ./verify",
             "if ./verify --all; then echo ok; fi",
             "for t in a b; do pytest $t; done",
@@ -552,6 +501,8 @@ mod tests {
             "cat > .tenaz/notes/T001.md <<'EOF'\n- pytest -q: 3 failing\n./verify --all\nEOF",
             "git commit -m \"Fix the gate\n\n./verify --all passes\"",
             "echo - pytest",
+            "ls # then ./verify",
+            "echo \"a\\\" ; ./verify\"",
             "mkdir test",
             "echo test",
             "git status",

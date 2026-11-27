@@ -61,13 +61,14 @@ uses [Semantic Versioning](https://semver.org/).
   the same work did, under "What the earlier sessions on this work did":
   the files their write tools wrote without an error, the last `verify`
   or test command with the last lines of its result (marked when files
-  were written after it), and the last words. It is built from the
-  sessions' events, so it is the same for every harness, and clipped to
-  at most 2 KB. A session resumed after a pause gets the note alone, as
-  before. See ADR 0045. Replayed over the 43 builder continuations of a
-  Last Delivery run (fx, 2026-11-18), one stopped session at a time, it
-  came to 0.4 to 1.3 KB, with a last check in 36; one stopped session
-  had done nothing and gave none.
+  were written after it), and the last words. The command is read as the
+  idle rule reads it: quoted text, comments and heredoc bodies do not
+  count. It is built from the sessions' events, so it is the same for
+  every harness, and clipped to at most 2 KB. A session resumed after a
+  pause gets the note alone, as before. See ADR 0045. Replayed over the
+  43 builder continuations of a Last Delivery run (fx, 2026-11-18), one
+  stopped session at a time, it came to 0.4 to 1.3 KB, with a last check
+  in 36; one stopped session had done nothing and gave none.
 
 ### Fixed
 
