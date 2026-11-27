@@ -36,8 +36,9 @@ own:
 The writes were read from each session's `rpc.jsonl`, counting a write
 tool call in the turn the watchdog sees it; working-tree changes by shell
 commands could not be replayed. The planners sized cards by context
-alone; they are now told the turn budget too (a separate change). That makes fewer cards too big, but the
-evidence above is about sessions already working on a card that fits.
+alone; they are now told the turn budget too. That makes fewer cards too
+big, but the evidence above is about sessions already working on a card
+that fits.
 
 ## Options
 

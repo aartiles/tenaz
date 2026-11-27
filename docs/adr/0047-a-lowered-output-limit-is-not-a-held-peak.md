@@ -53,7 +53,7 @@ which the proxy's event does not carry.
 
 - A session with an `output-limit-lowered` event gives no
   `context-cap-overrun` and no step toward a `context-cap-raised`, and
-  sets the count of sessions held back to 0.
+  starts the count of held sessions toward a raise again.
 - Unlike an overflow, the event neither lowers the cap nor fails a raise
   still pending: it names no figure for what the engine can hold, and the
   session's budget is the cap the engine served.

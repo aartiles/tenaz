@@ -484,12 +484,12 @@ A session's turns are watched as well as its context. A builder,
 bootstrap, replan or split session is told to wrap up at `turnBudget`
 turns (40) and stopped at `turnAbort` times that (1.5, so 60). A builder
 or bootstrap session that wrote a project file in its last
-`turnWriteWindow` turns (5) at that stop runs on, told so once, until 5
-turns pass without such a write, and is stopped at `turnCeiling` times
-its budget (2.0, so 80) whatever it does. Only write tool calls that
-succeed count: not the handoff notes under `.tenaz/`, not files a shell
-command changed, and in a sandboxed run not a file named by its
-absolute path
+`turnWriteWindow` turns (5) at that stop runs on, told so once, until
+that many turns pass without such a write, and is stopped at
+`turnCeiling` times its budget (2.0, so 80) whatever it does. Only
+write tool calls that succeed count: not the handoff notes under
+`.tenaz/`, not files a shell command changed, and in a sandboxed run not
+a file named by its absolute path
 ([ADR 0044](docs/adr/0044-let-a-writing-session-run-past-the-turn-stop.md)).
 `--set turnWriteWindow=0` stops every session at `turnAbort` again. The
 planners are told both budgets and size cards to fit them. A card can

@@ -20,7 +20,7 @@ uses [Semantic Versioning](https://semver.org/).
   seldom long (p99 5,678 tokens, p99.9 9,378). A reply longer than the
   lowered limit is cut there, as at any output limit, and the request's
   journaled `max_tokens` is the lowered one. Such a session, with fx or
-  another ACP agent, does not raise the context budget to its peak nor
+  another ACP agent, does not raise the context budget to its peak or
   count toward a raise, and starts that count again: the engine said the
   full limit did not fit there. See ADRs 0046 and 0047.
 - A task accepted on `verify` alone because neither review gave a
@@ -36,21 +36,22 @@ uses [Semantic Versioning](https://semver.org/).
 - A session the engine held well past (over 1.25 times) a lowered
   context budget, with no engine error, now raises the budget to its
   peak, not to 0.8 of it. Before, each session stopped at 1.3 times the
-  budget raised it only a few per cent: in the Last Delivery r2 run it
-  took 16 stopped sessions to climb from 28665 to 59276 tokens while the
-  engine held 79086. Now each raises it by 30 %, and that climb takes
-  three. If the engine then overflows, that counts as a failed raise.
-  See ADR 0043.
+  budget raised the budget only a few per cent: in the Last Delivery r2
+  run it took 16 stopped sessions to climb from 28,665 to 59,276 tokens
+  while the engine held 79,086. Now each raises it by 30 %, and that
+  climb takes three. If the engine then overflows, that counts as a
+  failed raise. See ADR 0043.
 - A builder or bootstrap session that still writes files at its turn
-  stop (60 turns by default) runs on: it is told so once, stopped once
-  `turnWriteWindow` (5) turns pass without a write, and stopped at
-  `turnCeiling` times its budget (2.0, so 80 turns) whatever it does.
-  A write is a write tool call that succeeds on a project file outside
-  `.tenaz/`. Reviewers and planners keep the plain stop, and the stop
-  reason is unchanged. In four long fx runs 102 of the 125 builders
-  stopped at 60 turns had written a file in their last 5 turns; the 82
-  next sessions that ended on their own took a median 39.5 turns. `--set
-  turnWriteWindow=0` restores the plain stop. See ADR 0044.
+  stop (60 turns by default) runs on: it is told so once (a
+  `steer:turns-past-stop` event), stopped once `turnWriteWindow` (5)
+  turns pass without a write, and stopped at `turnCeiling` times its
+  budget (2.0, so 80 turns) whatever it does. A write is a write tool
+  call that succeeds on a project file outside `.tenaz/`. Reviewers and
+  planners keep the plain stop, and the stop reason is unchanged. In
+  four long fx runs 102 of the 125 builders stopped at 60 turns had
+  written a file in their last 5 turns; the 82 next sessions that ended
+  on their own took a median 39.5 turns. `--set turnWriteWindow=0`
+  restores the plain stop. See ADR 0044.
 - The bootstrap, replan and split planners are told the builder's turn
   budget next to its context budget, and size cards to fit both: the
   briefing section is now "Builder budget". In four runs 216 builder
@@ -91,14 +92,13 @@ uses [Semantic Versioning](https://semver.org/).
 - Sushi's refusal of a request whose prompt and output limit do not fit
   its memory ("max_tokens 13186 fits (asked 16384); maximum context:
   99840 tokens"), when it is passed on to the harness (see Added), now
-  lowers the context budget, as its refusal of a
-  prompt too large does, to the most it can hold less the output limit
-  asked (83,456 tokens here). Before, its lower-case `maximum context`
-  was missed and the refusal taken for memory run out: the same session
-  was rerun after a wait at the same budget, and, with jobs on, a
-  builder rerun was told to declare heavy work as a job. In the Last
-  Delivery run of 2026-11-18 none of 7 such refusals, in 6 builder
-  sessions, was read.
+  lowers the context budget, as its refusal of a prompt too large does,
+  to the most it can hold less the output limit asked (83,456 tokens
+  here). Before, its lower-case `maximum context` was missed and the
+  refusal taken for memory run out: the same session was rerun after a
+  wait at the same budget, and, with jobs on, a builder rerun was told
+  to declare heavy work as a job. In the Last Delivery run of 2026-11-18
+  none of 7 such refusals, in 6 builder sessions, was read.
 
 ## [0.9.0] - 2026-11-25
 

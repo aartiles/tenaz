@@ -1,6 +1,8 @@
 # ADR 0036: Keep the turn budget, and make its stop a parameter
 
-Status: accepted, 2026-11-14.
+Status: accepted, 2026-11-14. Amended by ADR 0044: a builder or
+bootstrap session still writing at the stop runs on, up to `turnCeiling`
+times its budget.
 
 ## Context
 
