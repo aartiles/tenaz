@@ -88,7 +88,7 @@ impl Runner {
 
     /// The planner's prompt: `extra` (the task list and why), the failure
     /// history and the builders' notes of a task to split, the builders'
-    /// context budget, the recent journal and the planner's notes.
+    /// context and turn budgets, the recent journal and the planner's notes.
     fn planner_prompt(
         &self,
         role: Role,
@@ -263,6 +263,7 @@ impl Runner {
                 history: None,
                 attempts: None,
                 reviewed: None,
+                unreviewed: None,
                 stopped_sessions: None,
             });
             return Ok(true);
@@ -300,6 +301,7 @@ impl Runner {
             history: Some(history),
             attempts: None,
             reviewed: None,
+            unreviewed: None,
             stopped_sessions: None,
         });
         self.log(&format!("{} blocked", task.id));

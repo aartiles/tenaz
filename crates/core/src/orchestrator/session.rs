@@ -10,9 +10,10 @@ use crate::backlog::Backlog;
 use crate::briefing::without_map;
 use crate::lease::{LeaseError, LeaseManager};
 use crate::ledger::{JournalRecord, SessionRecord};
+use crate::memory::MemoryWindow;
 use crate::ownership::builder_reverted_note;
 use crate::role::Role;
-use crate::session::SessionMetrics;
+use crate::session::{OUTPUT_LIMIT_LOWERED, SessionMetrics, WatchdogEvent};
 use crate::task::TaskId;
 
 use super::recovery::{Continuation, FailureCause, GiveUp, Recovery, Step};
@@ -23,7 +24,7 @@ mod reasons;
 mod record;
 mod requests;
 
-pub(crate) use harness::HarnessRun;
+pub(crate) use harness::{HarnessRun, OUTPUT_LIMIT};
 #[cfg(any(test, feature = "testing"))]
 pub(crate) use harness::{INVALID_CARDS, PASSING_CONFLICT, REFUSED_REOPENS};
 #[cfg(test)]
@@ -36,6 +37,15 @@ pub(crate) use record::lowered_effort_note;
 
 /// macOS memory pressure level `critical`: no time to raise the budget.
 const CRITICAL_PRESSURE: u32 = 4;
+
+/// Whether the engine ran short of memory in a session without failing
+/// it: under critical pressure, or with a request the proxy sent again at
+/// a lower output limit (ADR 0047). Such a session's peak is not one the
+/// engine held, and it does not count toward a raise.
+fn engine_was_short(memory: Option<&MemoryWindow>, watchdog: &[WatchdogEvent]) -> bool {
+    memory.is_some_and(|m| m.pressure_max >= CRITICAL_PRESSURE)
+        || watchdog.iter().any(|e| e.kind == OUTPUT_LIMIT_LOWERED)
+}
 
 /// What a session is about.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -345,14 +355,7 @@ impl Runner {
 
     /// Lowers the run's context budget to a share of what the engine said it can hold.
     fn lower_context_cap(&mut self, label: &str, limit: u64, retry: u32) -> Result<(), RunError> {
-        #[expect(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a context limit times a fraction is far below 2^53 and floors to a positive u64"
-        )]
-        let cap = (limit as f64 * self.params.capacity_headroom).floor() as u64;
-        let current = self.ledger.lower_cap(cap);
+        let current = self.ledger.lower_cap(self.params.headroom_share(limit));
         self.save()?;
         self.journal(JournalRecord::ContextCap {
             label: label.to_owned(),
@@ -367,19 +370,17 @@ impl Runner {
     /// Counts a session the engine held at a lowered budget toward a raise
     /// (`Ledger::note_cap_held`, ADR 0014), and journals the raise when one
     /// is due. A session whose budget was under the cap does not count: it
-    /// did not test it. Critical memory pressure starts the count again. The
-    /// engine only says how much it can hold when a prompt overflows it, so
-    /// memory freed later is found by trying.
+    /// did not test it. Critical memory pressure starts the count again, and
+    /// so does an output limit the engine had no room for: that session
+    /// went on only because the proxy lowered it (ADR 0047), so its peak is
+    /// not one the engine held. The engine only says how much it can hold
+    /// when a prompt overflows it, so memory freed later is found by trying.
     fn note_engine_held(&mut self, session: &SessionRecord) -> Result<(), RunError> {
         let Some(cap) = self.ledger.context_cap else {
             return Ok(());
         };
         let label = session.label.as_str();
-        if session
-            .memory
-            .as_ref()
-            .is_some_and(|m| m.pressure_max >= CRITICAL_PRESSURE)
-        {
+        if engine_was_short(session.memory.as_ref(), &session.watchdog) {
             self.ledger.note_cap_pressed();
             return self.save();
         }
@@ -411,18 +412,12 @@ impl Runner {
         Ok(())
     }
 
-    /// Lifts the cap to the headroom share of a peak the engine held past
-    /// it (`Ledger::note_cap_overrun`, ADR 0026). True when it did: the
-    /// session did not test the new cap, so it does not count toward a raise.
+    /// Lifts the cap to a peak the engine held well past it, its headroom
+    /// share over the cap (`Ledger::note_cap_overrun`, ADRs 0026 and 0043).
+    /// True when it did: the session did not test the new cap, so it does
+    /// not count toward a raise.
     fn note_cap_overrun(&mut self, session: &SessionRecord) -> Result<bool, RunError> {
-        #[expect(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a context peak times a fraction is far below 2^53 and floors to a positive u64"
-        )]
-        let held = (session.context_peak as f64 * self.params.capacity_headroom).floor() as u64;
-        let Some(cap) = self.ledger.note_cap_overrun(held) else {
+        let Some(cap) = self.ledger.note_cap_overrun(session.context_peak) else {
             return Ok(false);
         };
         self.save()?;
@@ -492,4 +487,46 @@ fn session_prompt(prompt: &str, recovery: &Recovery) -> String {
         text = format!("{text}\n\n{note}");
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::PROVIDER_ERROR;
+
+    fn event(kind: &str) -> WatchdogEvent {
+        WatchdogEvent {
+            kind: kind.to_owned(),
+            detail: None,
+            turn: 1,
+            ms: 0,
+        }
+    }
+
+    fn pressure(max: u32) -> MemoryWindow {
+        MemoryWindow {
+            pressure_max: max,
+            ..MemoryWindow::default()
+        }
+    }
+
+    #[test]
+    fn critical_pressure_leaves_the_engine_short() {
+        assert!(engine_was_short(Some(&pressure(CRITICAL_PRESSURE)), &[]));
+        assert!(!engine_was_short(
+            Some(&pressure(CRITICAL_PRESSURE - 1)),
+            &[]
+        ));
+    }
+
+    #[test]
+    fn a_lowered_output_limit_leaves_the_engine_short() {
+        assert!(engine_was_short(None, &[event(OUTPUT_LIMIT_LOWERED)]));
+    }
+
+    #[test]
+    fn other_events_without_pressure_do_not() {
+        assert!(!engine_was_short(None, &[event(PROVIDER_ERROR)]));
+        assert!(!engine_was_short(None, &[]));
+    }
 }

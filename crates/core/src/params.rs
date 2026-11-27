@@ -33,6 +33,15 @@ pub struct RunParams {
     pub turn_budget: u32,
     /// A session at this multiple of its turn budget is stopped (ADR 0036).
     pub turn_abort: f64,
+    /// A builder or bootstrap session that still writes files at its turn
+    /// stop runs on, but is stopped at this multiple of its turn budget
+    /// whatever it does (ADR 0044). At or below `turnAbort` it does not
+    /// run on.
+    pub turn_ceiling: f64,
+    /// Past its turn stop, such a session is stopped once this many turns
+    /// pass without a write tool call that succeeded on a project file
+    /// outside `.tenaz/` (0: at the stop, as before).
+    pub turn_write_window: u32,
     /// Fraction of the context window a session should stay under.
     pub context_budget: f64,
     /// The same tool call N times in a row: steer.
@@ -56,6 +65,7 @@ pub struct RunParams {
     /// First backoff; doubles per retry up to 15 minutes.
     pub engine_retry_base_sec: u64,
     /// When the engine reports its maximum context, later sessions are steered at this fraction of it.
+    /// A held peak lifts the cap when this fraction of it is over the cap (ADR 0043).
     pub capacity_headroom: f64,
     /// A reported maximum below this is memory starvation: wait instead of shrinking the budget.
     pub context_floor: u64,
@@ -189,6 +199,8 @@ impl Default for RunParams {
             replan_every: 5,
             turn_budget: 40,
             turn_abort: 1.5,
+            turn_ceiling: 2.0,
+            turn_write_window: 5,
             context_budget: 0.65,
             loop_steer: 3,
             loop_abort: 5,
@@ -251,6 +263,18 @@ fn integral(n: f64) -> i64 {
     n as i64
 }
 
+/// `budget` times `factor`, rounded up. The small offset drops float
+/// error, so 50 turns at 1.1 are 55, not 56 (50 * 1.1 is
+/// 55.000000000000007).
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is whole after ceil, and the cast saturates: a negative product is 0 and one past u32::MAX is u32::MAX"
+)]
+fn turns_times(budget: u32, factor: f64) -> u32 {
+    (f64::from(budget) * factor - 1e-9).ceil() as u32
+}
+
 /// A rejected `--set key=value`.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ParamError {
@@ -267,6 +291,21 @@ pub enum ParamError {
 }
 
 impl RunParams {
+    /// The turn at which a session with `budget` turns is stopped:
+    /// `turnAbort` times the budget, rounded up.
+    pub fn turn_stop(&self, budget: u32) -> u32 {
+        turns_times(budget, self.turn_abort)
+    }
+
+    /// The turn at which a session with `budget` turns that still writes
+    /// files is stopped at the latest: `turnCeiling` times the budget,
+    /// rounded up. `None` when no session runs past [`Self::turn_stop`]:
+    /// `turnWriteWindow` is 0 or the ceiling is not past the stop.
+    pub fn turn_extension(&self, budget: u32) -> Option<u32> {
+        let ceiling = turns_times(budget, self.turn_ceiling);
+        (self.turn_write_window > 0 && ceiling > self.turn_stop(budget)).then_some(ceiling)
+    }
+
     /// The earlier reasoning the engine proxy keeps, in rough tokens, or
     /// `None` when it keeps all of it (`keepPastReasoning`, ADR 0028).
     pub fn past_reasoning_budget(&self) -> Option<u64> {
@@ -280,17 +319,17 @@ impl RunParams {
             .map_or(DEFAULT_MAX_OUTPUT_TOKENS, NonZeroU64::get)
     }
 
+    /// The `capacityHeadroom` share of `tokens`: what a lowering keeps of
+    /// the engine's figure, and the share of a held peak that must pass the
+    /// cap to lift it (ADR 0043).
+    pub fn headroom_share(&self, tokens: u64) -> u64 {
+        share_of(tokens, self.capacity_headroom)
+    }
+
     /// The context budget of a session on a model with `context_window`
     /// tokens: `contextBudget` of it, in whole tokens, before any cap.
     pub fn budget_tokens(&self, context_window: u64) -> u64 {
-        #[expect(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a context window times a fraction is far below 2^53 and floors to a positive u64"
-        )]
-        let budget = (context_window as f64 * self.context_budget).floor() as u64;
-        budget
+        share_of(context_window, self.context_budget)
     }
 
     /// Builders may declare heavy jobs (ADR 0010): `jobMinutes` is not 0.
@@ -366,6 +405,17 @@ impl RunParams {
     }
 }
 
+/// `fraction` of `tokens`, in whole tokens.
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a token count times a fraction from 0 to 1 is far below 2^53 and floors to a u64 of 0 or more"
+)]
+fn share_of(tokens: u64, fraction: f64) -> u64 {
+    (tokens as f64 * fraction).floor() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,7 +427,34 @@ mod tests {
         assert_eq!(p.context_floor, 32768);
         assert!((p.context_abort - 1.3).abs() < f64::EPSILON);
         assert!((p.turn_abort - 1.5).abs() < f64::EPSILON);
+        assert!((p.turn_ceiling - 2.0).abs() < f64::EPSILON);
+        assert_eq!(p.turn_write_window, 5);
         assert!(p.notify);
+    }
+
+    /// A run.json from before `turnCeiling` loads with its default, so a
+    /// resumed run lets a writing builder run on (ADR 0044).
+    #[test]
+    fn params_pinned_before_turn_ceiling_load_with_its_defaults() {
+        let p: RunParams = serde_json::from_str(r#"{"turnAbort": 1.5}"#).unwrap();
+        assert_eq!(p.turn_extension(40), Some(80));
+        assert_eq!(p.turn_write_window, 5);
+    }
+
+    /// A ceiling at or before the stop, or a window of 0, lets no session
+    /// run on.
+    #[test]
+    fn the_turn_extension_is_past_the_stop_or_none() {
+        let mut p = RunParams::default();
+        p.apply_override("turnCeiling=2.5").unwrap();
+        assert_eq!(p.turn_extension(40), Some(100));
+        p.apply_override("turnCeiling=1.5").unwrap();
+        assert_eq!((p.turn_stop(40), p.turn_extension(40)), (60, None));
+        p.apply_override("turnCeiling=1.2").unwrap();
+        assert_eq!(p.turn_extension(40), None);
+        p.apply_override("turnCeiling=2.0").unwrap();
+        p.apply_override("turnWriteWindow=0").unwrap();
+        assert_eq!(p.turn_extension(40), None);
     }
 
     /// A run.json from before `diffShare` and `harnessReserveTokens` loads

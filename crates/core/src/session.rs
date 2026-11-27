@@ -6,6 +6,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::trail::Trail;
+
 /// The abort reason of a session whose context the harness compacted twice.
 pub const SECOND_COMPACTION: &str = "second context compaction";
 
@@ -134,6 +136,13 @@ pub enum SessionEvent {
     /// The harness asked the engine to summarize its conversation, and the
     /// engine proxy refused: the session ends as one out of context.
     CompactionRefused,
+    /// The engine refused a request for its output limit, and the engine
+    /// proxy sent it again with the `fits` tokens the engine had room for,
+    /// in place of the `asked` ones ([`fitting_output_limit`]).
+    OutputLimitLowered {
+        asked: u64,
+        fits: u64,
+    },
     /// The harness asks whether a tool call may run. The session runner answers.
     PermissionRequest {
         id: String,
@@ -331,6 +340,12 @@ pub struct SessionMetrics {
     /// A turn started: Pi started one, or an ACP agent was sent a prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub turn_started: bool,
+    /// What the session did, for the session that continues its work. Not
+    /// a metric: carried in memory to the recovery, never journaled. Boxed,
+    /// so the futures that hold the metrics stay under
+    /// `clippy::large_futures`' limit.
+    #[serde(skip)]
+    pub trail: Box<Trail>,
 }
 
 impl SessionMetrics {
@@ -419,7 +434,9 @@ impl SessionMetrics {
         self.abort_reason.as_deref() == Some(SECOND_COMPACTION)
     }
 
-    /// The session was stopped at `turnAbort` times its turn budget.
+    /// The session was stopped by the turn rule: at `turnAbort` times its
+    /// turn budget, or past it once it stopped writing or reached
+    /// `turnCeiling` (ADR 0044).
     pub fn turns_stopped(&self) -> bool {
         self.abort_reason
             .as_deref()
@@ -456,10 +473,18 @@ impl SessionMetrics {
 /// failed.
 pub(crate) const PROVIDER_ERROR: &str = "provider-error";
 
+/// The kind of the watchdog event recorded for each request the engine
+/// proxy sent again with a lower output limit.
+pub(crate) const OUTPUT_LIMIT_LOWERED: &str = "output-limit-lowered";
+
 /// What fx says when a prompt does not fit the model's window.
 const CONTEXT_EXCEEDED: &str = "ContextCapacityExceeded";
 static CAPACITY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Maximum context[^:]*:\s*(\d+) tokens").expect("static regex"));
+static OUTPUT_LIMIT_REFUSAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"max_tokens (\d+) fits \(asked (\d+)\); maximum context: (\d+) tokens")
+        .expect("static regex")
+});
 static OUT_OF_MEMORY: LazyLock<Regex> = LazyLock::new(|| {
     // `OutOfMemory` in CamelCase, as Sushi and Metal name it, is matched
     // case-sensitively: without case it would match `layoutOfMemory`.
@@ -493,9 +518,44 @@ static IMAGE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Sushi names the largest prompt it can hold right now:
-/// "Maximum context at KV8 and prefill chunk 512: 61488 tokens."
+/// "Maximum context at KV8 and prefill chunk 512: 61488 tokens." When the
+/// prompt and the output limit asked do not fit together, it names the
+/// largest context for both, after the output limit asked: "… (asked
+/// 16384); maximum context: 99840 tokens". The prompt can have that less
+/// the limit asked, 83456 tokens.
 pub fn capacity_limit(error: &str) -> Option<u64> {
+    if let Some(refusal) = OUTPUT_LIMIT_REFUSAL.captures(error) {
+        let asked: u64 = refusal[2].parse().ok()?;
+        let context: u64 = refusal[3].parse().ok()?;
+        return Some(context.saturating_sub(asked));
+    }
     CAPACITY.captures(error).and_then(|c| c[1].parse().ok())
+}
+
+/// The output limit to send a refused request again with: Sushi refuses
+/// a request whose prompt and output limit together do not fit its
+/// memory, and names the limit that fits in the message that
+/// [`capacity_limit`] reads the maximum context from. `None`
+/// when the error names none, or a limit under a quarter of the one
+/// asked: replies are seldom long (Last Delivery, 5,521 replies: p99
+/// 5,678 tokens, p99.9 9,378 under a limit of 16,384), and a quarter
+/// keeps at the default limit 4,096 tokens, room for most replies,
+/// while a smaller one would cut too many of them.
+pub fn fitting_output_limit(error: &str) -> Option<OutputFit> {
+    let refusal = OUTPUT_LIMIT_REFUSAL.captures(error)?;
+    let fit = OutputFit {
+        fits: refusal[1].parse().ok()?,
+        asked: refusal[2].parse().ok()?,
+    };
+    (fit.fits < fit.asked && fit.fits.saturating_mul(4) >= fit.asked).then_some(fit)
+}
+
+/// The output limit a request asked for, and the lower one the engine had
+/// room for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OutputFit {
+    pub asked: u64,
+    pub fits: u64,
 }
 
 /// What the operator can do when the engine runs out of memory: in the
@@ -560,6 +620,7 @@ pub fn is_image_refusal(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::SUSHI_OUTPUT_LIMIT_REFUSAL;
 
     #[test]
     fn each_agents_file_tools_have_their_effect() {
@@ -786,6 +847,61 @@ mod tests {
         let msg = "400: {\"message\":\"Prompt (98353 tokens) requires ~4406MB GPU memory but only ~3494MB is available. Maximum context at KV8 and prefill chunk 512: 61488 tokens.\"}";
         assert_eq!(capacity_limit(msg), Some(61488));
         assert_eq!(capacity_limit("400: not enough GPU memory"), None);
+    }
+
+    /// The lower-case maximum is of the prompt and the output limit asked
+    /// together: the prompt has 99840 less 16384.
+    #[test]
+    fn an_output_limit_refusal_leaves_the_prompt_the_maximum_less_the_limit_asked() {
+        assert_eq!(capacity_limit(SUSHI_OUTPUT_LIMIT_REFUSAL), Some(83456));
+        assert_eq!(
+            capacity_limit("max_tokens 13186 fits (asked 16384)"),
+            None,
+            "no maximum named"
+        );
+        assert_eq!(
+            capacity_limit("400: maximum context: 8192 tokens"),
+            None,
+            "a maximum without the output limit is not Sushi's"
+        );
+    }
+
+    #[test]
+    fn the_output_limit_that_fits_is_read_from_the_engine_message() {
+        assert_eq!(
+            fitting_output_limit(SUSHI_OUTPUT_LIMIT_REFUSAL),
+            Some(OutputFit {
+                asked: 16384,
+                fits: 13186
+            })
+        );
+        let at = |fits: u64| {
+            format!("max_tokens {fits} fits (asked 16384); maximum context: 99840 tokens")
+        };
+        // A quarter of the limit asked is enough; less is not.
+        assert_eq!(fitting_output_limit(&at(4096)).map(|f| f.fits), Some(4096));
+        // The same run, session 027: too little room to be worth a reply.
+        assert_eq!(fitting_output_limit(&at(3696)), None);
+        assert_eq!(fitting_output_limit(&at(16384)), None, "nothing lower");
+        assert_eq!(fitting_output_limit("400: not enough GPU memory"), None);
+    }
+
+    #[test]
+    fn an_output_limit_refusal_is_memory_run_out_not_a_refused_request() {
+        assert!(is_out_of_memory(SUSHI_OUTPUT_LIMIT_REFUSAL));
+        assert!(!is_request_refusal(SUSHI_OUTPUT_LIMIT_REFUSAL));
+    }
+
+    /// Other engines say "maximum context length" of a prompt over the
+    /// model's window, which is not Sushi's room in memory.
+    #[test]
+    fn another_engine_s_maximum_context_length_is_not_a_capacity() {
+        for message in [
+            "400: This model's maximum context length is 8192 tokens.",
+            "400: maximum context length: 8192 tokens",
+        ] {
+            assert_eq!(capacity_limit(message), None, "{message}");
+        }
     }
 
     /// The text the engine proxy records is the text the preflight reads.

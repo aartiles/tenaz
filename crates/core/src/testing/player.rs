@@ -50,6 +50,12 @@ pub(super) struct Player {
     pub(super) told_writes: bool,
 }
 
+/// Whether review number `review` of `task` crashes: one of the first
+/// `count` that `crashed` names.
+fn crashes(crashed: Option<&(String, u32)>, task: &str, review: u32) -> bool {
+    crashed.is_some_and(|(at, count)| at == task && review <= *count)
+}
+
 /// Whether the script's `script_field` names `task`.
 pub(super) fn names(script_field: Option<&str>, task: &str) -> bool {
     script_field == Some(task)
@@ -346,16 +352,10 @@ impl Player {
         let file = field(prompt, "Review file")
             .unwrap_or(".tenaz/reviews/unknown.md")
             .to_owned();
-        if let Some((at, stop)) = &self.script.stop_at_review
-            && at == task
-        {
-            stop.cancel();
-            return self.hang().await;
-        }
-        if self.refused(|script| &script.oversize_review, task).await {
+        let Some(review) = self.review_starts(task).await else {
             return;
-        }
-        let first_review = self.bump(&format!("review-{task}")) == 1;
+        };
+        let first_review = review == 1;
         let first_of =
             |script_field: &Option<String>| first_review && names(script_field.as_deref(), task);
         if first_of(&self.script.outgrow_review) {
@@ -372,6 +372,27 @@ impl Player {
         } else {
             self.finish("Done.");
         }
+    }
+
+    /// The number of this review of `task`; `None` when the script stops,
+    /// refuses or crashes it before it starts reviewing.
+    async fn review_starts(&mut self, task: &str) -> Option<u32> {
+        if let Some((at, stop)) = &self.script.stop_at_review
+            && at == task
+        {
+            stop.cancel();
+            self.hang().await;
+            return None;
+        }
+        if self.refused(|script| &script.oversize_review, task).await {
+            return None;
+        }
+        let review = self.bump(&format!("review-{task}"));
+        if crashes(self.script.crashed_reviews.as_ref(), task, review) {
+            self.crash(true).await;
+            return None;
+        }
+        Some(review)
     }
 
     /// Splits `task` into two cards, the second depending on the first.
@@ -416,10 +437,15 @@ impl Player {
         self.emit(SessionEvent::TurnStart);
         let stderr = if in_tool {
             self.call += 1;
+            let command = self
+                .script
+                .crash_in_tool_command
+                .as_deref()
+                .unwrap_or("head -c 400 checks/result.json");
             self.emit(SessionEvent::ToolCallStart {
                 id: format!("call_{}", self.call),
                 name: "shell".to_owned(),
-                args: serde_json::json!({ "command": "head -c 400 checks/result.json" }),
+                args: serde_json::json!({ "command": command }),
                 effect: None,
             });
             "Error: stream did not contain valid UTF-8\n"
@@ -772,6 +798,16 @@ impl Player {
             return;
         }
         self.remove_private(task).await;
+        if self.first(
+            self.script.lowered_limit_task.as_deref(),
+            "lowered-limit",
+            task,
+        ) {
+            self.emit(SessionEvent::OutputLimitLowered {
+                asked: 16_384,
+                fits: 13_186,
+            });
+        }
         self.build(task).await;
     }
 

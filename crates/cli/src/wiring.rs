@@ -548,10 +548,10 @@ fn harness_usage(u: &tenaz_proxy::ProxyUsage) -> Usage {
     }
 }
 
-/// What the runner does with each proxy event: usage, engine errors and
-/// refused compactions go to the sessions' `feed`, whether the usage names
-/// cached tokens to `cache_report`, and repaired tool arguments to
-/// `repair_log`.
+/// What the runner does with each proxy event: usage, engine errors,
+/// refused compactions and lowered output limits go to the sessions'
+/// `feed`, whether the usage names cached tokens to `cache_report`, and
+/// repaired tool arguments to `repair_log`.
 fn proxy_observer(
     feed: tokio::sync::broadcast::Sender<EngineObservation>,
     cache_report: CacheReport,
@@ -580,6 +580,13 @@ fn proxy_observer(
         ProxyEvent::CompactionRefused { .. } => {
             tracing::info!("the proxy refused the agent's request to compact its context");
             let _ = feed.send(EngineObservation::CompactionRefused);
+        }
+        ProxyEvent::OutputLimitLowered { asked, fits, .. } => {
+            tracing::info!(
+                "the engine had room for {fits} of the {asked} output tokens a request asked; \
+                 the proxy sent it again with {fits}"
+            );
+            let _ = feed.send(EngineObservation::OutputLimitLowered { asked, fits });
         }
         ProxyEvent::ToolArgsRepaired {
             request,
@@ -908,6 +915,32 @@ mod tests {
             assert_eq!(refused.status(), 400, "{harness}");
             handle.stop().await;
         }
+    }
+
+    /// A request the proxy sent again with a lower output limit reaches the
+    /// sessions with the limit asked and the one that fit (ADR 0047).
+    #[test]
+    fn a_lowered_output_limit_reaches_the_sessions() {
+        use tenaz_acp::EngineObservation;
+        let (feed, mut sessions) = tokio::sync::broadcast::channel(8);
+        let observe =
+            super::proxy_observer(feed, tenaz_core::cache_report::CacheReport::new(), None);
+        observe(tenaz_proxy::ProxyEvent::OutputLimitLowered {
+            request: 3,
+            asked: 16384,
+            fits: 13186,
+        });
+        let got = sessions.try_recv();
+        assert!(
+            matches!(
+                got,
+                Ok(EngineObservation::OutputLimitLowered {
+                    asked: 16384,
+                    fits: 13186
+                })
+            ),
+            "{got:?}"
+        );
     }
 
     /// Only a dsh or Qwen Code run's proxy refuses a summary request.

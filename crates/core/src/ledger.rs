@@ -415,12 +415,14 @@ pub struct Ledger {
     /// Raises of the budget that the engine overflowed again.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub cap_failed_raises: u32,
-    /// The budget was raised and no session has overflowed since.
+    /// The budget was raised, or lifted to a held peak (ADR 0043), and no
+    /// session has overflowed since.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cap_raised: bool,
     /// The highest budget a raise may reach: the headroom share of what the
     /// engine said it can hold when a raised budget overflowed it. Dropped
-    /// when a raise is tried past it (ADR 0014).
+    /// when a raise is tried past it (ADR 0014), or a held peak lifts the
+    /// budget past it (ADR 0043).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cap_ceiling: Option<u64>,
     /// Kept for readers older than `lower_effort_roles`, and always written
@@ -460,6 +462,10 @@ pub struct Ledger {
     pub last_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
+    /// Done tasks accepted on `verify` alone because no reviewer gave a
+    /// verdict, and why; the final reviewer is told.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub unreviewed: BTreeMap<TaskId, String>,
 }
 
 impl Ledger {
@@ -536,6 +542,7 @@ impl Ledger {
             blocked_reason: None,
             last_error: None,
             origin: None,
+            unreviewed: BTreeMap::new(),
         }
     }
 
@@ -691,7 +698,9 @@ pub enum JournalRecord {
         context_cap: Option<u64>,
         clean_sessions: u32,
     },
-    /// A session the engine held past the run's cap lifted it (ADR 0026).
+    /// A session the engine held past the run's cap lifted it to its
+    /// `context_peak`, or removed it past the largest budget (ADRs 0026,
+    /// 0043).
     ContextCapOverrun {
         label: String,
         context_peak: u64,
@@ -745,6 +754,10 @@ pub enum JournalRecord {
         attempts: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reviewed: Option<bool>,
+        /// Why a done task was accepted on `verify` alone although the run
+        /// reviews: no reviewer gave a verdict.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unreviewed: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stopped_sessions: Option<Vec<StoppedAttempt>>,
     },
@@ -1262,6 +1275,7 @@ mod tests {
                 history: None,
                 attempts: Some(1),
                 reviewed: Some(true),
+                unreviewed: None,
                 stopped_sessions: Some(vec![]),
             },
         };

@@ -1,6 +1,8 @@
 # ADR 0026: A peak the engine held raises the cap
 
-Status: accepted, 2026-11-06.
+Status: accepted, 2026-11-06. Amended by ADR 0043: the cap rises to the
+peak itself, not to the headroom share of it, and that lift is a raise
+tried.
 
 ## Context
 
@@ -45,7 +47,8 @@ that overshoot show it; here it is added to the raises, not instead.
 C. It uses only what the engine has shown, with the same headroom as a
 lowering, so it does not raise the risk of an overflow: if the engine
 overflows anyway, the cap is lowered as before. The raises of ADR 0014
-still climb above it.
+still climb above it. ADR 0043 lifts the cap to the peak itself, so a
+lift is now a raise tried.
 
 ## Consequences
 
@@ -55,7 +58,8 @@ still climb above it.
   cap to 49067 and its successor's stop to 63787.
 - The journal gains a `context-cap-overrun` record with the session's
   `context_peak` and the new `context_cap`.
-- A raise this way is not a raise tried: it never doubles a wait. The
-  engine held more than any raise still pending, so that raise counts as
-  held. The session that lifts the cap did not test the new one, and the
-  count toward the next raise starts again.
+- A raise this way is not a raise tried: it never doubles a wait. (Amended
+  by ADR 0043: it is now a raise tried, and a ceiling under the peak is
+  dropped.) The engine held more than any raise still pending, so that
+  raise counts as held. The session that lifts the cap did not test the
+  new one, and the count toward the next raise starts again.

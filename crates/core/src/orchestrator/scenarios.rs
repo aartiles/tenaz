@@ -7,11 +7,13 @@ mod failed_session;
 mod harness_exit;
 mod harness_start;
 mod job;
+mod lowered_output_limit;
 mod output_limit;
 mod paused_continuation;
 mod preflight;
 mod private_removed;
 mod prompt_fit;
+mod review_retry;
 mod role_models;
 mod scripted_run;
 mod stop_grace;
@@ -25,14 +27,15 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use super::{Deps, InitOptions, RunOptions, Runner, Templates, init};
+use super::{Deps, InitOptions, RunOptions, Runner, init};
 use crate::ledger::{HarnessKind, JournalRecord, Launch, ModelConfig, Phase, SessionRecord};
 use crate::params::RunParams;
 use crate::ports::{Clock, Harness};
-use crate::project::Project;
+use crate::project::{PROTOCOL, Project};
 use crate::role::Role;
 use crate::testing::{
     ScriptedHarness, ScriptedJobs, ScriptedVerify, SilentNotifier, SnapshotVcs, VirtualClock,
+    shipped_templates,
 };
 use crate::write_scope::WriteScope;
 
@@ -72,8 +75,7 @@ fn try_fake_project(
         role_models: BTreeMap::new(),
         role_thinking: BTreeMap::new(),
     };
-    let templates =
-        Templates::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/templates")).unwrap();
+    let templates = shipped_templates();
     let options = InitOptions {
         launch: Launch::default(),
         brief: Some(brief),
@@ -301,4 +303,42 @@ async fn a_stop_during_the_capacity_wait_pauses_before_the_rerun() {
     });
     assert!(capped.is_some(), "the engine never ran out of memory");
     assert_eq!(paused, capped, "the run did not pause in the capacity wait");
+}
+
+/// `init` and `--refresh-templates` write the protocol with the run's own
+/// `verify` time limit; the ledger pins the hash of the shipped templates.
+#[tokio::test(start_paused = true)]
+async fn the_written_protocol_names_the_run_s_verify_limit() {
+    let work = tempfile::tempdir().unwrap();
+    let (project, vcs) = fake_project(work.path(), &["verifyTimeoutSec=240"]);
+    let protocol = || project.read(PROTOCOL).unwrap();
+    let pinned = || project.load_ledger().unwrap().templates_sha256;
+    assert!(
+        protocol().contains("finish within 240 seconds"),
+        "{}",
+        protocol()
+    );
+    assert_eq!(pinned(), shipped_templates().sha256());
+    project.write(PROTOCOL, "stale\n").unwrap();
+    let deps = deps(
+        &project,
+        vcs,
+        Arc::new(ScriptedHarness::default()),
+        Arc::new(VirtualClock::new()),
+    );
+    let options = RunOptions {
+        refresh_templates: Some(shipped_templates()),
+        ..RunOptions::default()
+    };
+    // The refresh comes before the first session; the run plays out as
+    // the fake goal's happy path.
+    try_run(&project, deps, CancellationToken::new(), options)
+        .await
+        .unwrap();
+    assert!(
+        protocol().contains("finish within 240 seconds"),
+        "{}",
+        protocol()
+    );
+    assert_eq!(pinned(), shipped_templates().sha256());
 }

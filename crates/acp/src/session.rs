@@ -37,6 +37,12 @@ pub enum EngineObservation {
     },
     /// The proxy refused the agent's request to summarize its conversation.
     CompactionRefused,
+    /// The proxy sent a request again with the output limit the engine
+    /// had room for: the request goes on, so its turn does not end.
+    OutputLimitLowered {
+        asked: u64,
+        fits: u64,
+    },
 }
 
 /// The runner's stop reason for an OpenAI-style `finish_reason`. Without
@@ -335,7 +341,9 @@ impl Running {
         }
     }
 
-    /// A model request the proxy saw end: its turn's events, then a new turn.
+    /// What the proxy saw of a model request: an ended one gives its turn's
+    /// events, then a new turn; a refused compaction or a lowered output
+    /// limit only its event, while the request goes on.
     fn observe(&mut self, observation: EngineObservation) {
         self.request_seen = true;
         let events = match observation {
@@ -349,6 +357,10 @@ impl Running {
                     .end_request(&format!("{stop_reason:?}, {} output tokens", usage.output));
                 self.translator
                     .request_end(usage, stop_reason, None, server, sent.map(|s| *s))
+            }
+            EngineObservation::OutputLimitLowered { asked, fits } => {
+                self.emit(SessionEvent::OutputLimitLowered { asked, fits });
+                return;
             }
             EngineObservation::CompactionRefused => {
                 self.thinking.end_request("compaction refused");

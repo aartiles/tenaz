@@ -64,6 +64,11 @@ pub enum ProxyEvent {
     /// proxy refused instead of forwarding it (see
     /// [`crate::Proxy::compaction_prompt_opening`]).
     CompactionRefused { request: u64 },
+    /// The engine refused the request for its output limit and named the
+    /// one it had room for ([`tenaz_core::session::fitting_output_limit`]):
+    /// the proxy sent it again with `fits` tokens in place of `asked`.
+    /// What the engine answered then is reported as for any request.
+    OutputLimitLowered { request: u64, asked: u64, fits: u64 },
 }
 
 /// Receives proxy events (the runner feeds them to its watchdog and journal).

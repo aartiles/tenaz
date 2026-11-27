@@ -13,7 +13,9 @@ crates/
                            engine error messages, tool-argument repair, the session's
                            role's reasoning effort (ADR 0042), lowered after a cut reply,
                            the run's output limit on requests without one
-                           (ADR 0041), replies at the output limit reported as cut, and
+                           (ADR 0041), replies at the output limit reported as cut,
+                           a request Sushi refuses for its output limit sent again once
+                           with the limit that fits (ADR 0046), and
                            a harness's own compaction request refused when set (Qwen Code and
                            dsh, ADRs 0022, 0030),
                            earlier reasoning removed in steps over a budget (ADRs 0023, 0028), and
@@ -46,6 +48,7 @@ Pure modules, each unit-tested without I/O:
 | `write_scope` | Where a session may write without the sandbox, and whether a write tool's target is outside it (ADR 0008). |
 | `session` | Harness-neutral session events, usage, metrics, outcome classification (engine failure, capacity limit, image refusal, refused request). |
 | `briefing` | Prompt packing: role prompt (for the bootstrap, its step's part), spec, map, card, notes, continuation notes. |
+| `trail` | What a session did, from its events, for the session that continues it: files its write tools wrote, the last check and the end of its result, the last words; the trails of one work's sessions add up, and `briefing` puts them into words (ADR 0045). |
 | `role` | The session roles, their prompt paths and what a steered session is asked to write before it stops. |
 | `role_models` | The `--model-for ROLE=ID` and `--thinking-for ROLE=LEVEL` maps: their checks at `init` and the models and levels pinned in `run.json` (ADRs 0011, 0042). |
 | `cache_report` | Whether the engine's usage names its cached tokens, noted by the engine proxy for the preflight. |

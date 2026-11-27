@@ -3,12 +3,13 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::briefing::count_turns;
 use crate::novelty::Novelty;
 use crate::params::RunParams;
 use crate::session::{
-    HARNESS_COMPACTION, PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent, SessionMetrics,
-    StopReason, ToolEffect, WatchdogEvent, capacity_limit, command_arg, is_image_refusal,
-    is_out_of_memory, is_request_refusal, path_arg, tool_effect,
+    HARNESS_COMPACTION, OUTPUT_LIMIT_LOWERED, PROVIDER_ERROR, SECOND_COMPACTION, SessionEvent,
+    SessionMetrics, StopReason, ToolEffect, WatchdogEvent, capacity_limit, command_arg,
+    is_image_refusal, is_out_of_memory, is_request_refusal, path_arg, tool_effect,
 };
 use crate::util::{approx_tokens, sha256_hex};
 use crate::write_scope::WriteScope;
@@ -25,6 +26,8 @@ pub struct WatchConfig {
     pub turns: u32,
     pub context_tokens: u64,
     /// Count turns without a file change (builder and bootstrap sessions).
+    /// Such a session may also run past its turn stop while it writes
+    /// (ADR 0044).
     pub idle: bool,
     /// What a steer asks the session to do before it stops ([`Role::wrap_up`]).
     pub wrap_up: &'static str,
@@ -81,6 +84,9 @@ pub struct Watchdog {
     last_key: Option<String>,
     same_count: u32,
     idle_turns: i64,
+    /// The turns that had ended when the session last wrote a file of its
+    /// work, for the turn stop (ADR 0044).
+    wrote_at: Option<u32>,
     recent: VecDeque<String>,
     call_args: HashMap<String, (String, serde_json::Value)>,
     /// When each open tool call started (ms into the session).
@@ -109,6 +115,7 @@ impl Watchdog {
             last_key: None,
             same_count: 0,
             idle_turns: 0,
+            wrote_at: None,
             recent: VecDeque::new(),
             call_args: HashMap::new(),
             call_started: HashMap::new(),
@@ -233,17 +240,29 @@ impl Watchdog {
     pub fn finish(&mut self, exit_code: Option<i32>, duration_ms: u64) {
         self.metrics.exit_code = exit_code;
         self.metrics.duration_ms = duration_ms;
-        self.metrics.tool_in_flight =
-            self.call_args
-                .iter()
-                .min_by_key(|(id, _)| id.as_str())
-                .map(|(_, (name, args))| {
-                    let call = format!("{name} {args}");
-                    match call.char_indices().nth(IN_FLIGHT_CHARS) {
-                        Some((cut, _)) => format!("{}…", &call[..cut]),
-                        None => call,
-                    }
-                });
+        self.metrics.tool_in_flight = self.call_in_flight().map(|(name, args)| {
+            let call = format!("{name} {args}");
+            match call.char_indices().nth(IN_FLIGHT_CHARS) {
+                Some((cut, _)) => format!("{}…", &call[..cut]),
+                None => call,
+            }
+        });
+    }
+
+    /// The whole shell command of the call [`Self::finish`] records as in
+    /// flight, which the journal keeps cut; `None` when that call runs no
+    /// command.
+    pub fn command_in_flight(&self) -> Option<&str> {
+        self.call_in_flight()
+            .and_then(|(_, args)| command_arg(args))
+    }
+
+    /// The first call started and not ended, by ID: its name and arguments.
+    fn call_in_flight(&self) -> Option<&(String, serde_json::Value)> {
+        self.call_args
+            .iter()
+            .min_by_key(|(id, _)| id.as_str())
+            .map(|(_, call)| call)
     }
 
     /// Feeds one event. `fingerprint` is evaluated only when the idle rule
@@ -255,6 +274,11 @@ impl Watchdog {
         fingerprint: impl FnOnce() -> String,
     ) -> Vec<Action> {
         let mut actions = self.release_held_stop(event, elapsed_ms);
+        if let Some(path) = self.metrics.trail.observe(event)
+            && self.writes_work(&path)
+        {
+            self.wrote_at = Some(self.metrics.turns);
+        }
         match event {
             SessionEvent::PromptRejected { reason } => self.abort(
                 &format!("prompt rejected: {reason}"),
@@ -264,16 +288,8 @@ impl Watchdog {
             call @ SessionEvent::ToolCallStart { .. } => {
                 self.tool_call(call, elapsed_ms, &mut actions);
             }
-            SessionEvent::ToolCallEnd {
-                id,
-                name,
-                result_text,
-                is_error,
-            } => {
-                if *is_error {
-                    self.count_tool_error(name, result_text);
-                }
-                self.tool_end(id, name, result_text, elapsed_ms, &mut actions);
+            end @ SessionEvent::ToolCallEnd { .. } => {
+                self.tool_ended(end, elapsed_ms, &mut actions);
             }
             SessionEvent::MessageEnd {
                 usage,
@@ -299,23 +315,31 @@ impl Watchdog {
                 self.compaction_started(reason, elapsed_ms, &mut actions);
             }
             SessionEvent::CompactionRefused => self.compaction_refused(elapsed_ms, &mut actions),
-            SessionEvent::Settled { aborted } => {
-                self.call_started.clear();
-                let interrupted = std::mem::take(&mut self.interrupting);
-                if *aborted && interrupted && self.metrics.abort_reason.is_none() {
-                    // The turn a tool timeout stopped; the session goes on.
-                } else if *aborted || self.metrics.abort_reason.is_some() {
-                    self.metrics.aborted = true;
-                } else {
-                    self.metrics.settled = true;
-                }
+            SessionEvent::OutputLimitLowered { asked, fits } => {
+                self.output_limit_lowered(*asked, *fits, elapsed_ms);
             }
+            SessionEvent::Settled { aborted } => self.settled(*aborted),
             SessionEvent::TurnStart => self.metrics.turn_started = true,
             SessionEvent::FirstToken
             | SessionEvent::PermissionRequest { .. }
             | SessionEvent::Exited { .. } => {}
         }
         actions
+    }
+
+    /// The harness finished every queued prompt, or was `aborted`.
+    fn settled(&mut self, aborted: bool) {
+        self.call_started.clear();
+        let interrupted = std::mem::take(&mut self.interrupting);
+        let aborting = self.aborting();
+        let tool_timeout = aborted && interrupted && !aborting;
+        if tool_timeout {
+            // The turn a tool timeout stopped; the session goes on.
+        } else if aborted || aborting {
+            self.metrics.aborted = true;
+        } else {
+            self.metrics.settled = true;
+        }
     }
 
     /// A held context stop, applied once the next reply starts.
@@ -370,6 +394,14 @@ impl Watchdog {
         if self.watch.is_some() {
             self.abort(HARNESS_COMPACTION, elapsed_ms, actions);
         }
+    }
+
+    fn output_limit_lowered(&mut self, asked: u64, fits: u64, elapsed_ms: u64) {
+        let detail = format!(
+            "the engine had room for {fits} of the {asked} output tokens asked; \
+             the proxy sent the request again with {fits}"
+        );
+        self.event(OUTPUT_LIMIT_LOWERED, Some(&detail), elapsed_ms);
     }
 
     fn event(&mut self, kind: &str, detail: Option<&str>, elapsed_ms: u64) {
@@ -501,6 +533,25 @@ impl Watchdog {
             );
             self.steer("outside-write", &message, elapsed_ms, actions);
         }
+    }
+
+    /// A tool call ended: counted if it failed, then the output and repeat
+    /// rules. A write of the session's work that did not fail is noted as
+    /// the trail sees it end, in [`Self::handle`].
+    fn tool_ended(&mut self, end: &SessionEvent, elapsed_ms: u64, actions: &mut Vec<Action>) {
+        let SessionEvent::ToolCallEnd {
+            id,
+            name,
+            result_text,
+            is_error,
+        } = end
+        else {
+            return;
+        };
+        if *is_error {
+            self.count_tool_error(name, result_text);
+        }
+        self.tool_end(id, name, result_text, elapsed_ms, actions);
     }
 
     fn tool_end(
@@ -756,30 +807,89 @@ impl Watchdog {
                 self.steer("idle", &message, elapsed_ms, actions);
             }
         }
-        if f64::from(self.metrics.turns) >= turn_stop(watch.turns, self.params.turn_abort) {
-            self.abort(
-                &format!(
-                    "turn budget exceeded ({}/{})",
-                    self.metrics.turns, watch.turns
-                ),
-                elapsed_ms,
-                actions,
-            );
-        } else if self.metrics.turns >= watch.turns {
-            let message = format!(
-                "You have used your turn budget ({}). {}",
-                watch.turns, watch.wrap_up
-            );
-            self.steer("turns", &message, elapsed_ms, actions);
+        self.turn_rule(watch, elapsed_ms, actions);
+    }
+
+    /// Steers a session at its turn budget and stops it at its turn stop,
+    /// unless it still writes files: then it runs on until a window of
+    /// turns passes without a write, or to the ceiling (ADR 0044).
+    fn turn_rule(&mut self, watch: WatchConfig, elapsed_ms: u64, actions: &mut Vec<Action>) {
+        let turns = self.metrics.turns;
+        let stop = self.params.turn_stop(watch.turns);
+        if turns < stop {
+            if turns >= watch.turns {
+                let message = format!(
+                    "You have used your turn budget ({}). {}",
+                    watch.turns, watch.wrap_up
+                );
+                self.steer("turns", &message, elapsed_ms, actions);
+            }
+            return;
         }
+        if let Some(ceiling) = self.runs_past_stop(watch) {
+            let window = count_turns(self.params.turn_write_window);
+            let message = format!(
+                "You have reached {stop} turns, where a session is stopped. You are still writing files, so this session goes on, but it is stopped once {window} pass without a file written, and at {ceiling} turns at the latest. Finish the change now and run ./verify, then write your handoff notes and stop."
+            );
+            self.steer("turns-past-stop", &message, elapsed_ms, actions);
+            return;
+        }
+        self.abort(
+            &format!("turn budget exceeded ({turns}/{})", watch.turns),
+            elapsed_ms,
+            actions,
+        );
+    }
+
+    /// The ceiling a session past its turn stop runs on to, when it may:
+    /// it edits code, the run lets sessions run on, and it wrote a file of
+    /// its work in the last `turnWriteWindow` turns.
+    fn runs_past_stop(&self, watch: WatchConfig) -> Option<u32> {
+        let ceiling = self
+            .params
+            .turn_extension(watch.turns)
+            .filter(|_| watch.idle)?;
+        let recent = self
+            .wrote_at
+            .is_some_and(|at| self.metrics.turns - at <= self.params.turn_write_window);
+        (recent && self.metrics.turns < ceiling).then_some(ceiling)
+    }
+
+    /// Whether a file a write tool wrote is the task's work: a project file
+    /// outside `.tenaz/`, where the handoff notes are. Without a scope (a
+    /// sandboxed run) the project root is unknown, so only a relative path
+    /// that stays below it counts.
+    fn writes_work(&self, path: &str) -> bool {
+        let relative = match &self.write_scope {
+            Some(scope) => scope.relative(path),
+            None => below_root(path),
+        };
+        relative.is_some_and(|path| !path.starts_with(".tenaz"))
     }
 }
 
-/// The turn at which a session with `budget` turns is stopped: `abort`
-/// times the budget, rounded up. The small offset drops float error, so
-/// 50 turns at 1.1 stop at 55, not at 56 (50 * 1.1 is 55.000000000000007).
-fn turn_stop(budget: u32, abort: f64) -> f64 {
-    (f64::from(budget) * abort - 1e-9).ceil()
+/// `path` with `.` and `..` taken out, when it is relative, does not climb
+/// above where it starts and names a file below it. A path from `~` is
+/// the home directory, not a relative one.
+fn below_root(path: &str) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+    if path.starts_with('~') {
+        return None;
+    }
+    let mut below = std::path::PathBuf::new();
+    for component in std::path::Path::new(path).components() {
+        match component {
+            Component::Normal(part) => below.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !below.pop() {
+                    return None;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    (!below.as_os_str().is_empty()).then_some(below)
 }
 
 #[cfg(test)]
@@ -835,6 +945,31 @@ mod tests {
         actions
             .iter()
             .any(|a| matches!(a, Action::Steer { key: k, .. } if k == key))
+    }
+
+    /// The session's metrics keep its trail for a continuation.
+    #[test]
+    fn tool_calls_and_replies_reach_the_trail() {
+        let mut w = watched();
+        call(
+            &mut w,
+            1,
+            "write",
+            &serde_json::json!({"path": "src/a.js"}),
+            "",
+        );
+        call(
+            &mut w,
+            2,
+            "bash",
+            &serde_json::json!({"command": "./verify"}),
+            "ok",
+        );
+        w.handle(&crate::trail::testing::reply("Done.", None), 0, String::new);
+        let trail = &w.metrics().trail;
+        assert_eq!(trail.written(), ["src/a.js"]);
+        assert_eq!(trail.last_words(), "Done.");
+        assert_eq!(trail.check().map(|c| c.result.as_str()), Some("ok"));
     }
 
     #[test]
@@ -1120,6 +1255,22 @@ mod tests {
         for input in [40_000, 44_000, 48_000, 52_000] {
             assert!(message(&mut off, input, StopReason::ToolUse, None).is_empty());
         }
+    }
+
+    /// Sushi's refusal of an output limit, as recorded: the prompt's room
+    /// in memory, and memory run out.
+    #[test]
+    fn an_output_limit_refusal_records_the_prompt_s_room() {
+        let mut w = watched();
+        message(
+            &mut w,
+            0,
+            StopReason::Error,
+            Some(crate::testing::SUSHI_OUTPUT_LIMIT_REFUSAL),
+        );
+        let m = w.metrics();
+        assert_eq!(m.capacity_limits, vec![83_456]);
+        assert!(m.engine_out_of_memory);
     }
 
     #[test]
@@ -1603,6 +1754,242 @@ mod tests {
         assert_eq!(turn_rule(0.0, 4, 2), (vec![], vec![1]));
     }
 
+    /// What one turn of a builder does, for the turn stop past the budget.
+    #[derive(Clone, Copy)]
+    enum Turn {
+        /// Writes a project file with a write tool.
+        Writes,
+        /// Calls a write tool that fails (an edit whose old text is not
+        /// there).
+        FailsToWrite,
+        /// Writes its handoff notes under `.tenaz/notes/`.
+        WritesNotes,
+        /// Changes the working tree with a shell command, no write tool.
+        Shell,
+        /// Reads a file it has not read before.
+        Reads,
+    }
+
+    /// The parameters these tests are written for, named rather than taken
+    /// from the defaults: stop at 1.5 times the budget, run on to 2 times
+    /// it while writing, stopped after 5 turns without a write.
+    fn run_on_params() -> RunParams {
+        RunParams {
+            turn_abort: 1.5,
+            turn_ceiling: 2.0,
+            turn_write_window: 5,
+            ..RunParams::default()
+        }
+    }
+
+    /// A builder with a budget of 40 turns; `idle` off is a role that edits
+    /// no code.
+    fn builder(params: RunParams, idle: bool) -> Watchdog {
+        let mut w = Watchdog::new(
+            params,
+            Some(WatchConfig {
+                turns: 40,
+                context_tokens: 60_000,
+                idle,
+                wrap_up: Role::Builder.wrap_up(),
+            }),
+        );
+        w.set_fingerprint(Some("0".into()));
+        w
+    }
+
+    /// One call of `name` with `args` that ends with `is_error`.
+    fn call_and_end(w: &mut Watchdog, name: &str, args: serde_json::Value, is_error: bool) {
+        w.handle(&tool_call(name, args), 0, String::new);
+        let end = SessionEvent::ToolCallEnd {
+            id: "c".into(),
+            name: name.into(),
+            result_text: if is_error { "no match" } else { "ok" }.into(),
+            is_error,
+        };
+        w.handle(&end, 0, String::new);
+    }
+
+    /// The calls of turn `n`, and the working tree after them.
+    fn do_turn(w: &mut Watchdog, n: u32, turn: Turn, tree: &mut u32) {
+        let file = |dir: &str| serde_json::json!({ "path": format!("{dir}/{n}.js"), "n": n });
+        match turn {
+            Turn::Writes => call_and_end(w, "write", file("src"), false),
+            Turn::FailsToWrite => call_and_end(w, "edit", file("src"), true),
+            Turn::WritesNotes => call_and_end(w, "write", file(".tenaz/notes"), false),
+            Turn::Shell => *tree += 1,
+            Turn::Reads => call_and_end(w, "read", file("lib"), false),
+        }
+    }
+
+    /// Plays `turns`, one per turn: the turn the builder was stopped at, if
+    /// it was, and the steers it got on the way, with their turn.
+    fn play_builder(mut w: Watchdog, turns: &[Turn]) -> (Option<u32>, Vec<(u32, String)>) {
+        let mut tree = 0;
+        let mut steers = Vec::new();
+        for (n, turn) in (1..).zip(turns) {
+            do_turn(&mut w, n, *turn, &mut tree);
+            for action in w.handle(&SessionEvent::TurnEnd, 0, || tree.to_string()) {
+                if let Action::Abort { reason } = action {
+                    assert_eq!(reason, format!("turn budget exceeded ({n}/40)"));
+                    return (Some(n), steers);
+                }
+                steers.push((n, steer_key(action)));
+            }
+        }
+        (None, steers)
+    }
+
+    fn steer_key(action: Action) -> String {
+        match action {
+            Action::Steer { key, .. } => key,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// `first` turns like a builder that writes about one turn in three
+    /// (HB 013-builder-T005 wrote in 21 of its 60 turns), then `rest`.
+    fn writing_then(first: usize, rest: &[Turn]) -> Vec<Turn> {
+        let mut turns: Vec<Turn> = (0..first)
+            .map(|n| {
+                if n % 3 == 2 {
+                    Turn::Writes
+                } else {
+                    Turn::Reads
+                }
+            })
+            .collect();
+        turns.extend_from_slice(rest);
+        turns
+    }
+
+    /// When a builder that writes in `first` turns as [`writing_then`] and
+    /// then only does `then` is stopped.
+    fn stopped_after(first: usize, then: Turn) -> Option<u32> {
+        let turns = writing_then(first, &[then; 40]);
+        play_builder(builder(run_on_params(), true), &turns).0
+    }
+
+    fn steer_keys(steers: &[(u32, String)]) -> Vec<(u32, &str)> {
+        steers.iter().map(|(n, key)| (*n, key.as_str())).collect()
+    }
+
+    #[test]
+    fn a_builder_still_writing_at_the_turn_stop_runs_on_to_the_ceiling() {
+        // Its last write before turn 80 is in turn 78: only the ceiling
+        // stops it.
+        let turns = writing_then(100, &[]);
+        let (stopped, steers) = play_builder(builder(run_on_params(), true), &turns);
+        assert_eq!(stopped, Some(80));
+        assert_eq!(
+            steer_keys(&steers),
+            vec![(40, "turns"), (60, "turns-past-stop")]
+        );
+    }
+
+    #[test]
+    fn a_builder_that_stopped_writing_is_stopped_at_the_turn_stop_though_it_reads() {
+        // HBi 061-builder-T102cb read on and wrote nothing in its last
+        // turns; its next session was stopped at 60 too. Here the last
+        // write is in turn 54, so turns 55 to 60 have none.
+        let turns = writing_then(54, &[Turn::Reads; 40]);
+        let (stopped, steers) = play_builder(builder(run_on_params(), true), &turns);
+        assert_eq!(stopped, Some(60));
+        assert_eq!(steer_keys(&steers), vec![(40, "turns")]);
+    }
+
+    /// The last write is in turn 66: turns 67 to 70 run on, and turn 71,
+    /// the fifth without a write, stops it.
+    #[test]
+    fn a_builder_let_past_the_stop_is_stopped_once_it_stops_writing() {
+        let mut turns = writing_then(65, &[Turn::Writes]);
+        turns.extend_from_slice(&[Turn::Reads; 20]);
+        let (stopped, _) = play_builder(builder(run_on_params(), true), &turns);
+        assert_eq!(stopped, Some(71));
+    }
+
+    /// Only a write that succeeded on a project file outside `.tenaz/`
+    /// counts: not a failed edit, not the handoff notes, not a file the
+    /// shell changed (the runs measured write calls only, ADR 0044). The
+    /// last write is in turn 57, so the window lapses after turn 62.
+    #[test]
+    fn failed_writes_notes_and_shell_changes_do_not_keep_a_builder_past_the_stop() {
+        for then in [Turn::FailsToWrite, Turn::WritesNotes, Turn::Shell] {
+            assert_eq!(stopped_after(57, then), Some(62));
+        }
+        assert_eq!(stopped_after(57, Turn::Writes), Some(80));
+    }
+
+    /// In a run with a write scope, only a file in the project and outside
+    /// its `.tenaz/` is the session's work, however the path is written.
+    #[test]
+    fn only_project_files_outside_tenaz_are_work() {
+        let w = scoped(builder(run_on_params(), true));
+        let work = |path: &str| w.writes_work(path);
+        for path in ["src/a.js", "./src/a.js", "/work/app/src/a.js"] {
+            assert!(work(path), "{path}");
+        }
+        for path in [
+            "/tmp/a.js",
+            "../a.js",
+            "/work/app/.tenaz/notes/T001.md",
+            "./src/../.tenaz/notes/T001.md",
+        ] {
+            assert!(!work(path), "{path}");
+        }
+    }
+
+    /// A sandboxed run has no scope: only a relative path that stays in the
+    /// project and outside `.tenaz/` is work, so an absolute path never
+    /// keeps a session past its stop.
+    #[test]
+    fn without_a_scope_only_relative_project_files_outside_tenaz_are_work() {
+        let w = builder(run_on_params(), true);
+        let work = |path: &str| w.writes_work(path);
+        for path in ["src/a.js", "./src/a.js", "src/x/../a.js"] {
+            assert!(work(path), "{path}");
+        }
+        for path in [
+            "/work/app/src/a.js",
+            "/work/app/.tenaz/notes/T001.md",
+            "../a.js",
+            "src/../../a.js",
+            ".tenaz/notes/T001.md",
+            "src/../.tenaz/notes/T001.md",
+            "~/a.js",
+            "",
+            "src/..",
+        ] {
+            assert!(!work(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_session_that_edits_no_code_is_stopped_at_the_turn_stop_while_it_writes() {
+        // A reviewer or planner (`idle` off).
+        let turns = writing_then(100, &[]);
+        let (stopped, _) = play_builder(builder(run_on_params(), false), &turns);
+        assert_eq!(stopped, Some(60));
+    }
+
+    #[test]
+    fn a_ceiling_at_the_stop_or_a_window_of_0_keeps_no_session_past_the_stop() {
+        let turns = writing_then(100, &[]);
+        let at_stop = RunParams {
+            turn_ceiling: 1.5,
+            ..run_on_params()
+        };
+        let no_window = RunParams {
+            turn_write_window: 0,
+            ..run_on_params()
+        };
+        for params in [at_stop, no_window] {
+            let (stopped, steers) = play_builder(builder(params, true), &turns);
+            assert_eq!(stopped, Some(60));
+            assert_eq!(steer_keys(&steers), vec![(40, "turns")]);
+        }
+    }
+
     #[test]
     fn compaction_steers_then_aborts_and_settled_marks_the_outcome() {
         let mut w = watched();
@@ -1652,6 +2039,30 @@ mod tests {
         let m = w.into_metrics();
         assert!(m.aborted && m.context_stopped() && !m.compaction_stopped());
         assert_eq!(m.compactions, 1);
+    }
+
+    /// A request the proxy sent again with the output limit the engine had
+    /// room for is journaled, and is not an engine error: the session goes
+    /// on.
+    #[test]
+    fn a_lowered_output_limit_is_recorded_and_fails_nothing() {
+        let mut w = watched();
+        let lowered = SessionEvent::OutputLimitLowered {
+            asked: 16_384,
+            fits: 13_186,
+        };
+        assert!(w.handle(&lowered, 5, String::new).is_empty());
+        message(&mut w, 0, StopReason::Stop, None);
+        let m = w.metrics();
+        assert_eq!(m.provider_errors, 0);
+        assert!(!m.engine_failed() && !m.engine_out_of_memory);
+        let event = &m.events[0];
+        assert_eq!(event.kind, OUTPUT_LIMIT_LOWERED);
+        let detail = event.detail.as_deref().unwrap();
+        assert!(
+            detail.contains("13186") && detail.contains("16384"),
+            "{detail}"
+        );
     }
 
     /// A session nobody watches (the preflight) is only measured: the
@@ -1724,6 +2135,43 @@ mod tests {
             w.metrics().tool_in_flight.as_deref(),
             Some(r#"shell {"command":"head -c 400 x.json"}"#)
         );
+    }
+
+    #[test]
+    fn the_command_in_flight_is_kept_whole() {
+        let mut w = watched();
+        assert_eq!(w.command_in_flight(), None, "no call");
+        let start = |w: &mut Watchdog, id: &str, name: &str, args| {
+            w.handle(
+                &SessionEvent::ToolCallStart {
+                    id: id.into(),
+                    name: name.into(),
+                    args,
+                    effect: None,
+                },
+                0,
+                String::new,
+            );
+        };
+        start(&mut w, "c1", "read", serde_json::json!({"path": "a"}));
+        assert_eq!(w.command_in_flight(), None, "a call that runs no command");
+        let mut w = watched();
+        let long = format!("{}cat -e a", "x".repeat(IN_FLIGHT_CHARS));
+        start(
+            &mut w,
+            "c1",
+            "shell",
+            serde_json::json!({ "command": long }),
+        );
+        w.finish(Some(1), 1);
+        assert!(
+            w.metrics()
+                .tool_in_flight
+                .as_deref()
+                .unwrap()
+                .ends_with('…')
+        );
+        assert_eq!(w.command_in_flight(), Some(long.as_str()));
     }
 
     #[test]

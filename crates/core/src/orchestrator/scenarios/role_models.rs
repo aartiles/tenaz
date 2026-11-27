@@ -22,6 +22,7 @@ use crate::ports::{
 use crate::project::Project;
 use crate::role::Role;
 use crate::role_models::RoleModel;
+use crate::session::OUTPUT_LIMIT_LOWERED;
 use crate::testing::{ScriptedHarness, VirtualClock};
 
 /// The scripted harness, keeping the model each session was opened with
@@ -315,8 +316,10 @@ async fn the_planners_size_cards_for_the_builder_s_model() {
         .filter(|e| e.file_name().to_string_lossy().ends_with(".prompt.md"))
         .map(|e| std::fs::read_to_string(e.path()).unwrap())
         .collect();
+    let params = RunParams::default();
+    let turns = params.turn_budget;
     let sized = |budget| {
-        let text = briefing::card_sizing(budget);
+        let text = briefing::card_sizing(budget, turns, &params);
         prompts.iter().any(|p| p.contains(&text))
     };
     assert!(sized(42598), "no prompt sizes cards for 42598 tokens");
@@ -365,8 +368,8 @@ async fn a_raise_aims_at_the_largest_model_s_budget() {
 }
 
 /// A session the engine holds past the lowered cap, with no error, lifts
-/// the cap to the headroom share of its peak at once: waiting for a raise
-/// cut every session that needed more, until the run blocked.
+/// the cap to its peak at once: waiting for a raise cut every session that
+/// needed more, until the run blocked.
 #[tokio::test(start_paused = true)]
 async fn a_session_held_past_the_cap_raises_it_at_once() {
     let scripted = ScriptedHarness {
@@ -374,7 +377,9 @@ async fn a_session_held_past_the_cap_raises_it_at_once() {
         context_stop_task: Some("T001".into()),
         ..Default::default()
     };
-    let run = Played::with(scripted, &[]).await;
+    // A reviewer on a 262144 window makes the run's largest budget 170393.
+    let reviewer = (Role::Reviewer, role_model("r", 262_144));
+    let run = Played::with(scripted, &[reviewer]).await;
     let held = run
         .records
         .iter()
@@ -388,10 +393,112 @@ async fn a_session_held_past_the_cap_raises_it_at_once() {
         })
         .expect("the overrun lifted the cap");
     // The scripted harness's figures: its bootstrap engine failures lower
-    // the cap to 49190, and the run's largest budget is 85196. T001's
-    // builder outgrew it to 120020 with no engine error. The headroom
-    // share of that, 96016, is past the run's 85196: the cap is gone.
-    assert_eq!(held, (120_020, None));
+    // the cap to 49190. T001's builder outgrew it to 120020 with no engine
+    // error: the cap is that peak, not 0.8 of it (ADR 0043).
+    assert_eq!(held, (120_020, Some(120_020)));
+}
+
+/// The same session, kept going only because the engine proxy lowered its
+/// output limit, does not lift the cap: the engine said the full limit did
+/// not fit there, so the next session would be refused again (ADR 0047).
+#[tokio::test(start_paused = true)]
+async fn a_session_held_only_at_a_lowered_output_limit_does_not_lift_the_cap() {
+    let scripted = ScriptedHarness {
+        engine_failures: true,
+        context_stop_task: Some("T001".into()),
+        lowered_limit_task: Some("T001".into()),
+        ..Default::default()
+    };
+    // As above: the bootstrap's engine failures lower the cap to 49190,
+    // T001's builder outgrows it to 120020, and the reviewer makes the
+    // largest budget 170393, so 120020 would be a cap.
+    let reviewer = (Role::Reviewer, role_model("r", 262_144));
+    let run = Played::with(scripted, &[reviewer]).await;
+    let outgrown = run
+        .records
+        .iter()
+        .position(|r| session(r).is_some_and(|s| s.context_peak == 120_020))
+        .expect("T001's builder outgrew the cap");
+    let watchdog = &session(&run.records[outgrown]).unwrap().watchdog;
+    assert!(
+        watchdog.iter().any(|e| e.kind == OUTPUT_LIMIT_LOWERED),
+        "{watchdog:?}"
+    );
+    let overruns: Vec<_> = run
+        .records
+        .iter()
+        .filter(|r| matches!(r, JournalRecord::ContextCapOverrun { .. }))
+        .collect();
+    assert!(overruns.is_empty(), "{overruns:#?}");
+    // The next session still runs at the lowered cap, not at the builder's
+    // own budget of 85196 under a cap of 120020.
+    let next = run.records[outgrown + 1..].iter().find_map(session);
+    assert_eq!(next.map(|s| s.context_budget), Some(49190), "{next:#?}");
+}
+
+/// A session at the cap kept going at a lowered output limit starts the
+/// count toward a raise again: the engine was short of room in it (ADR
+/// 0047).
+#[tokio::test(start_paused = true)]
+async fn a_lowered_output_limit_starts_the_count_toward_a_raise_again() {
+    let scripted = ScriptedHarness {
+        engine_failures: true,
+        lowered_limit_task: Some("T002".into()),
+        ..Default::default()
+    };
+    let reviewer = (Role::Reviewer, role_model("r", 262_144));
+    let run = Played::with(scripted, &[reviewer]).await;
+    let lowered = run
+        .records
+        .iter()
+        .position(|r| {
+            session(r).is_some_and(|s| s.watchdog.iter().any(|e| e.kind == OUTPUT_LIMIT_LOWERED))
+        })
+        .expect("T002's builder had its output limit lowered");
+    let raised = run.first(is_raise);
+    assert!(lowered < raised, "{:#?}", run.records);
+    assert_eq!(
+        session(&run.records[lowered]).map(|s| s.context_budget),
+        Some(49190)
+    );
+    // Sessions held at the cap before the lowered one, which the count
+    // would include if the lowered session were only skipped.
+    let capped = run.records[..lowered]
+        .iter()
+        .rposition(|r| {
+            matches!(
+                r,
+                JournalRecord::ContextCap {
+                    context_cap: 49190,
+                    ..
+                }
+            )
+        })
+        .expect("the cap was lowered before T002's builder");
+    let at_cap = |records: &[JournalRecord]| -> usize {
+        records
+            .iter()
+            .filter_map(session)
+            .filter(|s| s.ok && s.context_budget == 49190)
+            .count()
+    };
+    assert!(
+        at_cap(&run.records[capped..lowered]) > 0,
+        "{:#?}",
+        run.records
+    );
+    // The count starts from the session after the lowered one.
+    let needed = RunParams::default().capacity_recover_sessions;
+    let after = at_cap(&run.records[lowered + 1..raised]);
+    assert_eq!(u32::try_from(after).unwrap(), needed, "{:#?}", run.records);
+    assert!(
+        matches!(
+            run.records[raised],
+            JournalRecord::ContextCapRaised { clean_sessions, .. } if clean_sessions == needed
+        ),
+        "{:#?}",
+        run.records[raised]
+    );
 }
 
 /// A session whose budget is under the lowered cap does not count toward

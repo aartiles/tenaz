@@ -61,14 +61,31 @@ impl Novelty {
 
 /// The paths `command` names, in order, each once.
 fn named_paths(command: &str) -> Vec<String> {
-    let words = Scan::new(command).run();
     let mut paths: Vec<String> = Vec::new();
-    for path in words.split(is_separator).filter(|w| is_path(w)) {
-        if !paths.iter().any(|p| p == path) {
-            paths.push(path.to_owned());
+    for path in command_words(command).into_iter().filter(|w| is_path(w)) {
+        if !paths.contains(&path) {
+            paths.push(path);
         }
     }
     paths
+}
+
+/// The words of `command` outside quotes, escapes, comments and heredoc
+/// bodies, split at blanks, operators, redirections and `=`.
+pub(crate) fn command_words(command: &str) -> Vec<String> {
+    Scan::new(command)
+        .run()
+        .split(is_separator)
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `command` with its quoted text, escapes, comments and heredoc bodies
+/// blanked out, and its operators and line breaks kept: the shell's own
+/// words, ready to split into the commands it runs.
+pub(crate) fn shell_text(command: &str) -> String {
+    Scan::new(command).run()
 }
 
 /// Characters between the words of a command: blanks, operators,
@@ -158,7 +175,10 @@ impl Scan {
         match c {
             '\'' | '"' => self.skip_quoted(c),
             '\\' => self.bump().is_some(),
-            '\n' => self.end_line(),
+            '\n' => {
+                self.end_line();
+                false
+            }
             '#' => self.skip_comment(),
             '(' => self.open_arithmetic(),
             ')' => self.close_arithmetic(),
@@ -239,14 +259,13 @@ impl Scan {
         closes
     }
 
-    /// A newline: arithmetic left open ends with its line, and the bodies
-    /// of the heredocs the line opened follow it.
-    fn end_line(&mut self) -> bool {
+    /// A newline, which is kept: arithmetic left open ends with its line,
+    /// and the bodies of the heredocs the line opened follow it.
+    fn end_line(&mut self) {
         self.arithmetic = 0;
         while let Some(heredoc) = self.heredocs.pop_front() {
             self.skip_body(&heredoc);
         }
-        true
     }
 
     /// Past a heredoc's body, up to its end word, or to the end of the

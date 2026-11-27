@@ -121,7 +121,11 @@ Write the brief outside the repository so it does not dirty the checkout.
    drops the pinned ones. `--set turnBudget=50` changes the turn budget
    (40) of builder, bootstrap, replan and split sessions; reviewers keep
    25 turns and the final review 60. `--set turnAbort=2` stops every
-   session at twice its budget (1.5 by default). `--set
+   session at twice its budget (1.5 by default). A builder or bootstrap
+   session still writing files at that stop runs on until
+   `turnWriteWindow` (5) turns pass without a write, at most to
+   `turnCeiling` times its budget (2.0) when that is past the stop;
+   `--set turnWriteWindow=0` turns that off. `--set
    maxOutputTokens=65536` lets one reply have 65,536 tokens instead of
    16,384, for a reasoning model whose replies are cut at the output limit
    before it writes anything. The reply shares the model's window: `init`
@@ -182,10 +186,14 @@ the bootstrap, leaving implementation to the local model.
    output and turns. Aim for 1–4 files, about 50–300 changed lines and at
    most three acceptance bullets; split larger work before starting. For a
    new project, reach a minimal end-to-end version early.
-   A builder is also stopped at 60 turns by default (see `turnBudget`
-   above), and a fresh session carries on from its changes, up to
+   Size it to the builder's turn budget too (40 by default, see
+   `turnBudget` above): every file to read or edit and every check run to
+   fix takes turns. A builder past it is told to wrap up and is stopped at
+   1.5 times it (`turnAbort`), 60 turns by default, or up to 80 while it
+   still writes files; a fresh session carries on from its changes, told
+   which files the stopped one wrote and how its last check ended, up to
    `contextContinuations` (3) times. A card can set its own budget with
-   `budget: {turns: 30}`.
+   `budget: {turns: 30}`. Tenaz's own planners are told both budgets.
 7. Check requirement coverage, dependency order and the baseline once more.
    Leave `run.json`, `journal.jsonl`, pinned prompts and protocol untouched.
    Do not set phases, checkpoints or task statuses to skip validation.

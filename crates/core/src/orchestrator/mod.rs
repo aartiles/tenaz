@@ -385,7 +385,12 @@ impl Runner {
     /// every briefing starts with is there.
     fn refresh_templates(&mut self, templates: Option<&Templates>) -> Result<(), RunError> {
         if let Some(templates) = templates {
-            init::refresh_templates(&self.project, self.deps.vcs.as_ref(), templates)?;
+            init::refresh_templates(
+                &self.project,
+                self.deps.vcs.as_ref(),
+                templates,
+                &self.params,
+            )?;
             let to = templates.sha256();
             self.journal(JournalRecord::TemplatesRefreshed {
                 from: Some(self.ledger.templates_sha256.clone()),

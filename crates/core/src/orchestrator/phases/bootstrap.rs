@@ -167,7 +167,7 @@ impl Runner {
     }
 
     /// What `step` builds on: the files of step 1 after it, and for the
-    /// task cards the builders' context budget they are sized to.
+    /// task cards the builders' context and turn budgets they are sized to.
     fn bootstrap_step_sections(&self, step: BootstrapStep) -> Vec<(String, String)> {
         let mut sections = Vec::new();
         if step != BootstrapStep::Spec {

@@ -15,6 +15,9 @@ use crate::util::sha256_hex;
 
 use super::RunError;
 
+/// Where `protocol.md` names the run's `verify` time limit.
+const VERIFY_LIMIT: &str = "{{verifyTimeoutSec}}";
+
 /// The working protocol and role prompts copied into every project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Templates {
@@ -36,7 +39,16 @@ impl Templates {
         Ok(Self { protocol, prompts })
     }
 
-    /// The hash the ledger pins: every prompt in role order, then the protocol.
+    /// The protocol as a run with `params` gets it: naming the run's own
+    /// `verify` time limit.
+    pub fn protocol_for(&self, params: &RunParams) -> String {
+        self.protocol
+            .replace(VERIFY_LIMIT, &params.verify_timeout_sec.to_string())
+    }
+
+    /// The hash the ledger pins: every prompt in role order, then the
+    /// protocol, as Tenaz ships them; the run's own values are pinned
+    /// with its parameters.
     pub fn sha256(&self) -> String {
         let mut text = String::new();
         for role in Role::ALL {
@@ -46,8 +58,10 @@ impl Templates {
         sha256_hex(text)
     }
 
-    fn write_into(&self, project: &Project) -> io::Result<()> {
-        project.write(PROTOCOL, &self.protocol)?;
+    /// Writes the protocol, filled in for a run with `params`, and the
+    /// prompts.
+    fn write_into(&self, project: &Project, params: &RunParams) -> io::Result<()> {
+        project.write(PROTOCOL, &self.protocol_for(params))?;
         for (role, text) in &self.prompts {
             project.write(&role.prompt_path(), text)?;
         }
@@ -104,7 +118,7 @@ pub fn init(
     let brief = project.brief().map_err(|_| {
         RunError::Precondition(format!("Pass --brief FILE or put the goal in {BRIEF}"))
     })?;
-    templates.write_into(project)?;
+    templates.write_into(project, &params)?;
     project.ensure_gitignore()?;
     if !project.exists(".git") {
         vcs.init()?;
@@ -136,8 +150,9 @@ pub(crate) fn refresh_templates(
     project: &Project,
     vcs: &dyn Vcs,
     templates: &Templates,
+    params: &RunParams,
 ) -> Result<(), RunError> {
-    templates.write_into(project)?;
+    templates.write_into(project, params)?;
     project.ensure_gitignore()?;
     vcs.commit_paths(
         &[PROTOCOL, ".tenaz/prompts", GITIGNORE],
@@ -232,4 +247,25 @@ fn set_readonly(path: &Path) -> io::Result<()> {
     let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_readonly(true);
     fs::set_permissions(path, permissions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::shipped_templates;
+
+    /// Also fails when a reword of the protocol drops or misspells the
+    /// placeholder, or a prompt gets one: only the protocol is filled in.
+    #[test]
+    fn a_run_s_protocol_names_its_own_verify_limit() {
+        let mut params = RunParams::default();
+        params.apply_override("verifyTimeoutSec=240").unwrap();
+        let templates = shipped_templates();
+        let protocol = templates.protocol_for(&params);
+        assert!(protocol.contains("finish within 240 seconds"), "{protocol}");
+        assert!(!protocol.contains("{{"), "{protocol}");
+        for (role, prompt) in &templates.prompts {
+            assert!(!prompt.contains("{{"), "{role:?}: {prompt}");
+        }
+    }
 }
