@@ -175,13 +175,13 @@ above), so a 32k context is the practical floor (`contextFloor`).
   -m pytest`. Shell keywords before it (`if`, `do`, `!`) are skipped
   too. The command is read as the idle rule reads it: the body of a
   heredoc (a notes file), quoted text with its escapes (a commit
-  message) and comments are left out. A check run some other way (a script that calls
-  `verify`, `bash -c './verify'`) is not reported, nor is a test script
-  with another name (`npm run test:unit`), a runner started through a
-  package manager or a shell (`pnpm vitest`, `bash ./verify`), a runner
-  not listed (`npx playwright test`), or a launcher option that takes a
-  word (`timeout -s KILL 600 ./verify`). After a pause, the digest
-  covers only the sessions since the run was resumed.
+  message) and comments are left out. A check run some other way (a
+  script that calls `verify`, `bash -c './verify'`) is not reported,
+  nor is a test script with another name (`npm run test:unit`), a runner
+  started through a package manager or a shell (`pnpm vitest`, `bash
+  ./verify`), a runner not listed (`npx playwright test`), or a launcher
+  option that takes a word (`timeout -s KILL 600 ./verify`). After a
+  pause, the digest covers only the sessions since the run was resumed.
 
 - **A builder or bootstrap session that still writes runs past its turn
   stop** (ADR 0044) has not run with a model. The rule was checked
