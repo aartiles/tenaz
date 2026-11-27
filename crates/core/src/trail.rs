@@ -72,8 +72,9 @@ pub struct Trail {
 }
 
 impl Trail {
-    /// Takes in one event of the session.
-    pub fn observe(&mut self, event: &SessionEvent) {
+    /// Takes in one event of the session, and gives the file a write tool's
+    /// call wrote when the event ends that call without an error.
+    pub fn observe(&mut self, event: &SessionEvent) -> Option<String> {
         match event {
             start @ SessionEvent::ToolCallStart { id, .. } => {
                 // An id seen again starts a new call: an earlier one with it
@@ -89,9 +90,8 @@ impl Trail {
                 is_error,
                 ..
             } => {
-                if let Some(at) = self.pending.iter().position(|(pending, _)| pending == id) {
-                    self.call_ended(at, result_text, *is_error);
-                }
+                let at = self.pending.iter().position(|(pending, _)| pending == id)?;
+                return self.call_ended(at, result_text, *is_error);
             }
             SessionEvent::TurnStart => self.reply = None,
             // A call that has not ended when the harness settles never will.
@@ -112,6 +112,7 @@ impl Trail {
             }
             _ => {}
         }
+        None
     }
 
     /// Files that write tools wrote without an error, each once, in the
@@ -155,11 +156,15 @@ impl Trail {
         }
     }
 
-    /// The pending call at `at` ended with `result`.
-    fn call_ended(&mut self, at: usize, result: &str, failed: bool) {
+    /// The pending call at `at` ended with `result`; gives the file it
+    /// wrote, if it was a write that did not fail.
+    fn call_ended(&mut self, at: usize, result: &str, failed: bool) -> Option<String> {
         match self.pending.remove(at).1 {
-            Pending::Write(_) if failed => {}
-            Pending::Write(path) => self.wrote(path),
+            Pending::Write(_) if failed => None,
+            Pending::Write(path) => {
+                self.wrote(path.clone());
+                Some(path)
+            }
             Pending::Check(command) => {
                 self.check = Some(Check {
                     command,
@@ -167,6 +172,7 @@ impl Trail {
                     failed,
                     stale: false,
                 });
+                None
             }
         }
     }
@@ -307,6 +313,36 @@ mod tests {
             end("5", "ok", false),
         ]);
         assert_eq!(t.written(), ["src/reach.js", "checks/T011.mjs"]);
+    }
+
+    /// What `observe` gives back is the file of each write that ended
+    /// without an error, every time it is written, and nothing else.
+    #[test]
+    fn observing_gives_the_file_of_each_write_that_ended_well() {
+        let mut t = Trail::default();
+        let mut given = |event: SessionEvent| t.observe(&event);
+        let [check_start, check_end] = run("c", "./verify", "ok", false);
+        let cases = [
+            (start("1", "write", json!({"path": "src/a.js"})), None),
+            (end("1", "ok", false), Some("src/a.js")),
+            (start("2", "write", json!({"path": "src/a.js"})), None),
+            (end("2", "ok", false), Some("src/a.js")),
+            (start("3", "edit", json!({"path": "src/b.js"})), None),
+            (end("3", "old_string not found", true), None),
+            (start("4", "write", json!({"content": "no path"})), None),
+            (end("4", "ok", false), None),
+            (check_start, None),
+            (check_end, None),
+            (start("5", "write", json!({"path": "src/old.js"})), None),
+            (start("5", "shell", json!({"command": "ls"})), None),
+            (end("5", "ok", false), None),
+            (start("6", "write", json!({"path": "src/late.js"})), None),
+            (SessionEvent::Settled { aborted: false }, None),
+            (end("6", "ok", false), None),
+        ];
+        for (n, (event, expected)) in cases.into_iter().enumerate() {
+            assert_eq!(given(event).as_deref(), expected, "event {n}");
+        }
     }
 
     /// An edit whose old text did not match changed nothing.

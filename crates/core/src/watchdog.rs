@@ -87,9 +87,6 @@ pub struct Watchdog {
     /// The turns that had ended when the session last wrote a file of its
     /// work, for the turn stop (ADR 0044).
     wrote_at: Option<u32>,
-    /// Open write calls on the session's work: they count once they end
-    /// without an error.
-    open_writes: HashSet<String>,
     recent: VecDeque<String>,
     call_args: HashMap<String, (String, serde_json::Value)>,
     /// When each open tool call started (ms into the session).
@@ -119,7 +116,6 @@ impl Watchdog {
             same_count: 0,
             idle_turns: 0,
             wrote_at: None,
-            open_writes: HashSet::new(),
             recent: VecDeque::new(),
             call_args: HashMap::new(),
             call_started: HashMap::new(),
@@ -278,7 +274,11 @@ impl Watchdog {
         fingerprint: impl FnOnce() -> String,
     ) -> Vec<Action> {
         let mut actions = self.release_held_stop(event, elapsed_ms);
-        self.metrics.trail.observe(event);
+        if let Some(path) = self.metrics.trail.observe(event)
+            && self.writes_work(&path)
+        {
+            self.wrote_at = Some(self.metrics.turns);
+        }
         match event {
             SessionEvent::PromptRejected { reason } => self.abort(
                 &format!("prompt rejected: {reason}"),
@@ -454,9 +454,6 @@ impl Watchdog {
         let progress = match tool_effect(name, *effect) {
             Some(ToolEffect::Write) => {
                 self.metrics.writes += 1;
-                if self.writes_work(args) {
-                    self.open_writes.insert(id.clone());
-                }
                 self.check_write_target(args, elapsed_ms, actions);
                 true
             }
@@ -538,8 +535,9 @@ impl Watchdog {
         }
     }
 
-    /// A tool call ended: counted if it failed, a write of the session's
-    /// work if it was one and did not, then the output and repeat rules.
+    /// A tool call ended: counted if it failed, then the output and repeat
+    /// rules. A write of the session's work that did not fail is noted as
+    /// the trail sees it end, in [`Self::handle`].
     fn tool_ended(&mut self, end: &SessionEvent, elapsed_ms: u64, actions: &mut Vec<Action>) {
         let SessionEvent::ToolCallEnd {
             id,
@@ -552,9 +550,6 @@ impl Watchdog {
         };
         if *is_error {
             self.count_tool_error(name, result_text);
-        }
-        if self.open_writes.remove(id) && !*is_error {
-            self.wrote_at = Some(self.metrics.turns);
         }
         self.tool_end(id, name, result_text, elapsed_ms, actions);
     }
@@ -860,14 +855,11 @@ impl Watchdog {
         (recent && self.metrics.turns < ceiling).then_some(ceiling)
     }
 
-    /// Whether a write call writes the task's work: a project file outside
-    /// `.tenaz/`, where the handoff notes are. Without a scope (a sandboxed
-    /// run) the project root is unknown, so only a relative path that
-    /// stays below it counts. A call that names no path is not counted.
-    fn writes_work(&self, args: &serde_json::Value) -> bool {
-        let Some(path) = path_arg(args) else {
-            return false;
-        };
+    /// Whether a file a write tool wrote is the task's work: a project file
+    /// outside `.tenaz/`, where the handoff notes are. Without a scope (a
+    /// sandboxed run) the project root is unknown, so only a relative path
+    /// that stays below it counts.
+    fn writes_work(&self, path: &str) -> bool {
         let relative = match &self.write_scope {
             Some(scope) => scope.relative(path),
             None => below_root(path),
@@ -1933,7 +1925,7 @@ mod tests {
     #[test]
     fn only_project_files_outside_tenaz_are_work() {
         let w = scoped(builder(run_on_params(), true));
-        let work = |path: &str| w.writes_work(&serde_json::json!({ "path": path }));
+        let work = |path: &str| w.writes_work(path);
         for path in ["src/a.js", "./src/a.js", "/work/app/src/a.js"] {
             assert!(work(path), "{path}");
         }
@@ -1945,7 +1937,6 @@ mod tests {
         ] {
             assert!(!work(path), "{path}");
         }
-        assert!(!w.writes_work(&serde_json::json!({ "patch": "*** src/a.js" })));
     }
 
     /// A sandboxed run has no scope: only a relative path that stays in the
@@ -1954,7 +1945,7 @@ mod tests {
     #[test]
     fn without_a_scope_only_relative_project_files_outside_tenaz_are_work() {
         let w = builder(run_on_params(), true);
-        let work = |path: &str| w.writes_work(&serde_json::json!({ "path": path }));
+        let work = |path: &str| w.writes_work(path);
         for path in ["src/a.js", "./src/a.js", "src/x/../a.js"] {
             assert!(work(path), "{path}");
         }
