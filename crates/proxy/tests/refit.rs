@@ -191,10 +191,27 @@ async fn a_streamed_request_is_sent_again_and_streamed() {
 #[tokio::test]
 async fn a_request_without_a_limit_is_sent_again_with_one() {
     let (upstream, sent) = refusing_engine(13186, 1).await;
-    let (handle, _events) = start(upstream).await;
+    let (handle, mut events) = start(upstream).await;
     let (status, _) = send(&handle, chat(None)).await;
     assert_eq!(status, 200);
     assert_eq!(max_tokens(&sent), [None, Some(13186)]);
+    // With no limit in the request, the one asked is the engine's own,
+    // read from its refusal.
+    let events = until_completed(&mut events).await;
+    assert!(
+        matches!(
+            events.as_slice(),
+            [
+                ProxyEvent::OutputLimitLowered {
+                    asked: 16384,
+                    fits: 13186,
+                    ..
+                },
+                ProxyEvent::Completed { status: 200, .. },
+            ]
+        ),
+        "{events:?}"
+    );
     handle.stop().await;
 }
 

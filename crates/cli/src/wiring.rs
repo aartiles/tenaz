@@ -917,6 +917,32 @@ mod tests {
         }
     }
 
+    /// A request the proxy sent again with a lower output limit reaches the
+    /// sessions with the limit asked and the one that fit (ADR 0047).
+    #[test]
+    fn a_lowered_output_limit_reaches_the_sessions() {
+        use tenaz_acp::EngineObservation;
+        let (feed, mut sessions) = tokio::sync::broadcast::channel(8);
+        let observe =
+            super::proxy_observer(feed, tenaz_core::cache_report::CacheReport::new(), None);
+        observe(tenaz_proxy::ProxyEvent::OutputLimitLowered {
+            request: 3,
+            asked: 16384,
+            fits: 13186,
+        });
+        let got = sessions.try_recv();
+        assert!(
+            matches!(
+                got,
+                Ok(EngineObservation::OutputLimitLowered {
+                    asked: 16384,
+                    fits: 13186
+                })
+            ),
+            "{got:?}"
+        );
+    }
+
     /// Only a dsh or Qwen Code run's proxy refuses a summary request.
     #[test]
     fn other_agents_runs_refuse_no_summary_request() {

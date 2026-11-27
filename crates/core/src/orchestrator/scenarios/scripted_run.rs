@@ -299,6 +299,10 @@ async fn a_session_past_its_budget_is_continued_without_the_map() {
         .expect("continuation note missing from the next prompt");
     assert!(!continued.contains("## Repository map"), "kept the map");
     assert!(
+        continued.contains("### What the earlier sessions on this work did"),
+        "no digest of the stopped session: {continued}"
+    );
+    assert!(
         run.log
             .contains("stopped at its context budget; a fresh session continues"),
         "{}",
